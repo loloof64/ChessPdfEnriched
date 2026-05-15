@@ -23,8 +23,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   // Per-document page cache.
   Map<int, PageAnalysis> _cache = {};
+  // Learnt character→piece mapping for the current document's chess font.
+  // Shared across all pages so every fuzzy match discovery benefits later pages.
+  final Map<String, String> _fontMap = {};
   // Analysis for the currently displayed page.
   PageAnalysis? _pageAnalysis;
+  // Raw extracted text for the current page (debug use).
+  String? _rawPageText;
   // Index of the selected move (-1 = show starting position).
   int _selectedMoveIndex = -1;
   // True while the page's move analysis is being computed.
@@ -84,6 +89,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _currentPage = page;
       _pageAnalysis = _cache[page];
       _selectedMoveIndex = -1;
+      _rawPageText = null; // clear stale debug text while new page loads
     });
     _loadPageAnalysis(page);
   }
@@ -103,11 +109,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   Future<void> _loadPageAnalysis(int pageNumber, {String? forcedFen}) async {
     // Use cached result if available (and no override is requested).
+    // Still load raw text so the debug button reflects the current page.
     if (forcedFen == null && _cache.containsKey(pageNumber)) {
       setState(() {
         _pageAnalysis = _cache[pageNumber];
         _selectedMoveIndex = -1;
       });
+      _loadRawTextForDebug(pageNumber);
       return;
     }
 
@@ -128,6 +136,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         return;
       }
 
+      if (mounted) setState(() => _rawPageText = rawText.fullText);
+
+      debugPrint(
+        '[ChessPdf] page $pageNumber raw text (first 400 chars):\n'
+        '${rawText.fullText.length > 400 ? rawText.fullText.substring(0, 400) : rawText.fullText}',
+      );
+      debugPrint(
+        '[ChessPdf] page $pageNumber code units (first 80):\n'
+        '${rawText.fullText.runes.take(80).map((r) => 'U+${r.toRadixString(16).padLeft(4, '0')}').join(' ')}',
+      );
+
       final inheritedFen = _inheritedFenForPage(pageNumber, rawText.fullText);
 
       final analysis = MoveParser.parse(
@@ -135,13 +154,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         page.height,
         inheritedFen: inheritedFen,
         forcedFen: forcedFen,
+        fontMap: _fontMap,
       );
+
+      debugPrint('[ChessPdf] page $pageNumber → ${analysis.moves.length} moves found');
 
       _cache[pageNumber] = analysis;
       await AnalysisCache.save(widget.filePath, _cache);
 
       if (mounted) _setPageAnalysis(pageNumber, analysis);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[ChessPdf] page $pageNumber analysis error: $e\n$st');
       if (mounted) {
         _setPageAnalysis(
           pageNumber,
@@ -179,6 +202,37 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     return prevAnalysis.moves.last.fenAfter;
   }
 
+  Future<void> _loadRawTextForDebug(int pageNumber) async {
+    try {
+      final page = _document!.pages[pageNumber - 1];
+      final rawText = await page.loadText();
+      if (mounted && rawText != null) {
+        setState(() => _rawPageText = rawText.fullText);
+      }
+    } catch (_) {}
+  }
+
+  void _showRawTextDialog(String text) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Raw text — page $_currentPage'),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            text.isEmpty ? '(empty)' : text,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Called when the user manually supplies a starting FEN from the dialog.
   void _onStartFenProvided(String fen) {
     _loadPageAnalysis(_currentPage, forcedFen: fen);
@@ -194,6 +248,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          if (_rawPageText != null)
+            IconButton(
+              icon: const Icon(Icons.text_snippet_outlined),
+              tooltip: 'Show raw extracted text',
+              onPressed: () => _showRawTextDialog(_rawPageText!),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Re-analyse moves',

@@ -1,4 +1,5 @@
 import 'package:dartchess/dartchess.dart' as dc;
+import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'models.dart';
@@ -29,19 +30,116 @@ class MoveParser {
       'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
   // --------------------------------------------------------------------------
-  // Figurine map
+  // Figurine + language normalisation
 
   static const _figurineMap = {
     '♔': 'K', '♕': 'Q', '♖': 'R', '♗': 'B', '♘': 'N', '♙': '',
     '♚': 'K', '♛': 'Q', '♜': 'R', '♝': 'B', '♞': 'N', '♟': '',
   };
 
-  static String _normaliseFigurines(String token) {
+  // French algebraic piece letters → English SAN letters.
+  // German (T=Turm→R, D=Dame→Q, L=Läufer→B, S=Springer→N, K→K) also handled.
+  // Only the initial letter of a token is translated; file letters (a–h) and
+  // castling (O-O) are left alone.
+  static const _frenchPieces = {'R': 'K', 'D': 'Q', 'T': 'R', 'F': 'B', 'C': 'N'};
+  static const _germanPieces = {'K': 'K', 'D': 'Q', 'T': 'R', 'L': 'B', 'S': 'N'};
+
+  static String _normaliseToken(String token) {
     var s = token;
+    // 1. Replace figurine symbols.
     for (final entry in _figurineMap.entries) {
       s = s.replaceAll(entry.key, entry.value);
     }
+    // 2. Replace custom-font file-letter substitutions (anywhere in the token).
+    //    Some PDF chess fonts render 'c' as ¢ and 'f' as £.
+    s = s.replaceAll('¢', 'c').replaceAll('£', 'f');
+    // 3. Strip a leading backslash (some fonts emit \ before piece glyphs).
+    if (s.startsWith('\\')) s = s.substring(1);
+    // 4. Remove ) or . that appears between chars in a move token — some fonts
+    //    use multi-char sequences like "2)xf7" or "2.d6" for a piece+move.
+    s = s.replaceAll(RegExp(r'[).](?=[a-hx=1-8])'), '');
+    // 5. Strip trailing human annotations (!, ?, !?, ?!, !!, ??) — they are not
+    //    part of SAN and cause parseSan to fail.
+    s = s.replaceAll(RegExp(r'[!?]+$'), '');
+    // 6. If the first character looks like a non-English piece letter, translate.
+    if (s.isNotEmpty) {
+      final first = s[0];
+      final rest = s.substring(1);
+      // Only translate when the rest looks like a valid SAN suffix (file/rank/x…)
+      // to avoid mangling words like "Cavalier" appearing in prose.
+      if (_looksLikeSanSuffix(rest)) {
+        final eng = _frenchPieces[first] ?? _germanPieces[first];
+        if (eng != null) s = eng + rest;
+      }
+    }
     return s;
+  }
+
+  static bool _looksLikeSanSuffix(String s) {
+    if (s.isEmpty) return false;
+    final first = s[0];
+    // Valid SAN suffixes start with a file letter, 'x' (capture), or '=' (promotion).
+    return (first.compareTo('a') >= 0 && first.compareTo('h') <= 0) ||
+        first == 'x' ||
+        first == '=';
+  }
+
+  /// Resolve a normalised token to a legal move, updating [fontMap] when a
+  /// new character→piece mapping is discovered via fuzzy matching.
+  ///
+  /// Resolution order:
+  ///   1. Apply any previously learnt font mapping for the leading character.
+  ///   2. Try [parseSan] on the (possibly remapped) token.
+  ///   3. If that fails and the leading character is non-standard, try each
+  ///      piece letter (K/Q/R/B/N) in turn; on the first hit, record the
+  ///      mapping in [fontMap] so future tokens are resolved deterministically.
+  static dc.Move? _resolveMove(
+    String token,
+    dc.Position pos,
+    Map<String, String>? fontMap,
+  ) {
+    if (token.isEmpty) return null;
+
+    // 1. Apply learnt font mapping to the leading character.
+    String remapped = token;
+    if (fontMap != null && fontMap.containsKey(token[0])) {
+      remapped = fontMap[token[0]]! + token.substring(1);
+    }
+
+    // 2. Standard parseSan.
+    final direct = pos.parseSan(remapped);
+    if (direct != null) return direct;
+
+    // 3. Fuzzy piece substitution.
+    final first = remapped[0];
+    final rest = remapped.substring(1);
+
+    // 3a. Non-standard leading character (not already a SAN piece/file/digit).
+    final isStandardStart = RegExp(r'^[KQRBNa-hO0-9x=+#]').hasMatch(first);
+    if (!isStandardStart && _looksLikeSanSuffix(rest)) {
+      for (final piece in const ['K', 'Q', 'R', 'B', 'N']) {
+        final move = pos.parseSan(piece + rest);
+        if (move != null) {
+          fontMap?[token[0]] = piece; // learn for the rest of the document
+          return move;
+        }
+      }
+    }
+
+    // 3b. Digit-first token: some fonts encode piece glyphs as digits (e.g. 2→N).
+    //     Only attempt when the rest looks like a capture or file+rank, so we
+    //     don't confuse move numbers ("22.") with piece tokens.
+    if (_isDigit(first) && _looksLikeSanSuffix(rest)) {
+      for (final piece in const ['N', 'B', 'R', 'Q', 'K']) {
+        final move = pos.parseSan(piece + rest);
+        if (move != null) {
+          fontMap?[token[0]] = piece;
+          return move;
+        }
+      }
+    }
+
+    return null;
   }
 
   // --------------------------------------------------------------------------
@@ -57,18 +155,33 @@ class MoveParser {
     caseSensitive: false,
   );
 
-  // Plain-text game headers that chess books typically write above or below a
-  // starting-position diagram.  Common forms:
-  //   "Fischer - Korchnoi"          (player names separated by " - " or " vs ")
-  //   "London 1957"                  (venue / year)
-  //   "London 1957, Round 3"
-  // We match a line that looks like "Name - Name" (at least two capitalised
-  // words with a separator), optionally followed by a location/year line.
-  static final _plainHeaderRegex = RegExp(
-    r'[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ][a-zA-Zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+\s+'
-    r'(?:-|vs\.?)\s+'
-    r'[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ][a-zA-Zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+',
+  // Line 1 of a game header: "Alekhine - Duras", "Van der Wiel - Short",
+  // "R. Williams - LeMoir", etc.
+  //
+  // multiLine: true + ^ + $ anchor to a single line.  The line must contain
+  // nothing after the last name (modulo trailing whitespace), which is what
+  // distinguishes "Alekhine - Duras" from book-title lines like
+  // "David LeMoir - Comment devenir un Super Attaquant" (extra words after).
+  //
+  // Each side allows one or more capitalised words (to support "Van der Wiel",
+  // "De la Bourdonnais", etc.) plus an optional leading initial ("R. ").
+  static final _playerLineRegex = RegExp(
+    r'^'
+    r'(?:[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]\.\s+)*'  // optional initials
+    r'[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]'
+    r'[a-zA-Zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+'
+    r'(?:\s+[A-Za-zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+)*'  // extra name words
+    r'\s+[-]\s+'
+    r'(?:[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]\.\s+)*'
+    r'[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]'
+    r'[a-zA-Zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+'
+    r'(?:\s+[A-Za-zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+)*'  // extra name words
+    r'\s*$',                                              // end of line
+    multiLine: true,
   );
+
+  // Line 2 of a game header: "Saint-Petersbourg, 1913" or "London, 1851".
+  static final _locationYearRegex = RegExp(r'[A-Za-z][A-Za-z\s-]*,\s*\d{4}');
 
   // Bare FEN string anywhere in the text (last resort).
   static final _bareFenRegex = RegExp(
@@ -109,29 +222,45 @@ class MoveParser {
   // --------------------------------------------------------------------------
   // Diagram detection
 
-  /// Returns true when the page looks like it starts with a board-diagram
-  /// image — i.e. the top third of the page has very few text characters.
+  /// Returns true when the page likely needs a user-supplied starting FEN.
   ///
-  /// [charRects] are in PDF coordinates (origin bottom-left, y up).
-  /// [pageHeight] is the page height in the same unit.
+  /// A diagram is suspected when any of these signals are present:
+  ///   1. A player-name line ("Alekhine - Duras") is found AND the game does
+  ///      not start from move 1 (move 1 → standard initial position, no FEN needed).
+  ///   2. A location/year line ("Saint-Petersbourg, 1913") is found alongside
+  ///      a player-name line — confirms this is a game excerpt, not prose.
+  ///   3. A large vertical gap (≥ 90 pt) exists in the character distribution,
+  ///      indicating a board-diagram image above the game text.
+  static const _minDiagramGap = 90.0;
+
   static bool _suspectDiagram({
+    required bool hasPlayerHeader,
+    required bool hasLocationYear,
     required List<PdfRect> charRects,
-    required double pageHeight,
-    required bool newGameStartsHere,
-    required bool hasGameHeader,
+    required int? firstMoveNumber,
   }) {
-    // Only flag when a new game is starting (move 1) or game headers are seen.
-    if (!newGameStartsHere && !hasGameHeader) return false;
+    final hasContextHeader = hasPlayerHeader || hasLocationYear;
 
-    // Count non-whitespace characters whose top is in the upper third.
-    final upperThreshold = pageHeight * (2 / 3);
-    int charsInUpperThird = 0;
-    for (final r in charRects) {
-      if (r.isNotEmpty && r.top > upperThreshold) charsInUpperThird++;
+    // Signal 1 & 2: semantic game header detected.
+    if (hasContextHeader && firstMoveNumber != 1) return true;
+
+    // Signal 3: visible gap in character layout → board image present.
+    if (hasContextHeader && _hasImageGap(charRects)) return true;
+
+    return false;
+  }
+
+  static bool _hasImageGap(List<PdfRect> charRects) {
+    final ys = charRects
+        .where((r) => r.isNotEmpty)
+        .map((r) => (r.top + r.bottom) / 2)
+        .toList()
+      ..sort();
+    if (ys.length < 4) return true;
+    for (int i = 1; i < ys.length; i++) {
+      if (ys[i] - ys[i - 1] > _minDiagramGap) return true;
     }
-
-    // If the upper third has very few text characters, it's likely an image.
-    return charsInUpperThird < 8;
+    return false;
   }
 
   // --------------------------------------------------------------------------
@@ -144,11 +273,17 @@ class MoveParser {
   /// - [inheritedFen]: FEN from the last move of the previous page, used when
   ///   this page continues a game (first move number > 1).
   /// - [forcedFen]: user-supplied FEN that overrides everything.
+  /// - [fontMap]: mutable map of unrecognised piece characters → standard SAN
+  ///   piece letters, shared across all pages of a document.  The parser adds
+  ///   new entries whenever fuzzy matching resolves an unknown character, so
+  ///   the map grows as pages are processed and subsequent pages benefit from
+  ///   mappings already learnt.  Pass the same instance for every page.
   static PageAnalysis parse(
     PdfPageRawText rawText,
     double pageHeight, {
     String? inheritedFen,
     String? forcedFen,
+    Map<String, String>? fontMap,
   }) {
     final fullText = rawText.fullText;
     final charRects = rawText.charRects;
@@ -197,6 +332,12 @@ class MoveParser {
     bool expectBlack = false;
     int? firstMoveNumber;
 
+    // Regex for a pure move number ("22." or "22...").
+    final pureNumRx = RegExp(r'^(\d+)(\.+)$');
+    // Regex for a move number glued to a move with no space ("22.g4!" or "22...2d6").
+    // The move part must start with a non-dot character.
+    final combinedRx = RegExp(r'^(\d+)(\.{1,3})([^.].*)$');
+
     for (final tok in tokens) {
       final raw = tok.text;
 
@@ -204,7 +345,8 @@ class MoveParser {
         break;
       }
 
-      final numMatch = RegExp(r'^(\d+)(\.+)$').firstMatch(raw);
+      // Pure move number token: "22." or "22..."
+      final numMatch = pureNumRx.firstMatch(raw);
       if (numMatch != null) {
         currentMoveNum = int.parse(numMatch.group(1)!);
         firstMoveNumber ??= currentMoveNum;
@@ -212,9 +354,49 @@ class MoveParser {
         continue;
       }
 
+      // Combined move-number+move token: "22.g4!" or "22...2d6"
+      // This happens when the PDF font leaves no space between the move number
+      // and the move (common in older chess book layouts).
+      final combined = combinedRx.firstMatch(raw);
+      if (combined != null) {
+        final num = int.parse(combined.group(1)!);
+        final dots = combined.group(2)!;
+        final movePart = combined.group(3)!;
+        // Treat as a move number only when it's plausible (not a huge backward
+        // jump, which would indicate the digit is actually a piece glyph).
+        if (currentMoveNum == null || num >= currentMoveNum - 1) {
+          currentMoveNum = num;
+          firstMoveNumber ??= num;
+          expectBlack = dots.length > 1;
+          // Fall through to try parsing movePart as the move below.
+          final normalised = _normaliseToken(movePart);
+          final move = _resolveMove(normalised, position, fontMap);
+          if (move != null) {
+            final fenBefore = position.fen;
+            final (newPosition, san) = position.makeSan(move);
+            moves.add(CachedMove(
+              moveNumber: currentMoveNum,
+              isBlack: expectBlack,
+              san: san,
+              rawToken: raw,
+              fenBefore: fenBefore,
+              fenAfter: newPosition.fen,
+              bounds: _computeBounds(charRects, tok.start, tok.end),
+            ));
+            position = newPosition;
+            expectBlack = !expectBlack;
+            if (!expectBlack) currentMoveNum = currentMoveNum + 1;
+          }
+          continue;
+        }
+        // Number not plausible as move number — fall through to treat the
+        // whole token as a move (e.g. "2.d6" where "2" is a piece glyph).
+      }
+
       if (currentMoveNum == null) continue;
 
-      final move = position.parseSan(_normaliseFigurines(raw));
+      final normalised = _normaliseToken(raw);
+      final move = _resolveMove(normalised, position, fontMap);
       if (move == null) continue;
 
       final fenBefore = position.fen;
@@ -242,18 +424,24 @@ class MoveParser {
     // ------------------------------------------------------------------
     // 4. Upgrade to suspectedDiagram if conditions are met.
 
-    if (fenSource == FenSource.standard && pageHeight > 0) {
-      final newGameStartsHere = firstMoveNumber == 1;
-      final hasGameHeader = _plainHeaderRegex.hasMatch(fullText);
+    if (fenSource == FenSource.standard) {
+      final playerMatch = _playerLineRegex.firstMatch(fullText);
+      final locationMatch = _locationYearRegex.firstMatch(fullText);
+      debugPrint('[MoveParser] player header: '
+          '${playerMatch != null ? '"${playerMatch.group(0)}"' : 'none'}');
+      debugPrint('[MoveParser] location/year: '
+          '${locationMatch != null ? '"${locationMatch.group(0)}"' : 'none'}');
       if (_suspectDiagram(
+        hasPlayerHeader: playerMatch != null,
+        hasLocationYear: locationMatch != null,
         charRects: charRects,
-        pageHeight: pageHeight,
-        newGameStartsHere: newGameStartsHere,
-        hasGameHeader: hasGameHeader,
+        firstMoveNumber: firstMoveNumber,
       )) {
         fenSource = FenSource.suspectedDiagram;
       }
     }
+
+    debugPrint('[MoveParser] fenSource=$fenSource  startFen=$startFen');
 
     return PageAnalysis(
       startFen: startFen,
