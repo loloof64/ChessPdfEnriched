@@ -236,7 +236,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   /// Called when the user manually supplies a starting FEN from the dialog.
   void _onStartFenProvided(String fen, int gameIndex) {
-    _loadPageAnalysis(_currentPage, forcedFens: {gameIndex: fen});
+    // Carry forward any user-provided FENs already set for other games on
+    // this page so they are not lost when the page is re-parsed.
+    final existing = _cache[_currentPage];
+    final forcedFens = <int, String>{
+      if (existing != null)
+        for (int i = 0; i < existing.length; i++)
+          if (existing[i].fenSource == FenSource.userProvided)
+            i: existing[i].startFen,
+    };
+    forcedFens[gameIndex] = fen;
+    _loadPageAnalysis(_currentPage, forcedFens: forcedFens);
   }
 
   // -------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import 'package:chessground/chessground.dart';
 import 'package:dartchess/dartchess.dart' as dc;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard;
 
 import 'models.dart';
 
@@ -238,7 +239,13 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
   /// Piece to paint when in edit mode. Null = delete mode.
   dc.Piece? _brushPiece;
 
-  String? _error;
+  late final TextEditingController _fenCtrl;
+
+  /// Error shown below the FEN field when the typed/pasted text is invalid.
+  String? _fenFieldError;
+
+  /// Error shown on Apply (e.g. missing king).
+  String? _applyError;
 
   @override
   void initState() {
@@ -246,6 +253,13 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
     _loadFen(
       widget.initialFen.isNotEmpty ? widget.initialFen : _standardFen,
     );
+    _fenCtrl = TextEditingController(text: _currentFen);
+  }
+
+  @override
+  void dispose() {
+    _fenCtrl.dispose();
+    super.dispose();
   }
 
   void _loadFen(String fen) {
@@ -271,13 +285,36 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
     return '$board $side ${castling.isEmpty ? '-' : castling} - 0 1';
   }
 
+  void _applyFenText(String text) {
+    final trimmed = text.trim();
+    try {
+      dc.Chess.fromSetup(dc.Setup.parseFen(trimmed));
+      setState(() {
+        _loadFen(trimmed);
+        _fenFieldError = null;
+        _applyError = null;
+        // Don't touch _fenCtrl — the text field is the source here.
+      });
+    } catch (_) {
+      setState(() => _fenFieldError = 'Invalid FEN');
+    }
+  }
+
+  Future<void> _pasteFromClipboard() async {
+    final data = await Clipboard.getData('text/plain');
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) return;
+    _fenCtrl.text = text;
+    _applyFenText(text);
+  }
+
   void _apply() {
     final fen = _currentFen;
     try {
       dc.Chess.fromSetup(dc.Setup.parseFen(fen));
     } catch (_) {
       setState(() =>
-          _error = 'Invalid position — both kings must be on the board.');
+          _applyError = 'Invalid position — both kings must be on the board.');
       return;
     }
     widget.onConfirm(fen);
@@ -286,47 +323,67 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final maxHeight = MediaQuery.of(context).size.height - 24;
+
     return Dialog(
       insetPadding: const EdgeInsets.all(12),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 500),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(widget.title,
-                  style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 12),
-              _buildBoardSection(),
-              const SizedBox(height: 12),
-              _buildControls(),
-              const SizedBox(height: 8),
-              _buildFenDisplay(),
-              if (_error != null) ...[
-                const SizedBox(height: 4),
-                Text(_error!,
-                    style:
-                        const TextStyle(color: Colors.red, fontSize: 11)),
-              ],
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+        constraints: BoxConstraints(maxWidth: 500, maxHeight: maxHeight),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── Scrollable area: title + board + controls ──────────────────
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(widget.title,
+                        style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 12),
+                    _buildBoardSection(),
+                    const SizedBox(height: 12),
+                    _buildControls(),
+                  ],
+                ),
+              ),
+            ),
+            // ── Fixed footer: FEN input + action buttons ───────────────────
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Cancel'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _apply,
-                    child: const Text('Apply'),
+                  _buildFenDisplay(),
+                  if (_applyError != null) ...[
+                    const SizedBox(height: 4),
+                    Text(_applyError!,
+                        style: const TextStyle(
+                            color: Colors.red, fontSize: 11)),
+                  ],
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: _apply,
+                        child: const Text('Apply'),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -370,23 +427,26 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
               settings: settings,
               pointerMode: _pointerMode,
               onEditedSquare: (sq) => setState(() {
-                _error = null;
+                _applyError = null;
                 if (_brushPiece != null) {
                   _pieces[sq] = _brushPiece!;
                 } else {
                   _pieces.remove(sq);
                 }
+                _fenCtrl.text = _currentFen;
               }),
               onDroppedPiece: (origin, dest, piece) => setState(() {
-                _error = null;
+                _applyError = null;
                 _pieces[dest] = piece;
                 if (origin != null && origin != dest) {
                   _pieces.remove(origin);
                 }
+                _fenCtrl.text = _currentFen;
               }),
               onDiscardedPiece: (sq) => setState(() {
-                _error = null;
+                _applyError = null;
                 _pieces.remove(sq);
+                _fenCtrl.text = _currentFen;
               }),
             ),
             _EditorPalette(
@@ -432,8 +492,10 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
                     label: Text('Black', style: TextStyle(fontSize: 12))),
               ],
               selected: {_whiteTurn},
-              onSelectionChanged: (v) =>
-                  setState(() => _whiteTurn = v.first),
+              onSelectionChanged: (v) => setState(() {
+                _whiteTurn = v.first;
+                _fenCtrl.text = _currentFen;
+              }),
               style: const ButtonStyle(
                   visualDensity: VisualDensity.compact),
             ),
@@ -447,19 +509,19 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
             _CastleCheckbox(
                 label: 'K',
                 value: _wK,
-                onChanged: (v) => setState(() => _wK = v)),
+                onChanged: (v) => setState(() { _wK = v; _fenCtrl.text = _currentFen; })),
             _CastleCheckbox(
                 label: 'Q',
                 value: _wQ,
-                onChanged: (v) => setState(() => _wQ = v)),
+                onChanged: (v) => setState(() { _wQ = v; _fenCtrl.text = _currentFen; })),
             _CastleCheckbox(
                 label: 'k',
                 value: _bK,
-                onChanged: (v) => setState(() => _bK = v)),
+                onChanged: (v) => setState(() { _bK = v; _fenCtrl.text = _currentFen; })),
             _CastleCheckbox(
                 label: 'q',
                 value: _bQ,
-                onChanged: (v) => setState(() => _bQ = v)),
+                onChanged: (v) => setState(() { _bQ = v; _fenCtrl.text = _currentFen; })),
           ],
         ),
       ],
@@ -467,17 +529,23 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
   }
 
   Widget _buildFenDisplay() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: Colors.grey.shade300),
+    return TextField(
+      controller: _fenCtrl,
+      style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+      decoration: InputDecoration(
+        labelText: 'FEN',
+        errorText: _fenFieldError,
+        isDense: true,
+        border: const OutlineInputBorder(),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        suffixIcon: IconButton(
+          icon: const Icon(Icons.content_paste, size: 18),
+          tooltip: 'Paste from clipboard',
+          onPressed: _pasteFromClipboard,
+        ),
       ),
-      child: SelectableText(
-        _currentFen,
-        style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
-      ),
+      onChanged: _applyFenText,
     );
   }
 }
