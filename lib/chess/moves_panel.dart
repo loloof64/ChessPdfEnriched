@@ -62,7 +62,10 @@ class MovesPanel extends StatelessWidget {
             ),
             const Divider(height: 1),
             if (fenSource == FenSource.suspectedDiagram)
-              _DiagramWarningBanner(onStartFenProvided: onStartFenProvided),
+              _DiagramWarningBanner(
+                initialFen: startFen,
+                onStartFenProvided: onStartFenProvided,
+              ),
             if (fenSource == FenSource.userProvided)
               _UserFenBanner(
                 fen: startFen,
@@ -103,7 +106,11 @@ class MovesPanel extends StatelessWidget {
 // Banners
 
 class _DiagramWarningBanner extends StatelessWidget {
-  const _DiagramWarningBanner({required this.onStartFenProvided});
+  const _DiagramWarningBanner({
+    required this.initialFen,
+    required this.onStartFenProvided,
+  });
+  final String initialFen;
   final ValueChanged<String> onStartFenProvided;
 
   @override
@@ -124,7 +131,7 @@ class _DiagramWarningBanner extends StatelessWidget {
               ),
             ),
             TextButton(
-              onPressed: () => _showFenDialog(context),
+              onPressed: () => _showEditorDialog(context),
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 28),
@@ -138,13 +145,12 @@ class _DiagramWarningBanner extends StatelessWidget {
     );
   }
 
-  void _showFenDialog(BuildContext context) {
-    showDialog<String>(
+  void _showEditorDialog(BuildContext context) {
+    showDialog<void>(
       context: context,
-      builder: (ctx) => _FenInputDialog(
-        title: 'Enter starting position',
-        hint: 'Paste or type the FEN of the diagram position',
-        initialFen: '',
+      builder: (ctx) => _BoardEditorDialog(
+        title: 'Set starting position',
+        initialFen: initialFen,
         onConfirm: onStartFenProvided,
       ),
     );
@@ -174,7 +180,7 @@ class _UserFenBanner extends StatelessWidget {
               ),
             ),
             TextButton(
-              onPressed: () => _showFenDialog(context),
+              onPressed: () => _showEditorDialog(context),
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 28),
@@ -188,12 +194,11 @@ class _UserFenBanner extends StatelessWidget {
     );
   }
 
-  void _showFenDialog(BuildContext context) {
-    showDialog<String>(
+  void _showEditorDialog(BuildContext context) {
+    showDialog<void>(
       context: context,
-      builder: (ctx) => _FenInputDialog(
+      builder: (ctx) => _BoardEditorDialog(
         title: 'Edit starting position',
-        hint: 'Paste or type the FEN',
         initialFen: fen,
         onConfirm: onEdit,
       ),
@@ -202,103 +207,456 @@ class _UserFenBanner extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// FEN input dialog
+// Board editor dialog
 
-class _FenInputDialog extends StatefulWidget {
-  const _FenInputDialog({
+class _BoardEditorDialog extends StatefulWidget {
+  const _BoardEditorDialog({
     required this.title,
-    required this.hint,
     required this.initialFen,
     required this.onConfirm,
   });
 
   final String title;
-  final String hint;
   final String initialFen;
   final ValueChanged<String> onConfirm;
 
   @override
-  State<_FenInputDialog> createState() => _FenInputDialogState();
+  State<_BoardEditorDialog> createState() => _BoardEditorDialogState();
 }
 
-class _FenInputDialogState extends State<_FenInputDialog> {
-  late final TextEditingController _ctrl;
+class _BoardEditorDialogState extends State<_BoardEditorDialog> {
+  static const _pieceSet = PieceSet.merida;
+  static const _standardFen =
+      'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+  late Pieces _pieces;
+  late bool _whiteTurn;
+  bool _wK = true, _wQ = true, _bK = true, _bQ = true;
+
+  EditorPointerMode _pointerMode = EditorPointerMode.drag;
+
+  /// Piece to paint when in edit mode. Null = delete mode.
+  dc.Piece? _brushPiece;
+
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = TextEditingController(text: widget.initialFen);
+    _loadFen(
+      widget.initialFen.isNotEmpty ? widget.initialFen : _standardFen,
+    );
   }
 
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
+  void _loadFen(String fen) {
+    final parts = fen.split(' ');
+    _pieces = readFen(fen);
+    _whiteTurn = parts.length < 2 || parts[1] != 'b';
+    final c = parts.length > 2 ? parts[2] : 'KQkq';
+    _wK = c.contains('K');
+    _wQ = c.contains('Q');
+    _bK = c.contains('k');
+    _bQ = c.contains('q');
   }
 
-  bool _validateAndConfirm() {
-    final text = _ctrl.text.trim();
-    if (text.isEmpty) {
-      setState(() => _error = 'FEN cannot be empty.');
-      return false;
-    }
+  String get _currentFen {
+    final board = writeFen(_pieces);
+    final side = _whiteTurn ? 'w' : 'b';
+    final castling = [
+      if (_wK) 'K',
+      if (_wQ) 'Q',
+      if (_bK) 'k',
+      if (_bQ) 'q',
+    ].join();
+    return '$board $side ${castling.isEmpty ? '-' : castling} - 0 1';
+  }
+
+  void _apply() {
+    final fen = _currentFen;
     try {
-      dc.Setup.parseFen(text);
-      // Also verify it's a playable Chess position.
-      dc.Chess.fromSetup(dc.Setup.parseFen(text));
+      dc.Chess.fromSetup(dc.Setup.parseFen(fen));
     } catch (_) {
-      setState(() => _error = 'Invalid FEN string.');
-      return false;
+      setState(() =>
+          _error = 'Invalid position — both kings must be on the board.');
+      return;
     }
-    widget.onConfirm(text);
-    return true;
+    widget.onConfirm(fen);
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(widget.hint,
-              style: const TextStyle(fontSize: 12, color: Colors.black54)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _ctrl,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText:
-                  'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-              errorText: _error,
-              border: const OutlineInputBorder(),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    return Dialog(
+      insetPadding: const EdgeInsets.all(12),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 500),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(widget.title,
+                  style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              _buildBoardSection(),
+              const SizedBox(height: 12),
+              _buildControls(),
+              const SizedBox(height: 8),
+              _buildFenDisplay(),
+              if (_error != null) ...[
+                const SizedBox(height: 4),
+                Text(_error!,
+                    style:
+                        const TextStyle(color: Colors.red, fontSize: 11)),
+              ],
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Cancel'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _apply,
+                    child: const Text('Apply'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBoardSection() {
+    return LayoutBuilder(
+      builder: (ctx, constraints) {
+        final boardSize = constraints.maxWidth;
+        final squareSize = boardSize / 8;
+        final settings = ChessboardSettings(
+          pieceAssets: _pieceSet.assets,
+          colorScheme: ChessboardColorScheme.brown,
+        );
+
+        return Column(
+          children: [
+            _EditorPalette(
+              side: dc.Side.black,
+              squareSize: squareSize,
+              settings: settings,
+              brushPiece: _brushPiece?.color == dc.Side.black
+                  ? _brushPiece
+                  : null,
+              pointerMode: _pointerMode,
+              onPieceTapped: (role) => setState(() {
+                _brushPiece = dc.Piece(role: role, color: dc.Side.black);
+                _pointerMode = EditorPointerMode.edit;
+              }),
+              onDeleteTapped: () => setState(() {
+                _brushPiece = null;
+                _pointerMode = EditorPointerMode.edit;
+              }),
+              onDragModeTapped: () =>
+                  setState(() => _pointerMode = EditorPointerMode.drag),
             ),
-            style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-            onChanged: (_) {
-              if (_error != null) setState(() => _error = null);
-            },
-            onSubmitted: (_) {
-              if (_validateAndConfirm()) Navigator.of(context).pop();
-            },
+            ChessboardEditor(
+              size: boardSize,
+              orientation: dc.Side.white,
+              pieces: _pieces,
+              settings: settings,
+              pointerMode: _pointerMode,
+              onEditedSquare: (sq) => setState(() {
+                _error = null;
+                if (_brushPiece != null) {
+                  _pieces[sq] = _brushPiece!;
+                } else {
+                  _pieces.remove(sq);
+                }
+              }),
+              onDroppedPiece: (origin, dest, piece) => setState(() {
+                _error = null;
+                _pieces[dest] = piece;
+                if (origin != null && origin != dest) {
+                  _pieces.remove(origin);
+                }
+              }),
+              onDiscardedPiece: (sq) => setState(() {
+                _error = null;
+                _pieces.remove(sq);
+              }),
+            ),
+            _EditorPalette(
+              side: dc.Side.white,
+              squareSize: squareSize,
+              settings: settings,
+              brushPiece: _brushPiece?.color == dc.Side.white
+                  ? _brushPiece
+                  : null,
+              pointerMode: _pointerMode,
+              onPieceTapped: (role) => setState(() {
+                _brushPiece = dc.Piece(role: role, color: dc.Side.white);
+                _pointerMode = EditorPointerMode.edit;
+              }),
+              onDeleteTapped: () => setState(() {
+                _brushPiece = null;
+                _pointerMode = EditorPointerMode.edit;
+              }),
+              onDragModeTapped: () =>
+                  setState(() => _pointerMode = EditorPointerMode.drag),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildControls() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('Side to move:', style: TextStyle(fontSize: 12)),
+            const SizedBox(width: 8),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(
+                    value: true,
+                    label: Text('White', style: TextStyle(fontSize: 12))),
+                ButtonSegment(
+                    value: false,
+                    label: Text('Black', style: TextStyle(fontSize: 12))),
+              ],
+              selected: {_whiteTurn},
+              onSelectionChanged: (v) =>
+                  setState(() => _whiteTurn = v.first),
+              style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            const Text('Castling:', style: TextStyle(fontSize: 12)),
+            const SizedBox(width: 4),
+            _CastleCheckbox(
+                label: 'K',
+                value: _wK,
+                onChanged: (v) => setState(() => _wK = v)),
+            _CastleCheckbox(
+                label: 'Q',
+                value: _wQ,
+                onChanged: (v) => setState(() => _wQ = v)),
+            _CastleCheckbox(
+                label: 'k',
+                value: _bK,
+                onChanged: (v) => setState(() => _bK = v)),
+            _CastleCheckbox(
+                label: 'q',
+                value: _bQ,
+                onChanged: (v) => setState(() => _bQ = v)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFenDisplay() {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: SelectableText(
+        _currentFen,
+        style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Editor piece palette row
+
+class _EditorPalette extends StatelessWidget {
+  const _EditorPalette({
+    required this.side,
+    required this.squareSize,
+    required this.settings,
+    required this.brushPiece,
+    required this.pointerMode,
+    required this.onPieceTapped,
+    required this.onDeleteTapped,
+    required this.onDragModeTapped,
+  });
+
+  final dc.Side side;
+  final double squareSize;
+  final ChessboardSettings settings;
+
+  /// The currently selected brush piece for this side, or null if none selected.
+  final dc.Piece? brushPiece;
+  final EditorPointerMode pointerMode;
+  final void Function(dc.Role role) onPieceTapped;
+  final VoidCallback onDeleteTapped;
+  final VoidCallback onDragModeTapped;
+
+  @override
+  Widget build(BuildContext context) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
+
+    return SizedBox(
+      height: squareSize,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Drag mode toggle
+          _PaletteCell(
+            size: squareSize,
+            selected: pointerMode == EditorPointerMode.drag,
+            selectedColor: primaryColor,
+            onTap: onDragModeTapped,
+            child: Icon(Icons.open_with, size: squareSize * 0.6),
+          ),
+          // Pieces
+          for (final role in dc.Role.values)
+            _DraggablePaletteCell(
+              squareSize: squareSize,
+              piece: dc.Piece(role: role, color: side),
+              settings: settings,
+              selected: brushPiece?.role == role,
+              selectedColor: primaryColor,
+              onTap: () => onPieceTapped(role),
+            ),
+          // Delete mode button
+          _PaletteCell(
+            size: squareSize,
+            selected:
+                pointerMode == EditorPointerMode.edit && brushPiece == null,
+            selectedColor: Colors.red,
+            onTap: onDeleteTapped,
+            child: Icon(Icons.delete_outline,
+                size: squareSize * 0.6, color: Colors.red.shade700),
           ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+    );
+  }
+}
+
+class _PaletteCell extends StatelessWidget {
+  const _PaletteCell({
+    required this.size,
+    required this.selected,
+    required this.selectedColor,
+    required this.onTap,
+    required this.child,
+  });
+
+  final double size;
+  final bool selected;
+  final Color selectedColor;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        color: selected ? selectedColor.withAlpha(40) : null,
+        alignment: Alignment.center,
+        child: child,
+      ),
+    );
+  }
+}
+
+class _DraggablePaletteCell extends StatelessWidget {
+  const _DraggablePaletteCell({
+    required this.squareSize,
+    required this.piece,
+    required this.settings,
+    required this.selected,
+    required this.selectedColor,
+    required this.onTap,
+  });
+
+  final double squareSize;
+  final dc.Piece piece;
+  final ChessboardSettings settings;
+  final bool selected;
+  final Color selectedColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: squareSize,
+        height: squareSize,
+        color: selected ? selectedColor.withAlpha(40) : null,
+        child: Draggable<dc.Piece>(
+          data: piece,
+          feedback: PieceDragFeedback(
+            squareSize: squareSize,
+            pieceAssets: settings.pieceAssets,
+            piece: piece,
+          ),
+          child: PieceWidget(
+            piece: piece,
+            size: squareSize,
+            pieceAssets: settings.pieceAssets,
+          ),
         ),
-        FilledButton(
-          onPressed: () {
-            if (_validateAndConfirm()) Navigator.of(context).pop();
-          },
-          child: const Text('Apply'),
-        ),
-      ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Castling checkbox
+
+class _CastleCheckbox extends StatelessWidget {
+  const _CastleCheckbox({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Checkbox(
+            value: value,
+            onChanged: (v) => onChanged(v ?? false),
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 12, fontFamily: 'monospace')),
+          const SizedBox(width: 4),
+        ],
+      ),
     );
   }
 }
