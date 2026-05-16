@@ -247,6 +247,8 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
   /// Error shown on Apply (e.g. missing king).
   String? _applyError;
 
+  Offset _dialogOffset = Offset.zero;
+
   @override
   void initState() {
     super.initState();
@@ -323,67 +325,109 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final maxHeight = MediaQuery.of(context).size.height - 24;
+    final size = MediaQuery.of(context).size;
+    final maxHeight = size.height - 24;
 
-    return Dialog(
-      insetPadding: const EdgeInsets.all(12),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: 500, maxHeight: maxHeight),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ── Scrollable area: title + board + controls ──────────────────
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(widget.title,
-                        style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 12),
-                    _buildBoardSection(),
-                    const SizedBox(height: 12),
-                    _buildControls(),
-                  ],
-                ),
-              ),
-            ),
-            // ── Fixed footer: FEN input + action buttons ───────────────────
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildFenDisplay(),
-                  if (_applyError != null) ...[
-                    const SizedBox(height: 4),
-                    Text(_applyError!,
-                        style: const TextStyle(
-                            color: Colors.red, fontSize: 11)),
-                  ],
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('Cancel'),
+    return Align(
+      alignment: Alignment.center,
+      child: Transform.translate(
+        offset: _dialogOffset,
+        child: Material(
+          elevation: 24,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(28)),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: 500, maxHeight: maxHeight),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ── Draggable title bar ──────────────────────────────────
+                MouseRegion(
+                  cursor: SystemMouseCursors.grab,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanUpdate: (details) {
+                      setState(() {
+                        final dx = (_dialogOffset.dx + details.delta.dx).clamp(
+                          -(size.width / 2) + 60,
+                          size.width / 2 - 60,
+                        );
+                        final dy = (_dialogOffset.dy + details.delta.dy).clamp(
+                          -(size.height / 2) + 20,
+                          size.height / 2 - 20,
+                        );
+                        _dialogOffset = Offset(dx, dy);
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 12, 0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(widget.title,
+                                style: Theme.of(context).textTheme.titleLarge),
+                          ),
+                          const Icon(Icons.drag_indicator,
+                              color: Colors.grey, size: 20),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: _apply,
-                        child: const Text('Apply'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // ── Scrollable area: board + controls ────────────────────
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildBoardSection(),
+                        const SizedBox(height: 12),
+                        _buildControls(),
+                      ],
+                    ),
+                  ),
+                ),
+                // ── Fixed footer: FEN input + action buttons ─────────────
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildFenDisplay(),
+                      if (_applyError != null) ...[
+                        const SizedBox(height: 4),
+                        Text(_applyError!,
+                            style: const TextStyle(
+                                color: Colors.red, fontSize: 11)),
+                      ],
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('Cancel'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: _apply,
+                            child: const Text('Apply'),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
