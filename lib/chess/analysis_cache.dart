@@ -33,7 +33,7 @@ class AnalysisCache {
   /// Load cached analysis for [pdfPath].
   ///
   /// Returns `null` if no cache exists or if the cache is stale.
-  static Future<Map<int, PageAnalysis>?> load(String pdfPath) async {
+  static Future<Map<int, List<PageAnalysis>>?> load(String pdfPath) async {
     try {
       final pdfStat = await File(pdfPath).stat();
       final currentMtime = pdfStat.modified.millisecondsSinceEpoch;
@@ -47,13 +47,18 @@ class AnalysisCache {
       if (cachedMtime != currentMtime) return null;
 
       final pagesJson = json['pages'] as Map<String, dynamic>;
-      final pages = <int, PageAnalysis>{};
+      final pages = <int, List<PageAnalysis>>{};
       for (final entry in pagesJson.entries) {
         final pageNum = int.tryParse(entry.key);
-        if (pageNum != null) {
-          pages[pageNum] = PageAnalysis.fromJson(
-            entry.value as Map<String, dynamic>,
-          );
+        if (pageNum == null) continue;
+        final value = entry.value;
+        if (value is List) {
+          pages[pageNum] = value
+              .map((e) => PageAnalysis.fromJson(e as Map<String, dynamic>))
+              .toList();
+        } else if (value is Map) {
+          // Backwards-compat: old format stored a single PageAnalysis object.
+          pages[pageNum] = [PageAnalysis.fromJson(value as Map<String, dynamic>)];
         }
       }
       return pages;
@@ -75,7 +80,7 @@ class AnalysisCache {
   /// Failures are silently swallowed — the cache is best-effort.
   static Future<void> save(
     String pdfPath,
-    Map<int, PageAnalysis> pages,
+    Map<int, List<PageAnalysis>> pages,
   ) async {
     try {
       final pdfStat = await File(pdfPath).stat();
@@ -86,7 +91,7 @@ class AnalysisCache {
         'mtime': mtime,
         'pages': {
           for (final entry in pages.entries)
-            entry.key.toString(): entry.value.toJson(),
+            entry.key.toString(): entry.value.map((a) => a.toJson()).toList(),
         },
       };
 

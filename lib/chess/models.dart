@@ -102,11 +102,16 @@ class PageAnalysis {
     required this.startFen,
     required this.fenSource,
     required this.moves,
+    this.header,
   });
 
   final String startFen;
   final FenSource fenSource;
   final List<CachedMove> moves;
+
+  /// Player-line detected as the game header, e.g. "Alekhine - Duras".
+  /// Null when no header was found (e.g. a continuation page).
+  final String? header;
 
   factory PageAnalysis.fromJson(Map<String, dynamic> json) => PageAnalysis(
     startFen: json['startFen'] as String,
@@ -118,12 +123,14 @@ class PageAnalysis {
         (json['moves'] as List<dynamic>)
             .map((e) => CachedMove.fromJson(e as Map<String, dynamic>))
             .toList(),
+    header: json['header'] as String?,
   );
 
   Map<String, dynamic> toJson() => {
     'startFen': startFen,
     'fenSource': fenSource.name,
     'moves': moves.map((m) => m.toJson()).toList(),
+    if (header != null) 'header': header,
   };
 
   /// Return a copy with a new starting FEN and mark it as user-provided.
@@ -132,5 +139,6 @@ class PageAnalysis {
         startFen: fen,
         fenSource: FenSource.userProvided,
         moves: recomputedMoves,
+        header: header,
       );
 }

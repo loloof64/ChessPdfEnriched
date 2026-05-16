@@ -21,13 +21,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   bool _isLoading = true;
   String? _error;
 
-  // Per-document page cache.
-  Map<int, PageAnalysis> _cache = {};
+  // Per-document page cache: page number → list of games on that page.
+  Map<int, List<PageAnalysis>> _cache = {};
   // Learnt character→piece mapping for the current document's chess font.
   // Shared across all pages so every fuzzy match discovery benefits later pages.
   final Map<String, String> _fontMap = {};
-  // Analysis for the currently displayed page.
-  PageAnalysis? _pageAnalysis;
+  // Games for the currently displayed page.
+  List<PageAnalysis>? _pageGames;
+  // Index of the selected game within the current page (for multi-game pages).
+  int _selectedGameIndex = 0;
   // Raw extracted text for the current page (debug use).
   String? _rawPageText;
   // Index of the selected move (-1 = show starting position).
@@ -87,9 +89,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   void _changePage(int page) {
     setState(() {
       _currentPage = page;
-      _pageAnalysis = _cache[page];
+      _pageGames = _cache[page];
+      _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
-      _rawPageText = null; // clear stale debug text while new page loads
+      _rawPageText = null;
     });
     _loadPageAnalysis(page);
   }
@@ -101,18 +104,23 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     await AnalysisCache.clear(widget.filePath);
     setState(() {
       _cache.clear();
-      _pageAnalysis = null;
+      _pageGames = null;
+      _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
     });
     await _loadPageAnalysis(_currentPage);
   }
 
-  Future<void> _loadPageAnalysis(int pageNumber, {String? forcedFen}) async {
+  Future<void> _loadPageAnalysis(
+    int pageNumber, {
+    Map<int, String>? forcedFens,
+  }) async {
     // Use cached result if available (and no override is requested).
     // Still load raw text so the debug button reflects the current page.
-    if (forcedFen == null && _cache.containsKey(pageNumber)) {
+    if (forcedFens == null && _cache.containsKey(pageNumber)) {
       setState(() {
-        _pageAnalysis = _cache[pageNumber];
+        _pageGames = _cache[pageNumber];
+        _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       });
       _loadRawTextForDebug(pageNumber);
@@ -125,14 +133,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       final page = _document!.pages[pageNumber - 1];
       final rawText = await page.loadText();
       if (rawText == null) {
-        _setPageAnalysis(
-          pageNumber,
-          PageAnalysis(
-            startFen: '',
-            fenSource: FenSource.standard,
-            moves: const [],
-          ),
-        );
+        _setPageGames(pageNumber, [
+          PageAnalysis(startFen: '', fenSource: FenSource.standard, moves: const []),
+        ]);
         return;
       }
 
@@ -146,39 +149,38 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       final inheritedFen = _inheritedFenForPage(pageNumber, rawText.fullText);
 
-      final analysis = MoveParser.parse(
+      final games = MoveParser.parse(
         rawText,
         page.height,
         inheritedFen: inheritedFen,
-        forcedFen: forcedFen,
+        forcedFens: forcedFens,
         fontMap: _fontMap,
       );
 
-      debugPrint('[ChessPdf] page $pageNumber → ${analysis.moves.length} moves found');
+      debugPrint(
+        '[ChessPdf] page $pageNumber → ${games.length} game(s), '
+        '${games.map((g) => g.moves.length).join('+')} moves',
+      );
 
-      _cache[pageNumber] = analysis;
+      _cache[pageNumber] = games;
       await AnalysisCache.save(widget.filePath, _cache);
 
-      if (mounted) _setPageAnalysis(pageNumber, analysis);
+      if (mounted) _setPageGames(pageNumber, games);
     } catch (e, st) {
       debugPrint('[ChessPdf] page $pageNumber analysis error: $e\n$st');
       if (mounted) {
-        _setPageAnalysis(
-          pageNumber,
-          PageAnalysis(
-            startFen: '',
-            fenSource: FenSource.standard,
-            moves: const [],
-          ),
-        );
+        _setPageGames(pageNumber, [
+          PageAnalysis(startFen: '', fenSource: FenSource.standard, moves: const []),
+        ]);
       }
     }
   }
 
-  void _setPageAnalysis(int pageNumber, PageAnalysis analysis) {
+  void _setPageGames(int pageNumber, List<PageAnalysis> games) {
     setState(() {
       if (pageNumber == _currentPage) {
-        _pageAnalysis = analysis;
+        _pageGames = games;
+        _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       }
       _analysing = false;
@@ -186,17 +188,19 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   /// If the page's text does not open a new game (no "1." near the start),
-  /// inherit the last FEN from the previous page.
+  /// inherit the last FEN from the last game of the previous page.
   String? _inheritedFenForPage(int pageNumber, String fullText) {
     if (pageNumber <= 1) return null;
-    final prevAnalysis = _cache[pageNumber - 1];
-    if (prevAnalysis == null || prevAnalysis.moves.isEmpty) return null;
+    final prevGames = _cache[pageNumber - 1];
+    if (prevGames == null || prevGames.isEmpty) return null;
+    final lastGame = prevGames.last;
+    if (lastGame.moves.isEmpty) return null;
 
     final sample =
         fullText.length > 200 ? fullText.substring(0, 200) : fullText;
     if (RegExp(r'\b1\.').hasMatch(sample)) return null;
 
-    return prevAnalysis.moves.last.fenAfter;
+    return lastGame.moves.last.fenAfter;
   }
 
   Future<void> _loadRawTextForDebug(int pageNumber) async {
@@ -231,8 +235,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   /// Called when the user manually supplies a starting FEN from the dialog.
-  void _onStartFenProvided(String fen) {
-    _loadPageAnalysis(_currentPage, forcedFen: fen);
+  void _onStartFenProvided(String fen, int gameIndex) {
+    _loadPageAnalysis(_currentPage, forcedFens: {gameIndex: fen});
   }
 
   // -------------------------------------------------------------------------
@@ -309,11 +313,52 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Widget _buildChessPanel() {
-    final analysis = _pageAnalysis;
-    if (analysis == null) {
+    final games = _pageGames;
+    if (games == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
+    if (games.length == 1) {
+      return _buildGamePanel(games[0], 0);
+    }
+
+    // Multiple games on this page: show a selector at the top.
+    final safeIdx = _selectedGameIndex.clamp(0, games.length - 1);
+    return Column(
+      children: [
+        _buildGameSelector(games, safeIdx),
+        Expanded(child: _buildGamePanel(games[safeIdx], safeIdx)),
+      ],
+    );
+  }
+
+  Widget _buildGameSelector(List<PageAnalysis> games, int selectedIdx) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        children: [
+          for (int i = 0; i < games.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: ChoiceChip(
+                label: Text(
+                  games[i].header ?? 'Game ${i + 1}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                selected: selectedIdx == i,
+                onSelected: (_) => setState(() {
+                  _selectedGameIndex = i;
+                  _selectedMoveIndex = -1;
+                }),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGamePanel(PageAnalysis analysis, int gameIndex) {
     const fallbackFen =
         'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -321,9 +366,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       moves: analysis.moves,
       startFen: analysis.startFen.isNotEmpty ? analysis.startFen : fallbackFen,
       fenSource: analysis.fenSource,
+      header: analysis.header,
       selectedIndex: _selectedMoveIndex,
       onMoveSelected: (idx) => setState(() => _selectedMoveIndex = idx),
-      onStartFenProvided: _onStartFenProvided,
+      onStartFenProvided: (fen) => _onStartFenProvided(fen, gameIndex),
     );
   }
 

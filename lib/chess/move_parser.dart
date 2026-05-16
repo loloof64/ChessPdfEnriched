@@ -93,6 +93,17 @@ class MoveParser {
   ///   3. If that fails and the leading character is non-standard, try each
   ///      piece letter (K/Q/R/B/N) in turn; on the first hit, record the
   ///      mapping in [fontMap] so future tokens are resolved deterministically.
+  // Wrapper around dartchess parseSan that never throws: returns null for any
+  // malformed input that the library cannot handle gracefully.
+  static dc.Move? _parseSan(dc.Position pos, String san) {
+    if (san.length < 2) return null;
+    try {
+      return pos.parseSan(san);
+    } catch (_) {
+      return null;
+    }
+  }
+
   static dc.Move? _resolveMove(
     String token,
     dc.Position pos,
@@ -106,13 +117,12 @@ class MoveParser {
       remapped = fontMap[token[0]]! + token.substring(1);
     }
 
-    // 2. Standard parseSan.  Guard against single-char strings (e.g. "N" alone
-    //    with no destination square) that crash dartchess's parser.
-    if (remapped.length < 2) return null;
-    final direct = pos.parseSan(remapped);
+    // 2. Standard parseSan.
+    final direct = _parseSan(pos, remapped);
     if (direct != null) return direct;
 
     // 3. Fuzzy piece substitution.
+    if (remapped.isEmpty) return null;
     final first = remapped[0];
     final rest = remapped.substring(1);
 
@@ -120,7 +130,7 @@ class MoveParser {
     final isStandardStart = RegExp(r'^[KQRBNa-hO0-9x=+#]').hasMatch(first);
     if (!isStandardStart && _looksLikeSanSuffix(rest)) {
       for (final piece in const ['K', 'Q', 'R', 'B', 'N']) {
-        final move = pos.parseSan(piece + rest);
+        final move = _parseSan(pos, piece + rest);
         if (move != null) {
           fontMap?[token[0]] = piece; // learn for the rest of the document
           return move;
@@ -133,7 +143,7 @@ class MoveParser {
     //     don't confuse move numbers ("22.") with piece tokens.
     if (_isDigit(first) && _looksLikeSanSuffix(rest)) {
       for (final piece in const ['N', 'B', 'R', 'Q', 'K']) {
-        final move = pos.parseSan(piece + rest);
+        final move = _parseSan(pos, piece + rest);
         if (move != null) {
           fontMap?[token[0]] = piece;
           return move;
@@ -172,27 +182,32 @@ class MoveParser {
     return int.tryParse(m.group(1)!);
   }
 
-  /// Returns true when [fullText] contains a game header: any non-empty line
-  /// immediately followed by a location/year line ("City, YYYY").
+  /// Scans [fullText] for game headers (any non-empty line immediately followed
+  /// by a location/year line) and returns their byte-offsets in [fullText]
+  /// together with the detected player-line text.
   ///
-  /// This is intentionally format-agnostic on the first line so it works with
-  /// "Alekhine - Duras", "Kasparov vs Karpov", French headings, etc.
-  static bool _detectGameHeader(String fullText) {
-    final lines = fullText
-        .split('\n')
-        .map((l) => l.trim())
-        .toList();
+  /// Each returned record marks the start of a game segment: from that offset
+  /// to the next segment's start (or end of text).
+  static List<({int start, String header})> _findGameSegments(String fullText) {
+    final lines = fullText.split('\n');
+    final segments = <({int start, String header})>[];
 
-    var found = false;
-    for (int i = 0; i + 1 < lines.length; i++) {
-      if (lines[i].isEmpty) continue;
-      final next = lines[i + 1];
-      if (_locationYearRegex.hasMatch(next)) {
-        debugPrint('[MoveParser] game header: "${lines[i]}" / "$next"');
-        found = true;
+    int offset = 0;
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      final trimmed = line.trim();
+
+      if (trimmed.isNotEmpty && i + 1 < lines.length) {
+        final nextTrimmed = lines[i + 1].trim();
+        if (_locationYearRegex.hasMatch(nextTrimmed)) {
+          debugPrint('[MoveParser] game header: "$trimmed" / "$nextTrimmed"');
+          segments.add((start: offset, header: trimmed));
+        }
       }
+
+      offset += line.length + 1; // +1 for the '\n' consumed by split
     }
-    return found;
+    return segments;
   }
 
   // Bare FEN string anywhere in the text (last resort).
@@ -269,28 +284,76 @@ class MoveParser {
   // --------------------------------------------------------------------------
   // Public API
 
-  /// Parse [rawText] into a [PageAnalysis].
+  /// Parse [rawText] into one [PageAnalysis] per game found on the page.
   ///
-  /// - [pageHeight]: height of the PDF page in points (needed for diagram
-  ///   detection).  Pass 0 to skip diagram detection.
-  /// - [inheritedFen]: FEN from the last move of the previous page, used when
-  ///   this page continues a game (first move number > 1).
-  /// - [forcedFen]: user-supplied FEN that overrides everything.
-  /// - [fontMap]: mutable map of unrecognised piece characters → standard SAN
-  ///   piece letters, shared across all pages of a document.  The parser adds
-  ///   new entries whenever fuzzy matching resolves an unknown character, so
-  ///   the map grows as pages are processed and subsequent pages benefit from
-  ///   mappings already learnt.  Pass the same instance for every page.
-  static PageAnalysis parse(
+  /// When the page contains multiple game headers (player line + location/year),
+  /// the text is split at each header boundary and parsed independently so that
+  /// each game gets its own starting FEN and move list.
+  ///
+  /// - [inheritedFen]: FEN from the last move of the previous page, applied
+  ///   to the first segment when the page is a game continuation.
+  /// - [forcedFens]: user-supplied FENs keyed by game index (0-based) that
+  ///   override every other source for the corresponding game.
+  /// - [fontMap]: mutable character→piece mapping shared across all pages.
+  static List<PageAnalysis> parse(
     PdfPageRawText rawText,
     double pageHeight, {
     String? inheritedFen,
-    String? forcedFen,
+    Map<int, String>? forcedFens,
     Map<String, String>? fontMap,
   }) {
     final fullText = rawText.fullText;
     final charRects = rawText.charRects;
 
+    final segments = _findGameSegments(fullText);
+
+    if (segments.isEmpty) {
+      return [
+        _parseSegment(
+          text: fullText,
+          charRects: charRects,
+          header: null,
+          inheritedFen: inheritedFen,
+          forcedFen: forcedFens?[0],
+          fontMap: fontMap,
+        ),
+      ];
+    }
+
+    return [
+      for (int i = 0; i < segments.length; i++)
+        _parseSegment(
+          text: fullText.substring(
+            segments[i].start,
+            i + 1 < segments.length ? segments[i + 1].start : fullText.length,
+          ),
+          charRects: _sliceRects(
+            charRects,
+            segments[i].start,
+            i + 1 < segments.length ? segments[i + 1].start : fullText.length,
+          ),
+          header: segments[i].header,
+          inheritedFen: i == 0 ? inheritedFen : null,
+          forcedFen: forcedFens?[i],
+          fontMap: fontMap,
+        ),
+    ];
+  }
+
+  static List<PdfRect> _sliceRects(List<PdfRect> rects, int start, int end) {
+    if (start >= rects.length) return const [];
+    return rects.sublist(start, end.clamp(0, rects.length));
+  }
+
+  /// Parse one game segment ([text] + its [charRects] slice) into a [PageAnalysis].
+  static PageAnalysis _parseSegment({
+    required String text,
+    required List<PdfRect> charRects,
+    required String? header,
+    String? inheritedFen,
+    String? forcedFen,
+    Map<String, String>? fontMap,
+  }) {
     // ------------------------------------------------------------------
     // 1. Determine starting position.
 
@@ -301,7 +364,7 @@ class MoveParser {
       startFen = forcedFen;
       fenSource = FenSource.userProvided;
     } else {
-      final detected = _detectFenInText(fullText);
+      final detected = _detectFenInText(text);
       if (detected != null) {
         (startFen, fenSource) = detected;
       } else if (inheritedFen != null) {
@@ -323,13 +386,12 @@ class MoveParser {
     }
 
     // ------------------------------------------------------------------
-    // 2. Header / diagram detection (pure text — independent of move parsing).
+    // 2. Diagram detection (pure text — independent of move parsing).
 
     if (fenSource == FenSource.standard) {
-      final firstMoveNumber = _scanFirstMoveNumber(fullText);
-      final hasGameHeader = _detectGameHeader(fullText);
+      final firstMoveNumber = _scanFirstMoveNumber(text);
       if (_suspectDiagram(
-        hasGameHeader: hasGameHeader,
+        hasGameHeader: header != null,
         charRects: charRects,
         firstMoveNumber: firstMoveNumber,
       )) {
@@ -337,12 +399,12 @@ class MoveParser {
       }
     }
 
-    debugPrint('[MoveParser] fenSource=$fenSource  startFen=$startFen');
+    debugPrint('[MoveParser] header=$header  fenSource=$fenSource  startFen=$startFen');
 
     // ------------------------------------------------------------------
     // 3. Tokenise, skipping comments and variations.
 
-    final tokens = _tokenise(fullText);
+    final tokens = _tokenise(text);
 
     // ------------------------------------------------------------------
     // 4. Parse chess moves.
@@ -438,12 +500,11 @@ class MoveParser {
       if (!expectBlack) currentMoveNum++;
     }
 
-    debugPrint('[MoveParser] fenSource=$fenSource  startFen=$startFen');
-
     return PageAnalysis(
       startFen: startFen,
       fenSource: fenSource,
       moves: moves,
+      header: header,
     );
   }
 

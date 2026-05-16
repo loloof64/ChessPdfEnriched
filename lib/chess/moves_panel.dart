@@ -17,6 +17,7 @@ class MovesPanel extends StatelessWidget {
     required this.selectedIndex,
     required this.onMoveSelected,
     required this.onStartFenProvided,
+    this.header,
   });
 
   final List<CachedMove> moves;
@@ -28,6 +29,9 @@ class MovesPanel extends StatelessWidget {
   /// Called when the user manually enters a starting FEN.
   final ValueChanged<String> onStartFenProvided;
 
+  /// Game header (player names), e.g. "Alekhine - Duras". Shown above the board.
+  final String? header;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -35,6 +39,20 @@ class MovesPanel extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (header != null)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: Text(
+                  header!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             StaticChessboard(
               size: constraints.maxWidth,
               orientation: dc.Side.white,
