@@ -5,6 +5,7 @@ import '../chess/analysis_cache.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
+import '../l10n/app_localizations.dart';
 
 class PdfReaderScreen extends StatefulWidget {
   final String filePath;
@@ -214,20 +215,21 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   void _showRawTextDialog(String text) {
+    final l = AppLocalizations.of(context)!;
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Raw text — page $_currentPage'),
+        title: Text(l.rawTextDialogTitle(_currentPage)),
         content: SingleChildScrollView(
           child: SelectableText(
-            text.isEmpty ? '(empty)' : text,
+            text.isEmpty ? l.emptyText : text,
             style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
+            child: Text(l.close),
           ),
         ],
       ),
@@ -254,6 +256,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: AppBar(
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
@@ -262,12 +265,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           if (_rawPageText != null)
             IconButton(
               icon: const Icon(Icons.text_snippet_outlined),
-              tooltip: 'Show raw extracted text',
+              tooltip: l.showRawText,
               onPressed: () => _showRawTextDialog(_rawPageText!),
             ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Re-analyse moves',
+            tooltip: l.reanalyse,
             onPressed: _analysing ? null : _reanalyse,
           ),
         ],
@@ -278,6 +281,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Widget _buildBody() {
+    final l = AppLocalizations.of(context)!;
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -288,7 +292,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           children: [
             const Icon(Icons.error_outline, size: 48, color: Colors.red),
             const SizedBox(height: 8),
-            Text('Failed to load PDF:\n$_error', textAlign: TextAlign.center),
+            Text(l.failedToLoad(_error!), textAlign: TextAlign.center),
           ],
         ),
       );
@@ -323,6 +327,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Widget _buildChessPanel() {
+    final l = AppLocalizations.of(context)!;
     final games = _pageGames;
     if (games == null) {
       return const Center(child: CircularProgressIndicator());
@@ -336,13 +341,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     final safeIdx = _selectedGameIndex.clamp(0, games.length - 1);
     return Column(
       children: [
-        _buildGameSelector(games, safeIdx),
+        _buildGameSelector(games, safeIdx, l),
         Expanded(child: _buildGamePanel(games[safeIdx], safeIdx)),
       ],
     );
   }
 
-  Widget _buildGameSelector(List<PageAnalysis> games, int selectedIdx) {
+  Widget _buildGameSelector(List<PageAnalysis> games, int selectedIdx, AppLocalizations l) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -353,7 +358,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
               padding: const EdgeInsets.only(right: 4),
               child: ChoiceChip(
                 label: Text(
-                  games[i].header ?? 'Game ${i + 1}',
+                  games[i].header ?? l.gameNumber(i + 1),
                   style: const TextStyle(fontSize: 11),
                 ),
                 selected: selectedIdx == i,
@@ -384,6 +389,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Widget _buildNavigationBar() {
+    final l = AppLocalizations.of(context)!;
     final total = _document!.pages.length;
     return BottomAppBar(
       child: Row(
@@ -391,16 +397,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         children: [
           IconButton(
             icon: const Icon(Icons.chevron_left),
-            tooltip: 'Previous page',
+            tooltip: l.previousPage,
             onPressed: _currentPage > 1 ? _goToPreviousPage : null,
           ),
           Text(
-            'Page $_currentPage of $total',
+            l.pageOf(_currentPage, total),
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           IconButton(
             icon: const Icon(Icons.chevron_right),
-            tooltip: 'Next page',
+            tooltip: l.nextPage,
             onPressed: _currentPage < total ? _goToNextPage : null,
           ),
         ],
@@ -416,16 +422,17 @@ class _AnalysingBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.black54,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: const Row(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
+          const SizedBox(
             width: 10,
             height: 10,
             child: CircularProgressIndicator(
@@ -433,10 +440,10 @@ class _AnalysingBadge extends StatelessWidget {
               color: Colors.white,
             ),
           ),
-          SizedBox(width: 6),
+          const SizedBox(width: 6),
           Text(
-            'Analysing…',
-            style: TextStyle(color: Colors.white, fontSize: 11),
+            l.analysing,
+            style: const TextStyle(color: Colors.white, fontSize: 11),
           ),
         ],
       ),

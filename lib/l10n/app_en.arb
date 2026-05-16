@@ -1,0 +1,52 @@
+{
+  "appTitle": "Chess PDF Enriched",
+  "openPdf": "Open PDF",
+  "showRawText": "Show raw extracted text",
+  "reanalyse": "Re-analyse moves",
+  "rawTextDialogTitle": "Raw text — page {pageNumber}",
+  "@rawTextDialogTitle": {
+    "placeholders": {
+      "pageNumber": { "type": "int" }
+    }
+  },
+  "emptyText": "(empty)",
+  "close": "Close",
+  "failedToLoad": "Failed to load PDF:\n{error}",
+  "@failedToLoad": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "pageOf": "Page {current} of {total}",
+  "@pageOf": {
+    "placeholders": {
+      "current": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "previousPage": "Previous page",
+  "nextPage": "Next page",
+  "analysing": "Analysing…",
+  "gameNumber": "Game {n}",
+  "@gameNumber": {
+    "placeholders": {
+      "n": { "type": "int" }
+    }
+  },
+  "diagramWarning": "Starting position may come from a board diagram — FEN not detected.",
+  "enterFen": "Enter FEN",
+  "userFenLabel": "Starting position: user-provided FEN.",
+  "edit": "Edit",
+  "setStartingPosition": "Set starting position",
+  "editStartingPosition": "Edit starting position",
+  "sideToMove": "Side to move:",
+  "white": "White",
+  "black": "Black",
+  "castling": "Castling:",
+  "pasteFromClipboard": "Paste from clipboard",
+  "invalidFen": "Invalid FEN",
+  "invalidPosition": "Invalid position — both kings must be on the board.",
+  "cancel": "Cancel",
+  "apply": "Apply",
+  "noMovesFound": "No chess moves found on this page."
+}

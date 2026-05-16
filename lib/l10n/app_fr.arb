@@ -1,0 +1,52 @@
+{
+  "appTitle": "Chess PDF Enriched",
+  "openPdf": "Ouvrir un PDF",
+  "showRawText": "Afficher le texte brut extrait",
+  "reanalyse": "Réanalyser les coups",
+  "rawTextDialogTitle": "Texte brut — page {pageNumber}",
+  "@rawTextDialogTitle": {
+    "placeholders": {
+      "pageNumber": { "type": "int" }
+    }
+  },
+  "emptyText": "(vide)",
+  "close": "Fermer",
+  "failedToLoad": "Impossible de charger le PDF :\n{error}",
+  "@failedToLoad": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "pageOf": "Page {current} sur {total}",
+  "@pageOf": {
+    "placeholders": {
+      "current": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "previousPage": "Page précédente",
+  "nextPage": "Page suivante",
+  "analysing": "Analyse en cours…",
+  "gameNumber": "Partie {n}",
+  "@gameNumber": {
+    "placeholders": {
+      "n": { "type": "int" }
+    }
+  },
+  "diagramWarning": "La position de départ peut provenir d'un diagramme — FEN non détecté.",
+  "enterFen": "Saisir le FEN",
+  "userFenLabel": "Position de départ : FEN fourni par l'utilisateur.",
+  "edit": "Modifier",
+  "setStartingPosition": "Définir la position de départ",
+  "editStartingPosition": "Modifier la position de départ",
+  "sideToMove": "Trait :",
+  "white": "Blancs",
+  "black": "Noirs",
+  "castling": "Roques :",
+  "pasteFromClipboard": "Coller depuis le presse-papiers",
+  "invalidFen": "FEN invalide",
+  "invalidPosition": "Position invalide — les deux rois doivent être sur l'échiquier.",
+  "cancel": "Annuler",
+  "apply": "Appliquer",
+  "noMovesFound": "Aucun coup d'échecs trouvé sur cette page."
+}

@@ -1,0 +1,52 @@
+{
+  "appTitle": "Chess PDF Enriched",
+  "openPdf": "Abrir PDF",
+  "showRawText": "Mostrar texto extraído",
+  "reanalyse": "Reanalizar movimientos",
+  "rawTextDialogTitle": "Texto bruto — página {pageNumber}",
+  "@rawTextDialogTitle": {
+    "placeholders": {
+      "pageNumber": { "type": "int" }
+    }
+  },
+  "emptyText": "(vacío)",
+  "close": "Cerrar",
+  "failedToLoad": "Error al cargar el PDF:\n{error}",
+  "@failedToLoad": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "pageOf": "Página {current} de {total}",
+  "@pageOf": {
+    "placeholders": {
+      "current": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "previousPage": "Página anterior",
+  "nextPage": "Página siguiente",
+  "analysing": "Analizando…",
+  "gameNumber": "Partida {n}",
+  "@gameNumber": {
+    "placeholders": {
+      "n": { "type": "int" }
+    }
+  },
+  "diagramWarning": "La posición inicial puede provenir de un diagrama — FEN no detectado.",
+  "enterFen": "Introducir FEN",
+  "userFenLabel": "Posición inicial: FEN introducido por el usuario.",
+  "edit": "Editar",
+  "setStartingPosition": "Establecer posición inicial",
+  "editStartingPosition": "Editar posición inicial",
+  "sideToMove": "Turno:",
+  "white": "Blancas",
+  "black": "Negras",
+  "castling": "Enroques:",
+  "pasteFromClipboard": "Pegar desde el portapapeles",
+  "invalidFen": "FEN no válido",
+  "invalidPosition": "Posición inválida — ambos reyes deben estar en el tablero.",
+  "cancel": "Cancelar",
+  "apply": "Aplicar",
+  "noMovesFound": "No se encontraron movimientos de ajedrez en esta página."
+}

@@ -3,6 +3,7 @@ import 'package:dartchess/dartchess.dart' as dc;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard;
 
+import '../l10n/app_localizations.dart';
 import 'models.dart';
 
 /// Right-side panel showing a chess board and a clickable move list.
@@ -117,6 +118,7 @@ class _DiagramWarningBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Material(
       color: Colors.amber.shade50,
       child: Padding(
@@ -126,20 +128,20 @@ class _DiagramWarningBanner extends StatelessWidget {
             const Icon(Icons.warning_amber_rounded,
                 size: 16, color: Colors.orange),
             const SizedBox(width: 6),
-            const Expanded(
+            Expanded(
               child: Text(
-                'Starting position may come from a board diagram — FEN not detected.',
-                style: TextStyle(fontSize: 11, color: Colors.brown),
+                l.diagramWarning,
+                style: const TextStyle(fontSize: 11, color: Colors.brown),
               ),
             ),
             TextButton(
-              onPressed: () => _showEditorDialog(context),
+              onPressed: () => _showEditorDialog(context, l),
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 28),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text('Enter FEN', style: TextStyle(fontSize: 11)),
+              child: Text(l.enterFen, style: const TextStyle(fontSize: 11)),
             ),
           ],
         ),
@@ -147,11 +149,11 @@ class _DiagramWarningBanner extends StatelessWidget {
     );
   }
 
-  void _showEditorDialog(BuildContext context) {
+  void _showEditorDialog(BuildContext context, AppLocalizations l) {
     showDialog<void>(
       context: context,
       builder: (ctx) => _BoardEditorDialog(
-        title: 'Set starting position',
+        title: l.setStartingPosition,
         initialFen: initialFen,
         onConfirm: onStartFenProvided,
       ),
@@ -166,6 +168,7 @@ class _UserFenBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Material(
       color: Colors.green.shade50,
       child: Padding(
@@ -175,20 +178,20 @@ class _UserFenBanner extends StatelessWidget {
             const Icon(Icons.check_circle_outline,
                 size: 16, color: Colors.green),
             const SizedBox(width: 6),
-            const Expanded(
+            Expanded(
               child: Text(
-                'Starting position: user-provided FEN.',
-                style: TextStyle(fontSize: 11, color: Colors.green),
+                l.userFenLabel,
+                style: const TextStyle(fontSize: 11, color: Colors.green),
               ),
             ),
             TextButton(
-              onPressed: () => _showEditorDialog(context),
+              onPressed: () => _showEditorDialog(context, l),
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(0, 28),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text('Edit', style: TextStyle(fontSize: 11)),
+              child: Text(l.edit, style: const TextStyle(fontSize: 11)),
             ),
           ],
         ),
@@ -196,11 +199,11 @@ class _UserFenBanner extends StatelessWidget {
     );
   }
 
-  void _showEditorDialog(BuildContext context) {
+  void _showEditorDialog(BuildContext context, AppLocalizations l) {
     showDialog<void>(
       context: context,
       builder: (ctx) => _BoardEditorDialog(
-        title: 'Edit starting position',
+        title: l.editStartingPosition,
         initialFen: fen,
         onConfirm: onEdit,
       ),
@@ -299,7 +302,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
         // Don't touch _fenCtrl — the text field is the source here.
       });
     } catch (_) {
-      setState(() => _fenFieldError = 'Invalid FEN');
+      setState(() => _fenFieldError = AppLocalizations.of(context)!.invalidFen);
     }
   }
 
@@ -317,7 +320,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
       dc.Chess.fromSetup(dc.Setup.parseFen(fen));
     } catch (_) {
       setState(() =>
-          _applyError = 'Invalid position — both kings must be on the board.');
+          _applyError = AppLocalizations.of(context)!.invalidPosition);
       return;
     }
     widget.onConfirm(fen);
@@ -326,6 +329,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final size = MediaQuery.of(context).size;
     final maxHeight = size.height - 24;
 
@@ -388,7 +392,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
                       children: [
                         _buildBoardSection(),
                         const SizedBox(height: 12),
-                        _buildControls(),
+                        _buildControls(l),
                       ],
                     ),
                   ),
@@ -401,7 +405,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _buildFenDisplay(),
+                      _buildFenDisplay(l),
                       if (_applyError != null) ...[
                         const SizedBox(height: 4),
                         Text(_applyError!,
@@ -414,12 +418,12 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
                         children: [
                           TextButton(
                             onPressed: () => Navigator.of(context).pop(),
-                            child: const Text('Cancel'),
+                            child: Text(l.cancel),
                           ),
                           const SizedBox(width: 8),
                           FilledButton(
                             onPressed: _apply,
-                            child: const Text('Apply'),
+                            child: Text(l.apply),
                           ),
                         ],
                       ),
@@ -519,22 +523,22 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
     );
   }
 
-  Widget _buildControls() {
+  Widget _buildControls(AppLocalizations l) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            const Text('Side to move:', style: TextStyle(fontSize: 12)),
+            Text(l.sideToMove, style: const TextStyle(fontSize: 12)),
             const SizedBox(width: 8),
             SegmentedButton<bool>(
-              segments: const [
+              segments: [
                 ButtonSegment(
                     value: true,
-                    label: Text('White', style: TextStyle(fontSize: 12))),
+                    label: Text(l.white, style: const TextStyle(fontSize: 12))),
                 ButtonSegment(
                     value: false,
-                    label: Text('Black', style: TextStyle(fontSize: 12))),
+                    label: Text(l.black, style: const TextStyle(fontSize: 12))),
               ],
               selected: {_whiteTurn},
               onSelectionChanged: (v) => setState(() {
@@ -549,7 +553,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
         const SizedBox(height: 4),
         Row(
           children: [
-            const Text('Castling:', style: TextStyle(fontSize: 12)),
+            Text(l.castling, style: const TextStyle(fontSize: 12)),
             const SizedBox(width: 4),
             _CastleCheckbox(
                 label: 'K',
@@ -573,7 +577,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
     );
   }
 
-  Widget _buildFenDisplay() {
+  Widget _buildFenDisplay(AppLocalizations l) {
     return TextField(
       controller: _fenCtrl,
       style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
@@ -586,7 +590,7 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
             const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         suffixIcon: IconButton(
           icon: const Icon(Icons.content_paste, size: 18),
-          tooltip: 'Paste from clipboard',
+          tooltip: l.pasteFromClipboard,
           onPressed: _pasteFromClipboard,
         ),
       ),
@@ -847,14 +851,15 @@ class _MoveListState extends State<_MoveList> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     if (widget.moves.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(12),
+          padding: const EdgeInsets.all(12),
           child: Text(
-            'No chess moves found on this page.',
+            l.noMovesFound,
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.black45, fontSize: 12),
+            style: const TextStyle(color: Colors.black45, fontSize: 12),
           ),
         ),
       );

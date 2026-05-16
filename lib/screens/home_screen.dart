@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../l10n/app_localizations.dart';
 import 'pdf_reader_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -25,15 +26,16 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Chess PDF Enriched'),
+        title: Text(l.appTitle),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Center(
         child: ElevatedButton.icon(
           icon: const Icon(Icons.picture_as_pdf),
-          label: const Text('Open PDF'),
+          label: Text(l.openPdf),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             textStyle: const TextStyle(fontSize: 18),
