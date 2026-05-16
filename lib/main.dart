@@ -18,7 +18,7 @@ void main() {
 /// Preloads piece images for the sets used in this app into [ChessgroundImages]
 /// so [PieceWidget] always uses the fast [RawImage] path.
 Future<void> _preloadPieceImages() async {
-  for (final assets in [PieceSet.stauntyAssets, PieceSet.meridaAssets]) {
+  for (final assets in [PieceSet.cburnettAssets]) {
     for (final image in assets.values) {
       if (ChessgroundImages.instance.containsKey(image)) continue;
       try {

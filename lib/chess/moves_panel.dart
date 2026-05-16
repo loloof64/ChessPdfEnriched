@@ -60,6 +60,7 @@ class MovesPanel extends StatelessWidget {
               fen: _currentFen(),
               lastMove: _lastMove(),
               colorScheme: ChessboardColorScheme.brown,
+              pieceAssets: PieceSet.cburnettAssets,
             ),
             const Divider(height: 1),
             if (fenSource == FenSource.suspectedDiagram)
@@ -226,7 +227,7 @@ class _BoardEditorDialog extends StatefulWidget {
 }
 
 class _BoardEditorDialogState extends State<_BoardEditorDialog> {
-  static const _pieceSet = PieceSet.merida;
+  static const _pieceSet = PieceSet.cburnett;
   static const _standardFen =
       'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
