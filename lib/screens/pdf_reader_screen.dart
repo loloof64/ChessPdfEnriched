@@ -1,3 +1,5 @@
+import 'dart:math' show min;
+
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -301,18 +303,60 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Container(
+          width: 280,
+          decoration: BoxDecoration(
+            border: Border(right: BorderSide(color: Colors.grey.shade300)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                child: Text(
+                  l.editingStartPositions,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              Expanded(child: _buildChessPanel()),
+            ],
+          ),
+        ),
         Expanded(
           flex: 3,
-          child: Stack(
-            children: [
-              PdfPageView(document: _document, pageNumber: _currentPage),
-              if (_analysing)
-                const Positioned(
-                  bottom: 8,
-                  right: 8,
-                  child: _AnalysingBadge(),
-                ),
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final page = _document!.pages[_currentPage - 1];
+              final games = _pageGames;
+              final moves = (games != null && games.isNotEmpty)
+                  ? games[_selectedGameIndex.clamp(0, games.length - 1)].moves
+                  : const <CachedMove>[];
+              return Stack(
+                children: [
+                  PdfPageView(document: _document, pageNumber: _currentPage),
+                  _PdfMoveOverlay(
+                    moves: moves,
+                    pageWidth: page.width,
+                    pageHeight: page.height,
+                    widgetSize: constraints.biggest,
+                    selectedIndex: _selectedMoveIndex,
+                    onMoveSelected: (idx) =>
+                        setState(() => _selectedMoveIndex = idx),
+                  ),
+                  if (_analysing)
+                    const Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: _AnalysingBadge(),
+                    ),
+                ],
+              );
+            },
           ),
         ),
         Container(
@@ -320,7 +364,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           decoration: BoxDecoration(
             border: Border(left: BorderSide(color: Colors.grey.shade300)),
           ),
-          child: _buildChessPanel(),
+          child: _buildPreviewPanel(),
         ),
       ],
     );
@@ -378,13 +422,26 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
     return MovesPanel(
-      moves: analysis.moves,
       startFen: analysis.startFen.isNotEmpty ? analysis.startFen : fallbackFen,
       fenSource: analysis.fenSource,
       header: analysis.header,
-      selectedIndex: _selectedMoveIndex,
-      onMoveSelected: (idx) => setState(() => _selectedMoveIndex = idx),
       onStartFenProvided: (fen) => _onStartFenProvided(fen, gameIndex),
+    );
+  }
+
+  Widget _buildPreviewPanel() {
+    const fallbackFen =
+        'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    final games = _pageGames;
+    if (games == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final safeIdx = _selectedGameIndex.clamp(0, games.length - 1);
+    final analysis = games[safeIdx];
+    return PositionPreviewPanel(
+      moves: analysis.moves,
+      startFen: analysis.startFen.isNotEmpty ? analysis.startFen : fallbackFen,
+      selectedIndex: _selectedMoveIndex,
     );
   }
 
@@ -410,6 +467,85 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             onPressed: _currentPage < total ? _goToNextPage : null,
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+class _PdfMoveOverlay extends StatelessWidget {
+  const _PdfMoveOverlay({
+    required this.moves,
+    required this.pageWidth,
+    required this.pageHeight,
+    required this.widgetSize,
+    required this.selectedIndex,
+    required this.onMoveSelected,
+  });
+
+  final List<CachedMove> moves;
+  final double pageWidth;
+  final double pageHeight;
+  final Size widgetSize;
+  final int selectedIndex;
+  final ValueChanged<int> onMoveSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    if (moves.isEmpty) return const SizedBox.shrink();
+    final W = widgetSize.width;
+    final H = widgetSize.height;
+    if (W == 0 || H == 0) return const SizedBox.shrink();
+
+    final scale = min(W / pageWidth, H / pageHeight);
+    final xOffset = (W - pageWidth * scale) / 2;
+    final yOffset = (H - pageHeight * scale) / 2;
+
+    final primary = Theme.of(context).colorScheme.primary;
+    final link = Colors.blue.shade700;
+
+    return Stack(
+      children: [
+        for (int i = 0; i < moves.length; i++)
+          if (moves[i].bounds case final b?)
+            _buildHotspot(i, b, scale, xOffset, yOffset, primary, link),
+      ],
+    );
+  }
+
+  Widget _buildHotspot(
+    int index,
+    MoveBounds b,
+    double scale,
+    double xOffset,
+    double yOffset,
+    Color primary,
+    Color link,
+  ) {
+    final fl = xOffset + b.left * scale;
+    final ft = yOffset + (pageHeight - b.top) * scale;
+    final fw = ((b.right - b.left) * scale).clamp(4.0, double.infinity);
+    final fh = ((b.top - b.bottom) * scale).clamp(4.0, double.infinity);
+    final isSelected = selectedIndex == index;
+
+    return Positioned(
+      left: fl,
+      top: ft,
+      width: fw,
+      height: fh,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: () => onMoveSelected(index),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isSelected ? primary.withAlpha(55) : link.withAlpha(18),
+              border: isSelected ? Border.all(color: primary, width: 1) : null,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
       ),
     );
   }

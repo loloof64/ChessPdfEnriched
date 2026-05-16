@@ -112,4 +112,7 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get noMovesFound =>
       'No se encontraron movimientos de ajedrez en esta página.';
+
+  @override
+  String get editingStartPositions => 'Edición de posiciones iniciales';
 }

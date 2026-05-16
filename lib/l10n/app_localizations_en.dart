@@ -110,4 +110,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get noMovesFound => 'No chess moves found on this page.';
+
+  @override
+  String get editingStartPositions => 'Editing start positions';
 }

@@ -285,6 +285,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No chess moves found on this page.'**
   String get noMovesFound;
+
+  /// No description provided for @editingStartPositions.
+  ///
+  /// In en, this message translates to:
+  /// **'Editing start positions'**
+  String get editingStartPositions;
 }
 
 class _AppLocalizationsDelegate

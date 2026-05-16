@@ -50,5 +50,6 @@
   "invalidPosition": "Position invalide — les deux rois doivent être sur l'échiquier.",
   "cancel": "Annuler",
   "apply": "Appliquer",
-  "noMovesFound": "Aucun coup d'échecs trouvé sur cette page."
+  "noMovesFound": "Aucun coup d'échecs trouvé sur cette page.",
+  "editingStartPositions": "Édition des positions de départ"
 }

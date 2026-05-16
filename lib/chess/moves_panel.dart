@@ -4,96 +4,100 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard;
 
 import '../l10n/app_localizations.dart';
-import 'models.dart';
+import 'models.dart' show CachedMove, FenSource;
 
-/// Right-side panel showing a chess board and a clickable move list.
-///
-/// Each move in the list acts as a hyperlink: clicking it updates the board
-/// to the position reached after that move.
+/// Left-side panel showing the start-position banners.
 class MovesPanel extends StatelessWidget {
   const MovesPanel({
     super.key,
-    required this.moves,
     required this.startFen,
     required this.fenSource,
-    required this.selectedIndex,
-    required this.onMoveSelected,
     required this.onStartFenProvided,
     this.header,
   });
 
-  final List<CachedMove> moves;
   final String startFen;
   final FenSource fenSource;
-  final int selectedIndex;
-  final ValueChanged<int> onMoveSelected;
 
   /// Called when the user manually enters a starting FEN.
   final ValueChanged<String> onStartFenProvided;
 
-  /// Game header (player names), e.g. "Alekhine - Duras". Shown above the board.
+  /// Game header (player names), e.g. "Alekhine - Duras". Shown above the banners.
   final String? header;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (header != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Text(
+              header!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        const Divider(height: 1),
+        if (fenSource == FenSource.standard)
+          _StandardFenBanner(onStartFenProvided: onStartFenProvided),
+        if (fenSource == FenSource.detectedInText)
+          _DetectedFenBanner(
+            fen: startFen,
+            onEdit: onStartFenProvided,
+          ),
+        if (fenSource == FenSource.inheritedFromPreviousPage)
+          _InheritedFenBanner(
+            fen: startFen,
+            onEdit: onStartFenProvided,
+          ),
+        if (fenSource == FenSource.suspectedDiagram)
+          _DiagramWarningBanner(
+            initialFen: startFen,
+            onStartFenProvided: onStartFenProvided,
+          ),
+        if (fenSource == FenSource.userProvided)
+          _UserFenBanner(
+            fen: startFen,
+            onEdit: onStartFenProvided,
+          ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Right-side panel showing only the chess board for the currently selected position.
+class PositionPreviewPanel extends StatelessWidget {
+  const PositionPreviewPanel({
+    super.key,
+    required this.moves,
+    required this.startFen,
+    required this.selectedIndex,
+  });
+
+  final List<CachedMove> moves;
+  final String startFen;
+  final int selectedIndex;
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (header != null)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: Text(
-                  header!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            StaticChessboard(
-              size: constraints.maxWidth,
-              orientation: dc.Side.white,
-              fen: _currentFen(),
-              lastMove: _lastMove(),
-              colorScheme: ChessboardColorScheme.brown,
-              pieceAssets: PieceSet.cburnettAssets,
-            ),
-            const Divider(height: 1),
-            if (fenSource == FenSource.standard)
-              _StandardFenBanner(onStartFenProvided: onStartFenProvided),
-            if (fenSource == FenSource.detectedInText)
-              _DetectedFenBanner(
-                fen: startFen,
-                onEdit: onStartFenProvided,
-              ),
-            if (fenSource == FenSource.inheritedFromPreviousPage)
-              _InheritedFenBanner(
-                fen: startFen,
-                onEdit: onStartFenProvided,
-              ),
-            if (fenSource == FenSource.suspectedDiagram)
-              _DiagramWarningBanner(
-                initialFen: startFen,
-                onStartFenProvided: onStartFenProvided,
-              ),
-            if (fenSource == FenSource.userProvided)
-              _UserFenBanner(
-                fen: startFen,
-                onEdit: onStartFenProvided,
-              ),
-            Expanded(
-              child: _MoveList(
-                moves: moves,
-                selectedIndex: selectedIndex,
-                onMoveSelected: onMoveSelected,
-              ),
-            ),
-          ],
+        return StaticChessboard(
+          size: constraints.maxWidth,
+          orientation: dc.Side.white,
+          fen: _currentFen(),
+          lastMove: _lastMove(),
+          colorScheme: ChessboardColorScheme.brown,
+          pieceAssets: PieceSet.cburnettAssets,
         );
       },
     );
@@ -936,211 +940,3 @@ class _CastleCheckbox extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Move list
-
-class _MoveList extends StatefulWidget {
-  const _MoveList({
-    required this.moves,
-    required this.selectedIndex,
-    required this.onMoveSelected,
-  });
-
-  final List<CachedMove> moves;
-  final int selectedIndex;
-  final ValueChanged<int> onMoveSelected;
-
-  @override
-  State<_MoveList> createState() => _MoveListState();
-}
-
-class _MoveListState extends State<_MoveList> {
-  final ScrollController _scroll = ScrollController();
-  late List<_MovePair> _pairs;
-
-  @override
-  void initState() {
-    super.initState();
-    _pairs = _buildPairs(widget.moves);
-  }
-
-  @override
-  void didUpdateWidget(_MoveList old) {
-    super.didUpdateWidget(old);
-    if (widget.moves != old.moves) {
-      _pairs = _buildPairs(widget.moves);
-    }
-    if (widget.selectedIndex != old.selectedIndex) {
-      _scrollToSelected();
-    }
-  }
-
-  void _scrollToSelected() {
-    final idx = widget.selectedIndex;
-    if (!_scroll.hasClients) return;
-    if (idx < 0) {
-      _scroll.animateTo(
-        0,
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-      );
-      return;
-    }
-    int row = 0;
-    for (int i = 0; i < _pairs.length; i++) {
-      if (_pairs[i].whiteIdx == idx || _pairs[i].blackIdx == idx) {
-        row = i;
-        break;
-      }
-    }
-    final target = (row * 36.0).clamp(0.0, _scroll.position.maxScrollExtent);
-    _scroll.animateTo(
-      target,
-      duration: const Duration(milliseconds: 150),
-      curve: Curves.easeOut,
-    );
-  }
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context)!;
-    if (widget.moves.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Text(
-            l.noMovesFound,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.black45, fontSize: 12),
-          ),
-        ),
-      );
-    }
-
-    return ListView.builder(
-      controller: _scroll,
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      itemCount: _pairs.length,
-      itemBuilder: (ctx, i) {
-        final pair = _pairs[i];
-        return SizedBox(
-          height: 36,
-          child: Row(
-            children: [
-              SizedBox(
-                width: 40,
-                child: Text(
-                  '${pair.moveNumber}.',
-                  textAlign: TextAlign.right,
-                  style:
-                      const TextStyle(fontSize: 13, color: Colors.black54),
-                ),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: pair.whiteIdx != null
-                    ? _SanButton(
-                        san: widget.moves[pair.whiteIdx!].san,
-                        index: pair.whiteIdx!,
-                        selected: widget.selectedIndex == pair.whiteIdx,
-                        onTap: widget.onMoveSelected,
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: pair.blackIdx != null
-                    ? _SanButton(
-                        san: widget.moves[pair.blackIdx!].san,
-                        index: pair.blackIdx!,
-                        selected: widget.selectedIndex == pair.blackIdx,
-                        onTap: widget.onMoveSelected,
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              const SizedBox(width: 4),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  static List<_MovePair> _buildPairs(List<CachedMove> moves) {
-    final pairs = <_MovePair>[];
-    int i = 0;
-    while (i < moves.length) {
-      final m = moves[i];
-      if (!m.isBlack) {
-        final whiteIdx = i;
-        int? blackIdx;
-        if (i + 1 < moves.length && moves[i + 1].isBlack) {
-          blackIdx = i + 1;
-          i++;
-        }
-        pairs.add(_MovePair(m.moveNumber, whiteIdx, blackIdx));
-      } else {
-        pairs.add(_MovePair(m.moveNumber, null, i));
-      }
-      i++;
-    }
-    return pairs;
-  }
-}
-
-class _MovePair {
-  const _MovePair(this.moveNumber, this.whiteIdx, this.blackIdx);
-  final int moveNumber;
-  final int? whiteIdx;
-  final int? blackIdx;
-}
-
-class _SanButton extends StatelessWidget {
-  const _SanButton({
-    required this.san,
-    required this.index,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String san;
-  final int index;
-  final bool selected;
-  final ValueChanged<int> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-    return InkWell(
-      onTap: () => onTap(index),
-      borderRadius: BorderRadius.circular(4),
-      child: Container(
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: selected
-            ? BoxDecoration(
-                color: primaryColor.withAlpha(30),
-                borderRadius: BorderRadius.circular(4),
-              )
-            : null,
-        child: Text(
-          san,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            color: selected ? primaryColor : Colors.blue.shade700,
-            decoration: TextDecoration.underline,
-            decorationColor:
-                selected ? primaryColor : Colors.blue.shade700,
-          ),
-        ),
-      ),
-    );
-  }
-}

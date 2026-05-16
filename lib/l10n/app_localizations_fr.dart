@@ -112,4 +112,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get noMovesFound => 'Aucun coup d\'échecs trouvé sur cette page.';
+
+  @override
+  String get editingStartPositions => 'Édition des positions de départ';
 }

@@ -50,5 +50,6 @@
   "invalidPosition": "Invalid position — both kings must be on the board.",
   "cancel": "Cancel",
   "apply": "Apply",
-  "noMovesFound": "No chess moves found on this page."
+  "noMovesFound": "No chess moves found on this page.",
+  "editingStartPositions": "Editing start positions"
 }
