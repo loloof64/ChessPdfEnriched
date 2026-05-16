@@ -138,10 +138,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       if (mounted) setState(() => _rawPageText = rawText.fullText);
 
-      debugPrint(
-        '[ChessPdf] page $pageNumber raw text (first 400 chars):\n'
-        '${rawText.fullText.length > 400 ? rawText.fullText.substring(0, 400) : rawText.fullText}',
-      );
+      debugPrint('[ChessPdf] page $pageNumber raw text:\n${rawText.fullText}');
       debugPrint(
         '[ChessPdf] page $pageNumber code units (first 80):\n'
         '${rawText.fullText.runes.take(80).map((r) => 'U+${r.toRadixString(16).padLeft(4, '0')}').join(' ')}',

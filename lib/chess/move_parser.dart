@@ -106,7 +106,9 @@ class MoveParser {
       remapped = fontMap[token[0]]! + token.substring(1);
     }
 
-    // 2. Standard parseSan.
+    // 2. Standard parseSan.  Guard against single-char strings (e.g. "N" alone
+    //    with no destination square) that crash dartchess's parser.
+    if (remapped.length < 2) return null;
     final direct = pos.parseSan(remapped);
     if (direct != null) return direct;
 
@@ -155,33 +157,43 @@ class MoveParser {
     caseSensitive: false,
   );
 
-  // Line 1 of a game header: "Alekhine - Duras", "Van der Wiel - Short",
-  // "R. Williams - LeMoir", etc.
-  //
-  // multiLine: true + ^ + $ anchor to a single line.  The line must contain
-  // nothing after the last name (modulo trailing whitespace), which is what
-  // distinguishes "Alekhine - Duras" from book-title lines like
-  // "David LeMoir - Comment devenir un Super Attaquant" (extra words after).
-  //
-  // Each side allows one or more capitalised words (to support "Van der Wiel",
-  // "De la Bourdonnais", etc.) plus an optional leading initial ("R. ").
-  static final _playerLineRegex = RegExp(
-    r'^'
-    r'(?:[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]\.\s+)*'  // optional initials
-    r'[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]'
-    r'[a-zA-Zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+'
-    r'(?:\s+[A-Za-zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+)*'  // extra name words
-    r'\s+[-]\s+'
-    r'(?:[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]\.\s+)*'
-    r'[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝ]'
-    r'[a-zA-Zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+'
-    r'(?:\s+[A-Za-zàáâãäåæçèéêëìíîïðñòóôõöøùúûüý]+)*'  // extra name words
-    r'\s*$',                                              // end of line
-    multiLine: true,
+  // Location/year line: "Saint-Pétersbourg, 1913", "London, 1851", etc.
+  // \xC0-\xFF covers the Latin-1 Supplement block (À–ÿ): all accented letters
+  // used in French, German, Spanish, Russian transliterations, etc.
+  static final _locationYearRegex = RegExp(
+    r'[A-Za-z\xC0-\xFF][A-Za-z\xC0-\xFF\s-]*,\s*(?:1[0-9]|20)\d{2}\b',
   );
 
-  // Line 2 of a game header: "Saint-Petersbourg, 1913" or "London, 1851".
-  static final _locationYearRegex = RegExp(r'[A-Za-z][A-Za-z\s-]*,\s*\d{4}');
+  /// Returns the first move number found in [fullText] using a simple regex scan,
+  /// without any chess move parsing.  E.g. "22.g4" → 22, "1. e4" → 1.
+  static int? _scanFirstMoveNumber(String fullText) {
+    final m = RegExp(r'\b(\d+)\.').firstMatch(fullText);
+    if (m == null) return null;
+    return int.tryParse(m.group(1)!);
+  }
+
+  /// Returns true when [fullText] contains a game header: any non-empty line
+  /// immediately followed by a location/year line ("City, YYYY").
+  ///
+  /// This is intentionally format-agnostic on the first line so it works with
+  /// "Alekhine - Duras", "Kasparov vs Karpov", French headings, etc.
+  static bool _detectGameHeader(String fullText) {
+    final lines = fullText
+        .split('\n')
+        .map((l) => l.trim())
+        .toList();
+
+    var found = false;
+    for (int i = 0; i + 1 < lines.length; i++) {
+      if (lines[i].isEmpty) continue;
+      final next = lines[i + 1];
+      if (_locationYearRegex.hasMatch(next)) {
+        debugPrint('[MoveParser] game header: "${lines[i]}" / "$next"');
+        found = true;
+      }
+    }
+    return found;
+  }
 
   // Bare FEN string anywhere in the text (last resort).
   static final _bareFenRegex = RegExp(
@@ -224,29 +236,20 @@ class MoveParser {
 
   /// Returns true when the page likely needs a user-supplied starting FEN.
   ///
-  /// A diagram is suspected when any of these signals are present:
-  ///   1. A player-name line ("Alekhine - Duras") is found AND the game does
-  ///      not start from move 1 (move 1 → standard initial position, no FEN needed).
-  ///   2. A location/year line ("Saint-Petersbourg, 1913") is found alongside
-  ///      a player-name line — confirms this is a game excerpt, not prose.
-  ///   3. A large vertical gap (≥ 90 pt) exists in the character distribution,
+  /// A diagram is suspected when a game header is present AND either:
+  ///   1. The first move number is not 1 (game excerpt → non-standard position).
+  ///   2. A large vertical gap (≥ 90 pt) exists in the character distribution,
   ///      indicating a board-diagram image above the game text.
   static const _minDiagramGap = 90.0;
 
   static bool _suspectDiagram({
-    required bool hasPlayerHeader,
-    required bool hasLocationYear,
+    required bool hasGameHeader,
     required List<PdfRect> charRects,
     required int? firstMoveNumber,
   }) {
-    final hasContextHeader = hasPlayerHeader || hasLocationYear;
-
-    // Signal 1 & 2: semantic game header detected.
-    if (hasContextHeader && firstMoveNumber != 1) return true;
-
-    // Signal 3: visible gap in character layout → board image present.
-    if (hasContextHeader && _hasImageGap(charRects)) return true;
-
+    if (!hasGameHeader) return false;
+    if (firstMoveNumber != 1) return true;
+    if (_hasImageGap(charRects)) return true;
     return false;
   }
 
@@ -320,17 +323,33 @@ class MoveParser {
     }
 
     // ------------------------------------------------------------------
-    // 2. Tokenise, skipping comments and variations.
+    // 2. Header / diagram detection (pure text — independent of move parsing).
+
+    if (fenSource == FenSource.standard) {
+      final firstMoveNumber = _scanFirstMoveNumber(fullText);
+      final hasGameHeader = _detectGameHeader(fullText);
+      if (_suspectDiagram(
+        hasGameHeader: hasGameHeader,
+        charRects: charRects,
+        firstMoveNumber: firstMoveNumber,
+      )) {
+        fenSource = FenSource.suspectedDiagram;
+      }
+    }
+
+    debugPrint('[MoveParser] fenSource=$fenSource  startFen=$startFen');
+
+    // ------------------------------------------------------------------
+    // 3. Tokenise, skipping comments and variations.
 
     final tokens = _tokenise(fullText);
 
     // ------------------------------------------------------------------
-    // 3. Parse chess moves.
+    // 4. Parse chess moves.
 
     final moves = <CachedMove>[];
     int? currentMoveNum;
     bool expectBlack = false;
-    int? firstMoveNumber;
 
     // Regex for a pure move number ("22." or "22...").
     final pureNumRx = RegExp(r'^(\d+)(\.+)$');
@@ -349,7 +368,6 @@ class MoveParser {
       final numMatch = pureNumRx.firstMatch(raw);
       if (numMatch != null) {
         currentMoveNum = int.parse(numMatch.group(1)!);
-        firstMoveNumber ??= currentMoveNum;
         expectBlack = numMatch.group(2)!.length > 1;
         continue;
       }
@@ -366,7 +384,6 @@ class MoveParser {
         // jump, which would indicate the digit is actually a piece glyph).
         if (currentMoveNum == null || num >= currentMoveNum - 1) {
           currentMoveNum = num;
-          firstMoveNumber ??= num;
           expectBlack = dots.length > 1;
           // Fall through to try parsing movePart as the move below.
           final normalised = _normaliseToken(movePart);
@@ -419,26 +436,6 @@ class MoveParser {
       position = newPosition;
       expectBlack = !expectBlack;
       if (!expectBlack) currentMoveNum++;
-    }
-
-    // ------------------------------------------------------------------
-    // 4. Upgrade to suspectedDiagram if conditions are met.
-
-    if (fenSource == FenSource.standard) {
-      final playerMatch = _playerLineRegex.firstMatch(fullText);
-      final locationMatch = _locationYearRegex.firstMatch(fullText);
-      debugPrint('[MoveParser] player header: '
-          '${playerMatch != null ? '"${playerMatch.group(0)}"' : 'none'}');
-      debugPrint('[MoveParser] location/year: '
-          '${locationMatch != null ? '"${locationMatch.group(0)}"' : 'none'}');
-      if (_suspectDiagram(
-        hasPlayerHeader: playerMatch != null,
-        hasLocationYear: locationMatch != null,
-        charRects: charRects,
-        firstMoveNumber: firstMoveNumber,
-      )) {
-        fenSource = FenSource.suspectedDiagram;
-      }
     }
 
     debugPrint('[MoveParser] fenSource=$fenSource  startFen=$startFen');
