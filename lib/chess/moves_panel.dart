@@ -64,6 +64,18 @@ class MovesPanel extends StatelessWidget {
               pieceAssets: PieceSet.cburnettAssets,
             ),
             const Divider(height: 1),
+            if (fenSource == FenSource.standard)
+              _StandardFenBanner(onStartFenProvided: onStartFenProvided),
+            if (fenSource == FenSource.detectedInText)
+              _DetectedFenBanner(
+                fen: startFen,
+                onEdit: onStartFenProvided,
+              ),
+            if (fenSource == FenSource.inheritedFromPreviousPage)
+              _InheritedFenBanner(
+                fen: startFen,
+                onEdit: onStartFenProvided,
+              ),
             if (fenSource == FenSource.suspectedDiagram)
               _DiagramWarningBanner(
                 initialFen: startFen,
@@ -107,6 +119,152 @@ class MovesPanel extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 // Banners
+
+class _StandardFenBanner extends StatelessWidget {
+  const _StandardFenBanner({required this.onStartFenProvided});
+  final ValueChanged<String> onStartFenProvided;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Material(
+      color: Colors.blue.shade50,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.edit_outlined, size: 16, color: Colors.blueGrey),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                l.setStartingPosition,
+                style: const TextStyle(fontSize: 11, color: Colors.blueGrey),
+              ),
+            ),
+            TextButton(
+              onPressed: () => _showEditorDialog(context, l),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 28),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(l.edit, style: const TextStyle(fontSize: 11)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditorDialog(BuildContext context, AppLocalizations l) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => _BoardEditorDialog(
+        title: l.setStartingPosition,
+        initialFen: dc.kInitialFEN,
+        onConfirm: onStartFenProvided,
+      ),
+    );
+  }
+}
+
+class _DetectedFenBanner extends StatelessWidget {
+  const _DetectedFenBanner({required this.fen, required this.onEdit});
+  final String fen;
+  final ValueChanged<String> onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Material(
+      color: Colors.teal.shade50,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.search, size: 16, color: Colors.teal),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                l.detectedFenLabel,
+                style: const TextStyle(fontSize: 11, color: Colors.teal),
+              ),
+            ),
+            TextButton(
+              onPressed: () => _showEditorDialog(context, l),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 28),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(l.edit, style: const TextStyle(fontSize: 11)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditorDialog(BuildContext context, AppLocalizations l) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => _BoardEditorDialog(
+        title: l.editStartingPosition,
+        initialFen: fen,
+        onConfirm: onEdit,
+      ),
+    );
+  }
+}
+
+class _InheritedFenBanner extends StatelessWidget {
+  const _InheritedFenBanner({required this.fen, required this.onEdit});
+  final String fen;
+  final ValueChanged<String> onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Material(
+      color: Colors.purple.shade50,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.arrow_forward, size: 16, color: Colors.purple),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                l.inheritedFenLabel,
+                style: const TextStyle(fontSize: 11, color: Colors.purple),
+              ),
+            ),
+            TextButton(
+              onPressed: () => _showEditorDialog(context, l),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 28),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(l.edit, style: const TextStyle(fontSize: 11)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditorDialog(BuildContext context, AppLocalizations l) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => _BoardEditorDialog(
+        title: l.editStartingPosition,
+        initialFen: fen,
+        onConfirm: onEdit,
+      ),
+    );
+  }
+}
 
 class _DiagramWarningBanner extends StatelessWidget {
   const _DiagramWarningBanner({

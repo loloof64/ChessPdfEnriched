@@ -39,6 +39,8 @@
   "edit": "Editar",
   "setStartingPosition": "Establecer posición inicial",
   "editStartingPosition": "Editar posición inicial",
+  "detectedFenLabel": "Posición inicial: FEN detectado en el texto.",
+  "inheritedFenLabel": "Posición heredada de la página anterior.",
   "sideToMove": "Turno:",
   "white": "Blancas",
   "black": "Negras",

@@ -75,6 +75,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get editStartingPosition => 'Edit starting position';
 
   @override
+  String get detectedFenLabel => 'Starting position: FEN detected in text.';
+
+  @override
+  String get inheritedFenLabel => 'Position inherited from previous page.';
+
+  @override
   String get sideToMove => 'Side to move:';
 
   @override

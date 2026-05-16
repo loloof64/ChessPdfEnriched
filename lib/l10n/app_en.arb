@@ -39,6 +39,8 @@
   "edit": "Edit",
   "setStartingPosition": "Set starting position",
   "editStartingPosition": "Edit starting position",
+  "detectedFenLabel": "Starting position: FEN detected in text.",
+  "inheritedFenLabel": "Position inherited from previous page.",
   "sideToMove": "Side to move:",
   "white": "White",
   "black": "Black",

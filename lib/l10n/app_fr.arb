@@ -39,6 +39,8 @@
   "edit": "Modifier",
   "setStartingPosition": "Définir la position de départ",
   "editStartingPosition": "Modifier la position de départ",
+  "detectedFenLabel": "Position de départ : FEN détecté dans le texte.",
+  "inheritedFenLabel": "Position héritée de la page précédente.",
   "sideToMove": "Trait :",
   "white": "Blancs",
   "black": "Noirs",

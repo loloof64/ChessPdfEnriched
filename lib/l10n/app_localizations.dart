@@ -214,6 +214,18 @@ abstract class AppLocalizations {
   /// **'Edit starting position'**
   String get editStartingPosition;
 
+  /// No description provided for @detectedFenLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Starting position: FEN detected in text.'**
+  String get detectedFenLabel;
+
+  /// No description provided for @inheritedFenLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Position inherited from previous page.'**
+  String get inheritedFenLabel;
+
   /// No description provided for @sideToMove.
   ///
   /// In en, this message translates to:
