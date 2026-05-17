@@ -13,6 +13,9 @@ class MovesPanel extends StatelessWidget {
     required this.startFen,
     required this.fenSource,
     required this.onStartFenProvided,
+    this.onMarkAsIntermediate,
+    this.onMarkAsNotADiagram,
+    this.onResetToDiagram,
     this.header,
   });
 
@@ -21,6 +24,17 @@ class MovesPanel extends StatelessWidget {
 
   /// Called when the user manually enters a starting FEN.
   final ValueChanged<String> onStartFenProvided;
+
+  /// Called when the user overrides a suspected-new-game diagram to be
+  /// treated as an intermediate diagram instead.
+  final VoidCallback? onMarkAsIntermediate;
+
+  /// Called when the user marks this image as not a board diagram at all.
+  final VoidCallback? onMarkAsNotADiagram;
+
+  /// Called when the user undoes a "not a diagram" override, reverting to
+  /// the auto-detected suspected-diagram state.
+  final VoidCallback? onResetToDiagram;
 
   /// Game header (player names), e.g. "Alekhine - Duras". Shown above the banners.
   final String? header;
@@ -61,6 +75,20 @@ class MovesPanel extends StatelessWidget {
           _DiagramWarningBanner(
             initialFen: startFen,
             onStartFenProvided: onStartFenProvided,
+            onMarkAsIntermediate: onMarkAsIntermediate,
+            onMarkAsNotADiagram: onMarkAsNotADiagram,
+          ),
+        if (fenSource == FenSource.suspectedIntermediateDiagram)
+          _SuspectedIntermediateDiagramBanner(
+            onMarkAsNewGame: onStartFenProvided,
+          ),
+        if (fenSource == FenSource.userConfirmedIntermediate)
+          _ConfirmedIntermediateBanner(
+            onMarkAsNewGame: onStartFenProvided,
+          ),
+        if (fenSource == FenSource.userConfirmedNotADiagram)
+          _NotADiagramBanner(
+            onUndo: onResetToDiagram,
           ),
         if (fenSource == FenSource.userProvided)
           _UserFenBanner(
@@ -274,9 +302,13 @@ class _DiagramWarningBanner extends StatelessWidget {
   const _DiagramWarningBanner({
     required this.initialFen,
     required this.onStartFenProvided,
+    this.onMarkAsIntermediate,
+    this.onMarkAsNotADiagram,
   });
   final String initialFen;
   final ValueChanged<String> onStartFenProvided;
+  final VoidCallback? onMarkAsIntermediate;
+  final VoidCallback? onMarkAsNotADiagram;
 
   @override
   Widget build(BuildContext context) {
@@ -285,25 +317,57 @@ class _DiagramWarningBanner extends StatelessWidget {
       color: Colors.amber.shade50,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Icon(Icons.warning_amber_rounded,
-                size: 16, color: Colors.orange),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                l.diagramWarning,
-                style: const TextStyle(fontSize: 11, color: Colors.brown),
-              ),
+            Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    size: 16, color: Colors.orange),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    l.diagramWarning,
+                    style: const TextStyle(fontSize: 11, color: Colors.brown),
+                  ),
+                ),
+              ],
             ),
-            TextButton(
-              onPressed: () => _showEditorDialog(context, l),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: const Size(0, 28),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(l.enterFen, style: const TextStyle(fontSize: 11)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (onMarkAsNotADiagram != null)
+                  TextButton(
+                    onPressed: onMarkAsNotADiagram,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 28),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(l.markAsNotADiagram,
+                        style: const TextStyle(fontSize: 11)),
+                  ),
+                if (onMarkAsIntermediate != null)
+                  TextButton(
+                    onPressed: onMarkAsIntermediate,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 28),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(l.markAsIntermediate,
+                        style: const TextStyle(fontSize: 11)),
+                  ),
+                TextButton(
+                  onPressed: () => _showEditorDialog(context, l),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(l.enterFen, style: const TextStyle(fontSize: 11)),
+                ),
+              ],
             ),
           ],
         ),
@@ -318,6 +382,155 @@ class _DiagramWarningBanner extends StatelessWidget {
         title: l.setStartingPosition,
         initialFen: initialFen,
         onConfirm: onStartFenProvided,
+      ),
+    );
+  }
+}
+
+class _SuspectedIntermediateDiagramBanner extends StatelessWidget {
+  const _SuspectedIntermediateDiagramBanner({
+    required this.onMarkAsNewGame,
+  });
+  final ValueChanged<String> onMarkAsNewGame;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Material(
+      color: Colors.blue.shade50,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.info_outline, size: 16, color: Colors.blue),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    l.suspectedIntermediateDiagramLabel,
+                    style: const TextStyle(fontSize: 11, color: Colors.blueGrey),
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => _showEditorDialog(context, l),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(l.markAsNewGame,
+                      style: const TextStyle(fontSize: 11)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditorDialog(BuildContext context, AppLocalizations l) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => _BoardEditorDialog(
+        title: l.setStartingPosition,
+        initialFen: dc.kInitialFEN,
+        onConfirm: onMarkAsNewGame,
+      ),
+    );
+  }
+}
+
+class _ConfirmedIntermediateBanner extends StatelessWidget {
+  const _ConfirmedIntermediateBanner({required this.onMarkAsNewGame});
+  final ValueChanged<String> onMarkAsNewGame;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Material(
+      color: Colors.teal.shade50,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.check_circle_outline, size: 16, color: Colors.teal),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                l.confirmedIntermediateLabel,
+                style: const TextStyle(fontSize: 11, color: Colors.teal),
+              ),
+            ),
+            TextButton(
+              onPressed: () => _showEditorDialog(context, l),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 28),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(l.markAsNewGame, style: const TextStyle(fontSize: 11)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditorDialog(BuildContext context, AppLocalizations l) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => _BoardEditorDialog(
+        title: l.setStartingPosition,
+        initialFen: dc.kInitialFEN,
+        onConfirm: onMarkAsNewGame,
+      ),
+    );
+  }
+}
+
+class _NotADiagramBanner extends StatelessWidget {
+  const _NotADiagramBanner({this.onUndo});
+  final VoidCallback? onUndo;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    return Material(
+      color: Colors.grey.shade100,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.image_not_supported_outlined,
+                size: 16, color: Colors.grey),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                l.notADiagramLabel,
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+            ),
+            if (onUndo != null)
+              TextButton(
+                onPressed: onUndo,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(l.markAsSuspectedDiagram,
+                    style: const TextStyle(fontSize: 11)),
+              ),
+          ],
+        ),
       ),
     );
   }

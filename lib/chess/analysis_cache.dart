@@ -8,11 +8,15 @@ import 'models.dart';
 /// Persists per-page chess analysis to a JSON file so that re-opening a PDF
 /// does not require re-parsing.
 ///
-/// Cache validity is checked against the PDF file's last-modified timestamp.
-/// If the file has been modified since the cache was written, the cache is
-/// discarded and a fresh analysis is expected.
+/// Cache validity is checked against:
+///   1. The PDF file's last-modified timestamp (PDF content changed).
+///   2. [_cacheVersion] (parser logic changed — bump this constant whenever
+///      move_parser.dart is updated in a way that affects parse results).
 class AnalysisCache {
   static const _dirName = 'chess_pdf_cache';
+
+  // Increment whenever the parser produces different output for the same input.
+  static const _cacheVersion = 3;
 
   static Future<Directory> _cacheDir() async {
     final docs = await getApplicationDocumentsDirectory();
@@ -43,6 +47,7 @@ class AnalysisCache {
 
       final json = jsonDecode(await cacheFile.readAsString()) as Map<String, dynamic>;
 
+      if ((json['version'] as int?) != _cacheVersion) return null;
       final cachedMtime = json['mtime'] as int?;
       if (cachedMtime != currentMtime) return null;
 
@@ -87,6 +92,7 @@ class AnalysisCache {
       final mtime = pdfStat.modified.millisecondsSinceEpoch;
 
       final json = {
+        'version': _cacheVersion,
         'pdfPath': pdfPath,
         'mtime': mtime,
         'pages': {

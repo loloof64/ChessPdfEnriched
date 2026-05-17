@@ -113,4 +113,28 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get editingStartPositions => 'Editing start positions';
+
+  @override
+  String get suspectedIntermediateDiagramLabel =>
+      'Diagram detected — looks like a mid-game position (game continues).';
+
+  @override
+  String get confirmedIntermediateLabel =>
+      'Intermediate diagram — game continues from current position.';
+
+  @override
+  String get markAsNewGame => 'New game';
+
+  @override
+  String get markAsIntermediate => 'Intermediate';
+
+  @override
+  String get markAsNotADiagram => 'Not a diagram';
+
+  @override
+  String get notADiagramLabel =>
+      'Confirmed: not a board diagram — game continues.';
+
+  @override
+  String get markAsSuspectedDiagram => 'Undo';
 }

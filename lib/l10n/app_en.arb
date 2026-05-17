@@ -51,5 +51,12 @@
   "cancel": "Cancel",
   "apply": "Apply",
   "noMovesFound": "No chess moves found on this page.",
-  "editingStartPositions": "Editing start positions"
+  "editingStartPositions": "Editing start positions",
+  "suspectedIntermediateDiagramLabel": "Diagram detected — looks like a mid-game position (game continues).",
+  "confirmedIntermediateLabel": "Intermediate diagram — game continues from current position.",
+  "markAsNewGame": "New game",
+  "markAsIntermediate": "Intermediate",
+  "markAsNotADiagram": "Not a diagram",
+  "notADiagramLabel": "Confirmed: not a board diagram — game continues.",
+  "markAsSuspectedDiagram": "Undo"
 }

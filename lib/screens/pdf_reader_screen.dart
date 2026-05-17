@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../chess/analysis_cache.dart';
+import '../chess/board_detector.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
@@ -117,10 +118,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   Future<void> _loadPageAnalysis(
     int pageNumber, {
     Map<int, String>? forcedFens,
+    Set<int>? forcedIntermediates,
+    Set<int>? forcedNotADiagrams,
   }) async {
     // Use cached result if available (and no override is requested).
     // Still load raw text so the debug button reflects the current page.
-    if (forcedFens == null && _cache.containsKey(pageNumber)) {
+    if (forcedFens == null &&
+        forcedIntermediates == null &&
+        forcedNotADiagrams == null &&
+        _cache.containsKey(pageNumber)) {
       setState(() {
         _pageGames = _cache[pageNumber];
         _selectedGameIndex = 0;
@@ -137,7 +143,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       final rawText = await page.loadText();
       if (rawText == null) {
         _setPageGames(pageNumber, [
-          PageAnalysis(startFen: '', fenSource: FenSource.standard, moves: const []),
+          PageAnalysis(
+            startFen: '',
+            fenSource: FenSource.standard,
+            moves: const [],
+          ),
         ]);
         return;
       }
@@ -152,11 +162,27 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       final inheritedFen = _inheritedFenForPage(pageNumber, rawText.fullText);
 
+      final boardResult = await BoardDetector.detectBoards(
+        page,
+        rawText.charRects,
+      );
+
+      // Use auto-detected FENs if available (user override takes precedence).
+      final autoDetectedFens = <int, String>{};
+      for (int i = 0; i < boardResult.detectedFens.length; i++) {
+        final fen = boardResult.detectedFens[i];
+        if (fen != null) autoDetectedFens[i] = fen;
+      }
+
       final games = MoveParser.parse(
         rawText,
         page.height,
+        preComputedSplits: boardResult.splitIndices,
+        topOfPageBoardDetected: boardResult.topOfPageBoardDetected,
         inheritedFen: inheritedFen,
-        forcedFens: forcedFens,
+        forcedFens: forcedFens ?? (autoDetectedFens.isEmpty ? null : autoDetectedFens),
+        forcedIntermediates: forcedIntermediates,
+        forcedNotADiagrams: forcedNotADiagrams,
         fontMap: _fontMap,
       );
 
@@ -173,7 +199,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       debugPrint('[ChessPdf] page $pageNumber analysis error: $e\n$st');
       if (mounted) {
         _setPageGames(pageNumber, [
-          PageAnalysis(startFen: '', fenSource: FenSource.standard, moves: const []),
+          PageAnalysis(
+            startFen: '',
+            fenSource: FenSource.standard,
+            moves: const [],
+          ),
         ]);
       }
     }
@@ -199,8 +229,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     final lastGame = prevGames.last;
     if (lastGame.moves.isEmpty) return null;
 
-    final sample =
-        fullText.length > 200 ? fullText.substring(0, 200) : fullText;
+    final sample = fullText.length > 200
+        ? fullText.substring(0, 200)
+        : fullText;
     if (RegExp(r'\b1\.').hasMatch(sample)) return null;
 
     return lastGame.moves.last.fenAfter;
@@ -238,19 +269,106 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
+  /// Collects user overrides already persisted in the page cache so they
+  /// survive a re-parse triggered by a new user action.
+  ({
+    Map<int, String> forcedFens,
+    Set<int> forcedIntermediates,
+    Set<int> forcedNotADiagrams,
+  })
+  _collectUserOverrides(int pageNumber) {
+    final existing = _cache[pageNumber];
+    final forcedFens = <int, String>{};
+    final forcedIntermediates = <int>{};
+    final forcedNotADiagrams = <int>{};
+    if (existing != null) {
+      for (int i = 0; i < existing.length; i++) {
+        if (existing[i].fenSource == FenSource.userProvided) {
+          forcedFens[i] = existing[i].startFen;
+        }
+        if (existing[i].fenSource == FenSource.userConfirmedIntermediate) {
+          forcedIntermediates.add(i);
+        }
+        if (existing[i].fenSource == FenSource.userConfirmedNotADiagram) {
+          forcedNotADiagrams.add(i);
+        }
+      }
+    }
+    return (
+      forcedFens: forcedFens,
+      forcedIntermediates: forcedIntermediates,
+      forcedNotADiagrams: forcedNotADiagrams,
+    );
+  }
+
   /// Called when the user manually supplies a starting FEN from the dialog.
   void _onStartFenProvided(String fen, int gameIndex) {
-    // Carry forward any user-provided FENs already set for other games on
-    // this page so they are not lost when the page is re-parsed.
-    final existing = _cache[_currentPage];
-    final forcedFens = <int, String>{
-      if (existing != null)
-        for (int i = 0; i < existing.length; i++)
-          if (existing[i].fenSource == FenSource.userProvided)
-            i: existing[i].startFen,
-    };
-    forcedFens[gameIndex] = fen;
-    _loadPageAnalysis(_currentPage, forcedFens: forcedFens);
+    final overrides = _collectUserOverrides(_currentPage);
+    overrides.forcedFens[gameIndex] = fen;
+    overrides.forcedIntermediates.remove(gameIndex);
+    overrides.forcedNotADiagrams.remove(gameIndex);
+    _loadPageAnalysis(
+      _currentPage,
+      forcedFens: overrides.forcedFens,
+      forcedIntermediates: overrides.forcedIntermediates.isEmpty
+          ? null
+          : overrides.forcedIntermediates,
+      forcedNotADiagrams: overrides.forcedNotADiagrams.isEmpty
+          ? null
+          : overrides.forcedNotADiagrams,
+    );
+  }
+
+  /// Called when the user overrides a suspected new-game diagram to be treated
+  /// as an intermediate diagram (game continues, no custom start FEN needed).
+  void _onMarkAsIntermediate(int gameIndex) {
+    final overrides = _collectUserOverrides(_currentPage);
+    overrides.forcedFens.remove(gameIndex);
+    overrides.forcedIntermediates.add(gameIndex);
+    overrides.forcedNotADiagrams.remove(gameIndex);
+    _loadPageAnalysis(
+      _currentPage,
+      forcedFens: overrides.forcedFens.isEmpty ? null : overrides.forcedFens,
+      forcedIntermediates: overrides.forcedIntermediates,
+      forcedNotADiagrams: overrides.forcedNotADiagrams.isEmpty
+          ? null
+          : overrides.forcedNotADiagrams,
+    );
+  }
+
+  /// Called when the user marks a suspected diagram as not a chess board.
+  void _onMarkAsNotADiagram(int gameIndex) {
+    final overrides = _collectUserOverrides(_currentPage);
+    overrides.forcedFens.remove(gameIndex);
+    overrides.forcedIntermediates.remove(gameIndex);
+    overrides.forcedNotADiagrams.add(gameIndex);
+    _loadPageAnalysis(
+      _currentPage,
+      forcedFens: overrides.forcedFens.isEmpty ? null : overrides.forcedFens,
+      forcedIntermediates: overrides.forcedIntermediates.isEmpty
+          ? null
+          : overrides.forcedIntermediates,
+      forcedNotADiagrams: overrides.forcedNotADiagrams,
+    );
+  }
+
+  /// Called when the user undoes a "not a diagram" override, reverting to
+  /// the auto-detected suspected-diagram state.
+  void _onResetToDiagram(int gameIndex) {
+    final overrides = _collectUserOverrides(_currentPage);
+    overrides.forcedFens.remove(gameIndex);
+    overrides.forcedIntermediates.remove(gameIndex);
+    overrides.forcedNotADiagrams.remove(gameIndex);
+    _loadPageAnalysis(
+      _currentPage,
+      forcedFens: overrides.forcedFens.isEmpty ? null : overrides.forcedFens,
+      forcedIntermediates: overrides.forcedIntermediates.isEmpty
+          ? null
+          : overrides.forcedIntermediates,
+      forcedNotADiagrams: overrides.forcedNotADiagrams.isEmpty
+          ? null
+          : overrides.forcedNotADiagrams,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -304,7 +422,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
-          width: 280,
+          width: 300,
           decoration: BoxDecoration(
             border: Border(right: BorderSide(color: Colors.grey.shade300)),
           ),
@@ -360,7 +478,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           ),
         ),
         Container(
-          width: 280,
+          width: 300,
           decoration: BoxDecoration(
             border: Border(left: BorderSide(color: Colors.grey.shade300)),
           ),
@@ -391,7 +509,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
-  Widget _buildGameSelector(List<PageAnalysis> games, int selectedIdx, AppLocalizations l) {
+  Widget _buildGameSelector(
+    List<PageAnalysis> games,
+    int selectedIdx,
+    AppLocalizations l,
+  ) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -426,6 +548,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       fenSource: analysis.fenSource,
       header: analysis.header,
       onStartFenProvided: (fen) => _onStartFenProvided(fen, gameIndex),
+      onMarkAsIntermediate: () => _onMarkAsIntermediate(gameIndex),
+      onMarkAsNotADiagram: () => _onMarkAsNotADiagram(gameIndex),
+      onResetToDiagram: () => _onResetToDiagram(gameIndex),
     );
   }
 

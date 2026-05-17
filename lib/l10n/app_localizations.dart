@@ -291,6 +291,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Editing start positions'**
   String get editingStartPositions;
+
+  /// No description provided for @suspectedIntermediateDiagramLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Diagram detected — looks like a mid-game position (game continues).'**
+  String get suspectedIntermediateDiagramLabel;
+
+  /// No description provided for @confirmedIntermediateLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Intermediate diagram — game continues from current position.'**
+  String get confirmedIntermediateLabel;
+
+  /// No description provided for @markAsNewGame.
+  ///
+  /// In en, this message translates to:
+  /// **'New game'**
+  String get markAsNewGame;
+
+  /// No description provided for @markAsIntermediate.
+  ///
+  /// In en, this message translates to:
+  /// **'Intermediate'**
+  String get markAsIntermediate;
+
+  /// No description provided for @markAsNotADiagram.
+  ///
+  /// In en, this message translates to:
+  /// **'Not a diagram'**
+  String get markAsNotADiagram;
+
+  /// No description provided for @notADiagramLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirmed: not a board diagram — game continues.'**
+  String get notADiagramLabel;
+
+  /// No description provided for @markAsSuspectedDiagram.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo'**
+  String get markAsSuspectedDiagram;
 }
 
 class _AppLocalizationsDelegate

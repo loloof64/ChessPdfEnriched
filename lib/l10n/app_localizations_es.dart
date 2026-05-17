@@ -115,4 +115,28 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get editingStartPositions => 'Edición de posiciones iniciales';
+
+  @override
+  String get suspectedIntermediateDiagramLabel =>
+      'Diagrama detectado — parece una posición intermedia (la partida continúa).';
+
+  @override
+  String get confirmedIntermediateLabel =>
+      'Diagrama intermedio — la partida continúa desde la posición actual.';
+
+  @override
+  String get markAsNewGame => 'Nueva partida';
+
+  @override
+  String get markAsIntermediate => 'Intermedio';
+
+  @override
+  String get markAsNotADiagram => 'No es un diagrama';
+
+  @override
+  String get notADiagramLabel =>
+      'Confirmado: no es un diagrama de ajedrez — la partida continúa.';
+
+  @override
+  String get markAsSuspectedDiagram => 'Deshacer';
 }

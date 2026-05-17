@@ -12,9 +12,21 @@ enum FenSource {
   /// User manually provided the FEN through the UI.
   userProvided,
 
-  /// No FEN found in text, but the top of the page appears to be mostly a
-  /// board diagram image — the real starting position is unknown.
+  /// Image gap detected and a game header is present — parser suspects this
+  /// diagram shows the starting position of a new game (position unknown).
   suspectedDiagram,
+
+  /// Image gap detected with no game header — parser suspects this is an
+  /// intermediate diagram showing the current game state (game continues).
+  suspectedIntermediateDiagram,
+
+  /// User explicitly confirmed this diagram is an intermediate position;
+  /// the game continues from the inherited or standard starting FEN.
+  userConfirmedIntermediate,
+
+  /// User explicitly confirmed this image is not a board diagram at all;
+  /// the game continues from the inherited or standard starting FEN.
+  userConfirmedNotADiagram,
 }
 
 /// Bounding box of a move token in PDF page coordinates.

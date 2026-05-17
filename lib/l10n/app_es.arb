@@ -51,5 +51,12 @@
   "cancel": "Cancelar",
   "apply": "Aplicar",
   "noMovesFound": "No se encontraron movimientos de ajedrez en esta página.",
-  "editingStartPositions": "Edición de posiciones iniciales"
+  "editingStartPositions": "Edición de posiciones iniciales",
+  "suspectedIntermediateDiagramLabel": "Diagrama detectado — parece una posición intermedia (la partida continúa).",
+  "confirmedIntermediateLabel": "Diagrama intermedio — la partida continúa desde la posición actual.",
+  "markAsNewGame": "Nueva partida",
+  "markAsIntermediate": "Intermedio",
+  "markAsNotADiagram": "No es un diagrama",
+  "notADiagramLabel": "Confirmado: no es un diagrama de ajedrez — la partida continúa.",
+  "markAsSuspectedDiagram": "Deshacer"
 }

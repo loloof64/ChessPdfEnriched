@@ -61,7 +61,15 @@ class MoveParser {
     // 5. Strip trailing human annotations (!, ?, !?, ?!, !!, ??) — they are not
     //    part of SAN and cause parseSan to fail.
     s = s.replaceAll(RegExp(r'[!?]+$'), '');
-    // 6. If the first character looks like a non-English piece letter, translate.
+    // 6. Castling: "0-0-0" / "0-0" with digit zero → standard "O-O-O" / "O-O".
+    //    Many chess books (especially French/Spanish) use zeros instead of O.
+    //    Must check 0-0-0 before 0-0 to avoid a partial match.
+    if (s.startsWith('0-0-0')) {
+      s = 'O-O-O${s.substring(5)}';
+    } else if (s.startsWith('0-0')) {
+      s = 'O-O${s.substring(3)}';
+    }
+    // 7. If the first character looks like a non-English piece letter, translate.
     if (s.isNotEmpty) {
       final first = s[0];
       final rest = s.substring(1);
@@ -167,49 +175,6 @@ class MoveParser {
     caseSensitive: false,
   );
 
-  // Location/year line: "Saint-Pétersbourg, 1913", "London, 1851", etc.
-  // \xC0-\xFF covers the Latin-1 Supplement block (À–ÿ): all accented letters
-  // used in French, German, Spanish, Russian transliterations, etc.
-  static final _locationYearRegex = RegExp(
-    r'[A-Za-z\xC0-\xFF][A-Za-z\xC0-\xFF\s-]*,\s*(?:1[0-9]|20)\d{2}\b',
-  );
-
-  /// Returns the first move number found in [fullText] using a simple regex scan,
-  /// without any chess move parsing.  E.g. "22.g4" → 22, "1. e4" → 1.
-  static int? _scanFirstMoveNumber(String fullText) {
-    final m = RegExp(r'\b(\d+)\.').firstMatch(fullText);
-    if (m == null) return null;
-    return int.tryParse(m.group(1)!);
-  }
-
-  /// Scans [fullText] for game headers (any non-empty line immediately followed
-  /// by a location/year line) and returns their byte-offsets in [fullText]
-  /// together with the detected player-line text.
-  ///
-  /// Each returned record marks the start of a game segment: from that offset
-  /// to the next segment's start (or end of text).
-  static List<({int start, String header})> _findGameSegments(String fullText) {
-    final lines = fullText.split('\n');
-    final segments = <({int start, String header})>[];
-
-    int offset = 0;
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      final trimmed = line.trim();
-
-      if (trimmed.isNotEmpty && i + 1 < lines.length) {
-        final nextTrimmed = lines[i + 1].trim();
-        if (_locationYearRegex.hasMatch(nextTrimmed)) {
-          debugPrint('[MoveParser] game header: "$trimmed" / "$nextTrimmed"');
-          segments.add((start: offset, header: trimmed));
-        }
-      }
-
-      offset += line.length + 1; // +1 for the '\n' consumed by split
-    }
-    return segments;
-  }
-
   // Bare FEN string anywhere in the text (last resort).
   static final _bareFenRegex = RegExp(
     r'[rnbqkpRNBQKP1-8]{1,8}(?:/[rnbqkpRNBQKP1-8]{1,8}){7}'
@@ -249,36 +214,136 @@ class MoveParser {
   // --------------------------------------------------------------------------
   // Diagram detection
 
-  /// Returns true when the page likely needs a user-supplied starting FEN.
-  ///
-  /// A diagram is suspected when a game header is present AND either:
-  ///   1. The first move number is not 1 (game excerpt → non-standard position).
-  ///   2. A large vertical gap (≥ 90 pt) exists in the character distribution,
-  ///      indicating a board-diagram image above the game text.
+  /// Minimum vertical gap (pt) between text blocks to suspect a board diagram.
   static const _minDiagramGap = 90.0;
 
-  static bool _suspectDiagram({
-    required bool hasGameHeader,
-    required List<PdfRect> charRects,
-    required int? firstMoveNumber,
-  }) {
-    if (!hasGameHeader) return false;
-    if (firstMoveNumber != 1) return true;
-    if (_hasImageGap(charRects)) return true;
-    return false;
-  }
+  /// Minimum gap (pt) between the top of the page and the highest text
+  /// character to suspect a board diagram at the top of the page.
+  static const _minDiagramGapAtPageEdge = 120.0;
 
-  static bool _hasImageGap(List<PdfRect> charRects) {
+  /// A gap larger than this fraction of the page height is almost certainly
+  /// a full-page illustration or cover image, not a chess board.
+  /// Chess boards typically occupy 20–55 % of a page; full-page images 80–95 %.
+  static const _maxDiagramGapRatio = 0.75;
+
+  /// Returns [FenSource.suspectedDiagram] when a board-diagram image is
+  /// detected in [charRects], or `null` when no gap is found.
+  ///
+  /// Logs the largest Y-gaps in the segment so that diagram-detection noise
+  /// can be diagnosed in the debug console.
+  static FenSource? _detectDiagramFenSource({
+    required List<PdfRect> charRects,
+    double? pageHeight,
+  }) {
     final ys = charRects
         .where((r) => r.isNotEmpty)
         .map((r) => (r.top + r.bottom) / 2)
         .toList()
       ..sort();
-    if (ys.length < 4) return true;
-    for (int i = 1; i < ys.length; i++) {
-      if (ys[i] - ys[i - 1] > _minDiagramGap) return true;
+
+    if (ys.length < 4) {
+      debugPrint('[Diagram] too few chars (${ys.length}) — treated as suspected diagram');
+      return FenSource.suspectedDiagram;
     }
-    return false;
+
+    // Log the three largest gaps to help diagnose false positives / misses.
+    final gaps = <double>[];
+    for (int i = 1; i < ys.length; i++) {
+      gaps.add(ys[i] - ys[i - 1]);
+    }
+    gaps.sort((a, b) => b.compareTo(a)); // descending
+    debugPrint(
+      '[Diagram] top-3 Y-gaps: '
+      '${gaps.take(3).map((g) => g.toStringAsFixed(1)).join(' / ')} pt'
+      '  (threshold: $_minDiagramGap pt)',
+    );
+
+    // Gap between page top and highest text character.
+    if (pageHeight != null) {
+      final topGap = pageHeight - ys.last;
+      final maxGap = pageHeight * _maxDiagramGapRatio;
+      debugPrint(
+        '[Diagram] top-of-page gap: ${topGap.toStringAsFixed(1)} pt'
+        '  (text starts at Y ${ys.last.toStringAsFixed(1)}, page H: ${pageHeight.toStringAsFixed(1)})'
+        '  range: $_minDiagramGapAtPageEdge–${maxGap.toStringAsFixed(1)} pt',
+      );
+      if (topGap > _minDiagramGapAtPageEdge && topGap < maxGap) {
+        debugPrint('[Diagram] → diagram suspected at TOP of page');
+        return FenSource.suspectedDiagram;
+      }
+    }
+
+    final maxGap = pageHeight != null ? pageHeight * _maxDiagramGapRatio : double.infinity;
+    for (int i = 1; i < ys.length; i++) {
+      final gap = ys[i] - ys[i - 1];
+      if (gap > _minDiagramGap && gap < maxGap) {
+        debugPrint(
+          '[Diagram] → diagram suspected: gap ${gap.toStringAsFixed(1)} pt'
+          '  between Y ${ys[i - 1].toStringAsFixed(1)} and Y ${ys[i].toStringAsFixed(1)}'
+          '  (max allowed: ${maxGap.toStringAsFixed(1)} pt)',
+        );
+        return FenSource.suspectedDiagram;
+      }
+    }
+
+    debugPrint('[Diagram] no diagram gap detected in this segment');
+    return null;
+  }
+
+  /// Scans [charRects] for large vertical gaps caused by board-diagram images
+  /// and returns the character indices where a new game segment starts (i.e.
+  /// the first character of the text block that follows each diagram).
+  ///
+  /// Algorithm: sort character Y-centers ascending (bottom→top in PDF space).
+  /// A gap > [_minDiagramGap] between sorted neighbours means a diagram sits
+  /// between those two text blocks.  The split point is the minimum original
+  /// text index of characters below the gap (they come *after* the diagram in
+  /// reading order because the page is read top-to-bottom = Y decreasing).
+  static List<int> _findDiagramSplitIndices(
+    List<PdfRect> charRects, {
+    double? pageHeight,
+  }) {
+    final entries = <({double y, int idx})>[];
+    for (int i = 0; i < charRects.length; i++) {
+      final r = charRects[i];
+      if (r.isNotEmpty) entries.add((y: (r.top + r.bottom) / 2, idx: i));
+    }
+    if (entries.length < 4) return const [];
+
+    // Sort ascending by Y (small Y = bottom of page = later in reading order).
+    entries.sort((a, b) => a.y.compareTo(b.y));
+
+    final maxGap = pageHeight != null ? pageHeight * _maxDiagramGapRatio : double.infinity;
+    final splits = <int>[];
+    // runningMin tracks min(original text index of entries[0..i-1]) — i.e. the
+    // earliest text position of all characters below the current candidate gap.
+    int runningMin = entries[0].idx;
+
+    for (int i = 1; i < entries.length; i++) {
+      final gap = entries[i].y - entries[i - 1].y;
+      if (gap > _minDiagramGap && gap < maxGap) {
+        debugPrint(
+          '[Diagram] multi-split gap ${gap.toStringAsFixed(1)} pt'
+          '  Y ${entries[i - 1].y.toStringAsFixed(1)}→${entries[i].y.toStringAsFixed(1)}'
+          '  (max: ${maxGap.toStringAsFixed(1)} pt)'
+          '  → new game segment starts at char $runningMin',
+        );
+        splits.add(runningMin);
+      } else if (gap >= maxGap) {
+        debugPrint(
+          '[Diagram] multi-split gap ${gap.toStringAsFixed(1)} pt IGNORED'
+          '  (exceeds max ${maxGap.toStringAsFixed(1)} pt — likely not a chess board)',
+        );
+      }
+      // Update for next iteration: include entries[i] in the running minimum.
+      if (entries[i].idx < runningMin) runningMin = entries[i].idx;
+    }
+
+    if (splits.isNotEmpty) {
+      debugPrint('[Diagram] ${splits.length} diagram split(s) found → ${splits.length + 1} segments');
+    }
+    splits.sort();
+    return splits;
   }
 
   // --------------------------------------------------------------------------
@@ -286,56 +351,108 @@ class MoveParser {
 
   /// Parse [rawText] into one [PageAnalysis] per game found on the page.
   ///
-  /// When the page contains multiple game headers (player line + location/year),
-  /// the text is split at each header boundary and parsed independently so that
-  /// each game gets its own starting FEN and move list.
+  /// Game boundaries come exclusively from pixel-confirmed board detection
+  /// ([preComputedSplits] / [topOfPageBoardDetected]).  When no pixel splits
+  /// are supplied the text-gap heuristic is used as a fallback.
   ///
   /// - [inheritedFen]: FEN from the last move of the previous page, applied
   ///   to the first segment when the page is a game continuation.
   /// - [forcedFens]: user-supplied FENs keyed by game index (0-based) that
   ///   override every other source for the corresponding game.
+  /// - [forcedIntermediates]: game indices (0-based) the user has confirmed as
+  ///   intermediate diagrams; diagram detection is skipped and fenSource is set
+  ///   to [FenSource.userConfirmedIntermediate].
+  /// - [forcedNotADiagrams]: game indices (0-based) the user has confirmed as
+  ///   non-diagram images; diagram detection is skipped and fenSource is set
+  ///   to [FenSource.userConfirmedNotADiagram].
+  /// - [preComputedSplits]: char-index split points from [BoardDetector].
+  ///   When supplied, the internal text-gap split detection is skipped.
+  /// - [topOfPageBoardDetected]: if true, the first game segment is flagged as
+  ///   [FenSource.suspectedDiagram] (board detected above the first text line).
   /// - [fontMap]: mutable character→piece mapping shared across all pages.
   static List<PageAnalysis> parse(
     PdfPageRawText rawText,
     double pageHeight, {
+    List<int>? preComputedSplits,
+    bool topOfPageBoardDetected = false,
     String? inheritedFen,
     Map<int, String>? forcedFens,
+    Set<int>? forcedIntermediates,
+    Set<int>? forcedNotADiagrams,
     Map<String, String>? fontMap,
   }) {
     final fullText = rawText.fullText;
     final charRects = rawText.charRects;
+    final pixelDetectionUsed = preComputedSplits != null;
 
-    final segments = _findGameSegments(fullText);
+    // Game boundaries come exclusively from pixel-confirmed board detection.
+    // Fall back to the text-gap heuristic only when no pixel splits were supplied.
+    final diagramSplits = preComputedSplits ??
+        _findDiagramSplitIndices(charRects, pageHeight: pageHeight);
 
-    if (segments.isEmpty) {
-      return [
-        _parseSegment(
-          text: fullText,
-          charRects: charRects,
-          header: null,
-          inheritedFen: inheritedFen,
-          forcedFen: forcedFens?[0],
-          fontMap: fontMap,
-        ),
-      ];
+    PageAnalysis maybeMarkIntermediate(PageAnalysis a, int idx) {
+      if (a.fenSource == FenSource.userProvided) return a;
+      if (forcedNotADiagrams != null && forcedNotADiagrams.contains(idx)) {
+        return PageAnalysis(
+          startFen: a.startFen,
+          fenSource: FenSource.userConfirmedNotADiagram,
+          moves: a.moves,
+          header: a.header,
+        );
+      }
+      if (forcedIntermediates != null && forcedIntermediates.contains(idx)) {
+        return PageAnalysis(
+          startFen: a.startFen,
+          fenSource: FenSource.userConfirmedIntermediate,
+          moves: a.moves,
+          header: a.header,
+        );
+      }
+      return a;
     }
 
+    if (diagramSplits.isEmpty) {
+      final userOverride =
+          (forcedIntermediates?.contains(0) ?? false) ||
+          (forcedNotADiagrams?.contains(0) ?? false);
+      final a = _parseSegment(
+        text: fullText,
+        charRects: charRects,
+        header: null,
+        pageHeight: pageHeight,
+        inheritedFen: inheritedFen,
+        forcedFen: forcedFens?[0],
+        fontMap: fontMap,
+        skipDiagramDetection: userOverride,
+        pixelDetectionUsed: pixelDetectionUsed,
+        forceSuspectedDiagram: topOfPageBoardDetected,
+      );
+      return [maybeMarkIntermediate(a, 0)];
+    }
+
+    // Multiple board-confirmed segments.
+    // splitPoints[0] = 0 (page start), splitPoints.last = fullText.length.
+    final splitPoints = [0, ...diagramSplits, fullText.length];
     return [
-      for (int i = 0; i < segments.length; i++)
-        _parseSegment(
-          text: fullText.substring(
-            segments[i].start,
-            i + 1 < segments.length ? segments[i + 1].start : fullText.length,
+      for (int i = 0; i < splitPoints.length - 1; i++)
+        maybeMarkIntermediate(
+          _parseSegment(
+            text: fullText.substring(splitPoints[i], splitPoints[i + 1]),
+            charRects: _sliceRects(charRects, splitPoints[i], splitPoints[i + 1]),
+            header: null,
+            pageHeight: pageHeight,
+            inheritedFen: i == 0 ? inheritedFen : null,
+            forcedFen: forcedFens?[i],
+            fontMap: fontMap,
+            skipDiagramDetection:
+                (forcedIntermediates?.contains(i) ?? false) ||
+                (forcedNotADiagrams?.contains(i) ?? false),
+            pixelDetectionUsed: pixelDetectionUsed,
+            // First segment: board at top of page (if detected).
+            // Later segments: always preceded by a confirmed board gap.
+            forceSuspectedDiagram: i == 0 ? topOfPageBoardDetected : true,
           ),
-          charRects: _sliceRects(
-            charRects,
-            segments[i].start,
-            i + 1 < segments.length ? segments[i + 1].start : fullText.length,
-          ),
-          header: segments[i].header,
-          inheritedFen: i == 0 ? inheritedFen : null,
-          forcedFen: forcedFens?[i],
-          fontMap: fontMap,
+          i,
         ),
     ];
   }
@@ -350,9 +467,13 @@ class MoveParser {
     required String text,
     required List<PdfRect> charRects,
     required String? header,
+    double? pageHeight,
     String? inheritedFen,
     String? forcedFen,
     Map<String, String>? fontMap,
+    bool skipDiagramDetection = false,
+    bool pixelDetectionUsed = false,
+    bool forceSuspectedDiagram = false,
   }) {
     // ------------------------------------------------------------------
     // 1. Determine starting position.
@@ -386,20 +507,27 @@ class MoveParser {
     }
 
     // ------------------------------------------------------------------
-    // 2. Diagram detection (pure text — independent of move parsing).
+    // 2. Diagram detection (independent of move parsing).
+    // Applies when no explicit FEN was found and the user hasn't overridden.
+    // Covers both the standard fallback and pages that inherit a position.
 
-    if (fenSource == FenSource.standard) {
-      final firstMoveNumber = _scanFirstMoveNumber(text);
-      if (_suspectDiagram(
-        hasGameHeader: header != null,
-        charRects: charRects,
-        firstMoveNumber: firstMoveNumber,
-      )) {
+    if (!skipDiagramDetection &&
+        (fenSource == FenSource.standard ||
+            fenSource == FenSource.inheritedFromPreviousPage)) {
+      if (forceSuspectedDiagram) {
+        debugPrint('[Diagram] segment preceded by confirmed board → suspectedDiagram  FEN: $startFen');
         fenSource = FenSource.suspectedDiagram;
+      } else if (!pixelDetectionUsed) {
+        // Fall back to text-gap heuristic only when no pixel detection was done.
+        final diagramSource = _detectDiagramFenSource(
+          charRects: charRects,
+          pageHeight: pageHeight,
+        );
+        if (diagramSource != null) fenSource = diagramSource;
       }
     }
 
-    debugPrint('[MoveParser] header=$header  fenSource=$fenSource  startFen=$startFen');
+    debugPrint('[MoveParser] header=$header  fenSource=$fenSource  FEN=$startFen');
 
     // ------------------------------------------------------------------
     // 3. Tokenise, skipping comments and variations.
@@ -476,7 +604,10 @@ class MoveParser {
 
       final normalised = _normaliseToken(raw);
       final move = _resolveMove(normalised, position, fontMap);
-      if (move == null) continue;
+      if (move == null) {
+        debugPrint('[MoveParser] skip "$raw" (norm="$normalised") move=$currentMoveNum black=$expectBlack');
+        continue;
+      }
 
       final fenBefore = position.fen;
       final (newPosition, san) = position.makeSan(move);

@@ -51,5 +51,12 @@
   "cancel": "Annuler",
   "apply": "Appliquer",
   "noMovesFound": "Aucun coup d'échecs trouvé sur cette page.",
-  "editingStartPositions": "Édition des positions de départ"
+  "editingStartPositions": "Édition des positions de départ",
+  "suspectedIntermediateDiagramLabel": "Diagramme détecté — semble être une position intermédiaire (la partie continue).",
+  "confirmedIntermediateLabel": "Diagramme intermédiaire — la partie continue depuis la position actuelle.",
+  "markAsNewGame": "Nouvelle partie",
+  "markAsIntermediate": "Intermédiaire",
+  "markAsNotADiagram": "Pas un diagramme",
+  "notADiagramLabel": "Confirmé : pas un diagramme d'échecs — la partie continue.",
+  "markAsSuspectedDiagram": "Annuler"
 }
