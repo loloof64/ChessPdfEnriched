@@ -6,28 +6,48 @@ import 'package:pdfrx/pdfrx.dart';
 
 import 'chess_piece_classifier.dart';
 
-/// Detects chess board diagrams in PDF pages using ML + FEN validation.
+/// Detects chess board diagrams in PDF pages.
 ///
-/// New algorithm:
-///   1. Render page at 144 DPI (2× scale) for better quality.
-///   2. Find candidate image regions using text-gap analysis (areas with no charRects).
-///   3. For each region:
-///        a. Localize exact board boundary using refined SNR (threshold 1.8) within region.
-///        b. Extract 64 squares and classify using TFLite model.
-///        c. Build FEN from piece classifications.
-///        d. Validate FEN with dartchess.
-///        e. If valid → confirmed board.
-///   4. Convert confirmed boards to split indices and detected FENs.
+/// Algorithm:
+///   1. Render page at 144 DPI.
+///   2. For each row, compute the longest contiguous run of high-contrast pixels
+///      in the vertical gradient → rows with long runs are drawn horizontal lines.
+///      Same for columns / horizontal gradient → drawn vertical lines.
+///   3. Among those line positions, find 9 evenly-spaced horizontal lines and
+///      9 evenly-spaced vertical lines (= the chess board grid).
+///   4. The spacing must match between horizontal and vertical sets (square board).
+///   5. Extract 64 squares, classify with TFLite, validate FEN.
 class BoardDetector {
-  static const _scale = 2.0; // 144 DPI (double resolution)
-  static const _snrThresholdForLocalization = 1.8; // lower than absolute threshold
+  static const _scale = 2.0; // 144 DPI
+
+  // A "line pixel" must have at least this much contrast with its neighbour.
+  static const _linePixelThreshold = 0.10;
+
+  // A row/column must have a contiguous run this long to count as a drawn line.
+  static const _minLineRunPx = 50;
+
+  // Minimum gap between two distinct line positions (handles thick lines).
+  static const _minLineGapPx = 4;
+
+  // Minimum / maximum square size accepted (in pixels at 144 DPI).
+  static const _minSquarePx = 20; // 160 px board ≈ 1.1 in
+  static const _maxSquarePx = 100; // 800 px board ≈ 5.6 in
+
+  // Max deviation from square (|h-w|/max).
+  static const _maxSquareness = 0.15;
+
+  // Fraction of pixels along each side that must show gradient for rectangle verification.
+  static const _minSideCoverage = 0.35;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Public entry point
 
   static Future<({List<int> splitIndices, bool topOfPageBoardDetected, List<String?> detectedFens})>
   detectBoards(PdfPage page, List<PdfRect> charRects) async {
     final iW = (page.width * _scale).round();
     final iH = (page.height * _scale).round();
 
-    debugPrint('[BoardDetector] rendering full page $iW×$iH px…');
+    debugPrint('[BoardDetector] rendering $iW×$iH px…');
     final image = await page.render(
       x: 0, y: 0,
       width: iW, height: iH,
@@ -35,339 +55,255 @@ class BoardDetector {
       backgroundColor: 0xFFFFFFFF,
     );
     if (image == null) {
-      debugPrint('[BoardDetector] render returned null');
-      return (
-        splitIndices: const <int>[],
-        topOfPageBoardDetected: false,
-        detectedFens: const <String?>[],
-      );
+      return (splitIndices: const <int>[], topOfPageBoardDetected: false, detectedFens: const <String?>[]);
     }
 
     try {
       final gray = _toGray(image.pixels, iW, iH);
 
-      // Precompute gradients.
-      final dH = Float32List(iW * iH); // horizontal gradient
-      final dV = Float32List(iW * iH); // vertical gradient
-      for (int y = 0; y < iH; y++) {
-        for (int x = 1; x < iW; x++) {
-          dH[y * iW + x] = (gray[y * iW + x] - gray[y * iW + x - 1]).abs();
-        }
-      }
+      // Vertical gradient dV[y,x] = |gray[y,x] - gray[y-1,x]|.
+      // Horizontal gradient dH[y,x] = |gray[y,x] - gray[y,x-1]|.
+      final dV = Float32List(iW * iH);
       for (int y = 1; y < iH; y++) {
         for (int x = 0; x < iW; x++) {
           dV[y * iW + x] = (gray[y * iW + x] - gray[(y - 1) * iW + x]).abs();
         }
       }
-
-      // Precompute cumulative structures for fast SNR queries.
-      final dHcol = Float64List((iH + 1) * iW);
+      final dH = Float32List(iW * iH);
       for (int y = 0; y < iH; y++) {
-        for (int x = 0; x < iW; x++) {
-          dHcol[(y + 1) * iW + x] = dHcol[y * iW + x] + dH[y * iW + x];
+        for (int x = 1; x < iW; x++) {
+          dH[y * iW + x] = (gray[y * iW + x] - gray[y * iW + x - 1]).abs();
         }
       }
 
-      final w1 = iW + 1;
-      final dVrow = Float64List(iH * w1);
-      for (int y = 0; y < iH; y++) {
-        for (int x = 0; x < iW; x++) {
-          dVrow[y * w1 + x + 1] = dVrow[y * w1 + x] + dV[y * iW + x];
-        }
-      }
+      // For each row: longest contiguous run where dV > threshold.
+      // A long run means a drawn horizontal line spans many pixels.
+      final hRun = _maxRunPerRow(dV, iW, iH);
 
-      final dHsat = _sat2d(dH, iW, iH);
-      final dVsat = _sat2d(dV, iW, iH);
+      // For each column: longest contiguous run where dH > threshold.
+      final vRun = _maxRunPerCol(dH, iW, iH);
 
-      // Step 1: Find candidate image regions (text-gap analysis).
-      final imageRegions = _findImageRegions(charRects, page.width, page.height, _scale);
-      debugPrint('[BoardDetector] found ${imageRegions.length} candidate image region(s)');
+      // Extract positions of drawn lines.
+      final hLines = _linePositions(hRun, iH);
+      final vLines = _linePositions(vRun, iW);
 
-      // Step 2: Localize boards within each region and classify.
-      final boards = <({int x, int y, int s, double score, String? fen})>[];
+      debugPrint('[BoardDetector] drawn hLines=${hLines.length}  vLines=${vLines.length}');
+
       final classifier = await ChessPieceClassifier.load();
 
-      for (final region in imageRegions) {
-        final board = await _localizeAndClassifyBoard(
-          region, dHcol, dVrow, dHsat, dVsat, iW, iH, w1,
-          gray, _scale, classifier,
-        );
-        if (board != null) boards.add(board);
+      final boards = <({int x, int y, int s, String fen})>[];
+
+      // Try every pair of hLines × vLines whose span/8 gives a valid square size.
+      // Only the outer board borders need to be detected; FEN validation is the gate.
+      for (int hi = 0; hi < hLines.length; hi++) {
+        for (int hj = hi + 1; hj < hLines.length; hj++) {
+          final hSpan = hLines[hj] - hLines[hi];
+          final hS = hSpan / 8.0;
+          if (hS < _minSquarePx || hS > _maxSquarePx) continue;
+
+          for (int vi = 0; vi < vLines.length; vi++) {
+            for (int vj = vi + 1; vj < vLines.length; vj++) {
+              final vSpan = vLines[vj] - vLines[vi];
+              final vS = vSpan / 8.0;
+              if (vS < _minSquarePx || vS > _maxSquarePx) continue;
+
+              final squareness = (hS - vS).abs() / math.max(hS, vS);
+              if (squareness > _maxSquareness) continue;
+
+              final s = ((hS + vS) / 2).round();
+              final x0 = vLines[vi];
+              final y0 = hLines[hi];
+
+              // Skip if this region overlaps an already-confirmed board.
+              if (boards.any((b) => (b.x - x0).abs() < s ~/ 2 && (b.y - y0).abs() < s ~/ 2)) continue;
+
+              // Verify all 4 sides of the rectangle are actually drawn in the image.
+              final cTop   = _rowCoverage(dV, iW, hLines[hi], vLines[vi], vLines[vj]);
+              final cBot   = _rowCoverage(dV, iW, hLines[hj], vLines[vi], vLines[vj]);
+              final cLeft  = _colCoverage(dH, iW, vLines[vi], hLines[hi], hLines[hj]);
+              final cRight = _colCoverage(dH, iW, vLines[vj], hLines[hi], hLines[hj]);
+              debugPrint('[BoardDetector] rect x=$x0 y=$y0 s=$s '
+                  'cov top=${cTop.toStringAsFixed(2)} bot=${cBot.toStringAsFixed(2)} '
+                  'left=${cLeft.toStringAsFixed(2)} right=${cRight.toStringAsFixed(2)}');
+              if (cTop < _minSideCoverage || cBot < _minSideCoverage ||
+                  cLeft < _minSideCoverage || cRight < _minSideCoverage) { continue; }
+
+              debugPrint('[BoardDetector] candidate x=$x0 y=$y0 s=$s (hS=${hS.toStringAsFixed(1)} vS=${vS.toStringAsFixed(1)})');
+
+              try {
+                final squareImages = _extractSquares(gray, iW, iH, x0, y0, s);
+                final labels = classifier.classify64Squares(squareImages);
+                if (labels != null) {
+                  final fen = _buildAndValidateFen(labels);
+                  if (fen != null) {
+                    debugPrint('[BoardDetector] confirmed board x=$x0 y=$y0 s=$s FEN=$fen');
+                    boards.add((x: x0, y: y0, s: s, fen: fen));
+                  }
+                }
+              } catch (e) {
+                debugPrint('[BoardDetector] classification error: $e');
+              }
+            }
+          }
+        }
       }
 
-      classifier?.dispose();
+      classifier.dispose();
 
-      debugPrint('[BoardDetector] ${boards.length} board(s) confirmed:');
-      for (final b in boards) {
-        debugPrint(
-          '  x=${b.x} y=${b.y}  squarePx=${b.s}  boardPx=${b.s * 8}  SNR=${b.score.toStringAsFixed(2)}  FEN=${b.fen ?? "not detected"}',
-        );
-      }
+      debugPrint('[BoardDetector] ${boards.length} board(s) confirmed');
 
       final splits = _toSplits(boards, charRects, page.height);
       final top = _isTopOfPage(boards, charRects, page.height);
-      final detectedFens = boards.map((b) => b.fen).toList();
+      final detectedFens = boards.map((b) => b.fen as String?).toList();
 
       debugPrint('[BoardDetector] splits=$splits  topBoard=$top  fens=$detectedFens');
-      return (
-        splitIndices: splits,
-        topOfPageBoardDetected: top,
-        detectedFens: detectedFens,
-      );
+      return (splitIndices: splits, topOfPageBoardDetected: top, detectedFens: detectedFens);
     } finally {
       image.dispose();
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Step 1: Text-gap analysis to find image regions
+  // ─────────────────────────────────────────────────────────────────────────
+  // Line detection
 
-  static List<({int x, int y, int w, int h})> _findImageRegions(
-    List<PdfRect> charRects, double pageW, double pageH, double scale,
-  ) {
-    final iW = (pageW * scale).round();
-    final iH = (pageH * scale).round();
-    final minBoardPx = 80; // 10px/sq × 8 sq minimum
-
-    // Build text row coverage: for each y, is there any text?
-    final rowHasText = List<bool>.filled(iH, false);
-    for (final rect in charRects) {
-      if (!rect.isNotEmpty) continue;
-      // Convert PDF coords (Y-up) to pixel coords (Y-down).
-      final pixelTop = (pageH - rect.bottom) * scale;
-      final pixelBottom = (pageH - rect.top) * scale;
-      final yStart = math.max(0, pixelTop.round());
-      final yEnd = math.min(iH, pixelBottom.round());
-      for (int y = yStart; y < yEnd; y++) {
-        rowHasText[y] = true;
-      }
-    }
-
-    // Find vertical runs with no text (potential image rows).
-    final regions = <({int x, int y, int w, int h})>[];
-    int noTextStart = -1;
+  /// For each row y, compute the longest contiguous run of pixels where
+  /// dV[y,x] > [_linePixelThreshold].  A long run = a drawn horizontal line.
+  static List<int> _maxRunPerRow(Float32List dV, int iW, int iH) {
+    final result = List<int>.filled(iH, 0);
     for (int y = 0; y < iH; y++) {
-      if (!rowHasText[y]) {
-        if (noTextStart < 0) noTextStart = y;
+      int maxRun = 0, run = 0;
+      for (int x = 0; x < iW; x++) {
+        if (dV[y * iW + x] > _linePixelThreshold) {
+          run++;
+          if (run > maxRun) maxRun = run;
+        } else {
+          run = 0;
+        }
+      }
+      result[y] = maxRun;
+    }
+    return result;
+  }
+
+  /// For each column x, compute the longest contiguous run of pixels where
+  /// dH[y,x] > [_linePixelThreshold].  A long run = a drawn vertical line.
+  static List<int> _maxRunPerCol(Float32List dH, int iW, int iH) {
+    final result = List<int>.filled(iW, 0);
+    for (int x = 0; x < iW; x++) {
+      int maxRun = 0, run = 0;
+      for (int y = 0; y < iH; y++) {
+        if (dH[y * iW + x] > _linePixelThreshold) {
+          run++;
+          if (run > maxRun) maxRun = run;
+        } else {
+          run = 0;
+        }
+      }
+      result[x] = maxRun;
+    }
+    return result;
+  }
+
+  /// From a run-length array, extract positions of drawn lines: local maxima
+  /// above [_minLineRunPx], separated by at least [_minLineGapPx].
+  static List<int> _linePositions(List<int> runs, int size) {
+    final lines = <int>[];
+    for (int i = 1; i < size - 1; i++) {
+      if (runs[i] < _minLineRunPx) continue;
+      if (runs[i] < runs[i - 1] || runs[i] < runs[i + 1]) continue;
+      if (lines.isNotEmpty && i - lines.last < _minLineGapPx) {
+        if (runs[i] > runs[lines.last]) lines[lines.length - 1] = i;
       } else {
-        if (noTextStart >= 0) {
-          final noTextHeight = y - noTextStart;
-          if (noTextHeight >= minBoardPx) {
-            // Found a potential image region row range.
-            _addImageRegionsInRange(
-              regions, rowHasText, iW, noTextStart, y, minBoardPx,
-            );
-          }
-          noTextStart = -1;
-        }
+        lines.add(i);
       }
     }
-    // Handle end-of-page run.
-    if (noTextStart >= 0) {
-      final noTextHeight = iH - noTextStart;
-      if (noTextHeight >= minBoardPx) {
-        _addImageRegionsInRange(
-          regions, rowHasText, iW, noTextStart, iH, minBoardPx,
-        );
-      }
-    }
-
-    return regions;
+    return lines;
   }
 
-  static void _addImageRegionsInRange(
-    List<({int x, int y, int w, int h})> regions,
-    List<bool> rowHasText, int iW, int yStart, int yEnd, int minBoardPx,
-  ) {
-    // Within [yStart, yEnd), find column ranges with no text.
-    // For simplicity, assume the entire row range is one region.
-    // (A more sophisticated approach would find x-ranges too.)
-    final h = yEnd - yStart;
-    if (h >= minBoardPx && h <= iW) {
-      // Region is roughly square-ish.
-      // Use full width; a board detector will localize within this region.
-      regions.add((x: 0, y: yStart, w: iW, h: h));
+  // ─────────────────────────────────────────────────────────────────────────
+  // Rectangle verification helpers
+
+  /// Fraction of pixels in row [y] over [x1..x2] that have dV > threshold.
+  static double _rowCoverage(Float32List dV, int iW, int y, int x1, int x2) {
+    if (x2 <= x1) return 0;
+    int count = 0;
+    for (int x = x1; x <= x2; x++) {
+      if (dV[y * iW + x] > _linePixelThreshold) count++;
     }
+    return count / (x2 - x1 + 1);
   }
 
-  // ---------------------------------------------------------------------------
-  // Step 2: Localize board within a region and classify pieces
-
-  static Future<({int x, int y, int s, double score, String? fen})?> _localizeAndClassifyBoard(
-    ({int x, int y, int w, int h}) region,
-    Float64List dHcol, Float64List dVrow,
-    Float64List dHsat, Float64List dVsat,
-    int iW, int iH, int w1,
-    Float32List gray, double scale, ChessPieceClassifier? classifier,
-  ) async {
-    // Run SNR scan only within the region.
-    final board = _localizeBoard(
-      region, dHcol, dVrow, dHsat, dVsat, iW, iH, w1,
-    );
-
-    if (board == null) return null; // No grid found in this region.
-
-    // Extract 64 squares and classify pieces.
-    String? fen;
-    try {
-      final squareImages = _extractSquares(gray, iW, board.x, board.y, board.s);
-      if (classifier != null) {
-        final labels = classifier.classify64Squares(squareImages);
-        if (labels != null) {
-          fen = _buildAndValidateFen(labels);
-        }
-      }
-    } catch (e) {
-      debugPrint('[BoardDetector] failed to classify board at (${board.x}, ${board.y}): $e');
+  /// Fraction of pixels in column [x] over [y1..y2] that have dH > threshold.
+  static double _colCoverage(Float32List dH, int iW, int x, int y1, int y2) {
+    if (y2 <= y1) return 0;
+    int count = 0;
+    for (int y = y1; y <= y2; y++) {
+      if (dH[y * iW + x] > _linePixelThreshold) count++;
     }
-
-    return (x: board.x, y: board.y, s: board.s, score: board.score, fen: fen);
+    return count / (y2 - y1 + 1);
   }
 
-  // Localize board within region using SNR scan at lower threshold.
-  static ({int x, int y, int s, double score})? _localizeBoard(
-    ({int x, int y, int w, int h}) region,
-    Float64List dHcol, Float64List dVrow,
-    Float64List dHsat, Float64List dVsat,
-    int iW, int iH, int w1,
-  ) {
-    ({int x, int y, int s, double score})? best;
-    double bestScore = _snrThresholdForLocalization;
-
-    final squareSizes = [10, 13, 17, 22, 28, 36, 46];
-    for (final s in squareSizes) {
-      final bp = s * 8;
-      if (bp > region.w || bp > region.h) continue;
-
-      final step = math.max(2, s ~/ 3);
-      final xStart = region.x;
-      final xEnd = math.min(region.x + region.w - bp, iW - bp);
-      final yStart = region.y;
-      final yEnd = math.min(region.y + region.h - bp, iH - bp);
-
-      for (int y0 = yStart; y0 < yEnd; y0 += step) {
-        for (int x0 = xStart; x0 < xEnd; x0 += step) {
-          final sc = _snr(dHcol, dVrow, dHsat, dVsat, iW, w1, x0, y0, s, bp);
-          if (sc > bestScore) {
-            bestScore = sc;
-            best = (x: x0, y: y0, s: s, score: sc);
-          }
-        }
-      }
-    }
-
-    return best;
-  }
-
-  /// SNR score calculation (same as original).
-  static double _snr(
-    Float64List dHcol, Float64List dVrow,
-    Float64List dHsat, Float64List dVsat,
-    int iW, int w1, int x0, int y0, int s, int bp,
-  ) {
-    double vGrid = 0;
-    for (int k = 1; k <= 7; k++) {
-      final x = x0 + k * s;
-      vGrid += dHcol[(y0 + bp) * iW + x] - dHcol[y0 * iW + x];
-    }
-    final dHTot = _satRect(dHsat, w1, y0, x0, y0 + bp, x0 + bp);
-    final vBg = dHTot - vGrid;
-    final vSNR = (vGrid / 7) / (vBg / (bp * (bp - 7)) * bp + 1e-6);
-
-    double hGrid = 0;
-    for (int k = 1; k <= 7; k++) {
-      final y = y0 + k * s;
-      hGrid += dVrow[y * w1 + x0 + bp] - dVrow[y * w1 + x0];
-    }
-    final dVTot = _satRect(dVsat, w1, y0, x0, y0 + bp, x0 + bp);
-    final hBg = dVTot - hGrid;
-    final hSNR = (hGrid / 7) / (hBg / (bp * (bp - 7)) * bp + 1e-6);
-
-    return math.min(vSNR, hSNR);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Step 3: Extract and classify squares
+  // ─────────────────────────────────────────────────────────────────────────
+  // Square extraction and FEN building
 
   static List<Float32List> _extractSquares(
-    Float32List gray, int iW, int bx, int by, int squarePx,
+    Float32List gray, int iW, int iH, int bx, int by, int squarePx,
   ) {
-    const modelInputSize = 64;
+    const modelSize = 64;
     final squares = <Float32List>[];
-
     for (int rank = 0; rank < 8; rank++) {
       for (int file = 0; file < 8; file++) {
         final x0 = bx + file * squarePx;
         final y0 = by + rank * squarePx;
-
-        // Crop square and resize to 64x64.
-        final square = Float32List(modelInputSize * modelInputSize * 3);
+        final sq = Float32List(modelSize * modelSize * 3);
         int idx = 0;
-        for (int yy = 0; yy < modelInputSize; yy++) {
-          for (int xx = 0; xx < modelInputSize; xx++) {
-            final sx = x0 + (xx * squarePx) ~/ modelInputSize;
-            final sy = y0 + (yy * squarePx) ~/ modelInputSize;
-            final grayVal = gray[math.min(sy, iW - 1) * iW + math.min(sx, iW - 1)];
-            // RGB from grayscale.
-            square[idx++] = grayVal; // R
-            square[idx++] = grayVal; // G
-            square[idx++] = grayVal; // B
+        for (int yy = 0; yy < modelSize; yy++) {
+          for (int xx = 0; xx < modelSize; xx++) {
+            final sx = math.min(x0 + (xx * squarePx) ~/ modelSize, iW - 1);
+            final sy = math.min(y0 + (yy * squarePx) ~/ modelSize, iH - 1);
+            final v = gray[sy * iW + sx];
+            sq[idx++] = v; sq[idx++] = v; sq[idx++] = v;
           }
         }
-        squares.add(square);
+        squares.add(sq);
       }
     }
-
     return squares;
   }
 
-  // Build FEN from piece classifications and validate.
   static String? _buildAndValidateFen(List<String> labels) {
     if (labels.length != 64) return null;
-
-    // Construct 8×8 board. labels[0] = a8, labels[63] = h1 (white on bottom).
     const pieceMap = {
-      'empty': ' ',
-      'wP': 'P', 'wN': 'N', 'wB': 'B', 'wR': 'R', 'wQ': 'Q', 'wK': 'K',
+      'empty': ' ', 'wP': 'P', 'wN': 'N', 'wB': 'B', 'wR': 'R', 'wQ': 'Q', 'wK': 'K',
       'bP': 'p', 'bN': 'n', 'bB': 'b', 'bR': 'r', 'bQ': 'q', 'bK': 'k',
     };
-
     final fenRows = <String>[];
     for (int rank = 7; rank >= 0; rank--) {
-      int empty = 0;
-      String row = '';
+      int empty = 0; String row = '';
       for (int file = 0; file < 8; file++) {
-        final idx = rank * 8 + file;
-        final piece = pieceMap[labels[idx]] ?? ' ';
-        if (piece == ' ') {
-          empty++;
-        } else {
-          if (empty > 0) {
-            row += '$empty';
-            empty = 0;
-          }
-          row += piece;
-        }
+        final piece = pieceMap[labels[rank * 8 + file]] ?? ' ';
+        if (piece == ' ') { empty++; }
+        else { if (empty > 0) { row += '$empty'; empty = 0; } row += piece; }
       }
       if (empty > 0) row += '$empty';
       fenRows.add(row);
     }
-
     final fen = '${fenRows.join('/')} w - - 0 1';
-
-    // Validate with dartchess.
+    debugPrint('[BoardDetector] FEN attempt: $fen');
+    final labelCounts = <String, int>{};
+    for (final l in labels) { labelCounts[l] = (labelCounts[l] ?? 0) + 1; }
+    debugPrint('[BoardDetector] label counts: $labelCounts');
     try {
-      final setup = dc.Setup.parseFen(fen);
-      dc.Chess.fromSetup(setup);
+      dc.Chess.fromSetup(dc.Setup.parseFen(fen));
       return fen;
     } catch (e) {
-      debugPrint('[BoardDetector] FEN validation failed: $e');
+      debugPrint('[BoardDetector] FEN rejected: $e');
       return null;
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Helpers: Gradient, summed-area tables
+  // ─────────────────────────────────────────────────────────────────────────
+  // Helpers
 
   static Float32List _toGray(Uint8List bgra, int w, int h) {
     final g = Float32List(w * h);
@@ -379,30 +315,8 @@ class BoardDetector {
     return g;
   }
 
-  static Float64List _sat2d(Float32List arr, int w, int h) {
-    final w1 = w + 1;
-    final sat = Float64List((h + 1) * w1);
-    for (int y = 0; y < h; y++) {
-      double row = 0;
-      for (int x = 0; x < w; x++) {
-        row += arr[y * w + x];
-        sat[(y + 1) * w1 + (x + 1)] = row + sat[y * w1 + (x + 1)];
-      }
-    }
-    return sat;
-  }
-
-  static double _satRect(
-    Float64List sat, int w1, int y0, int x0, int y1, int x1) {
-    return sat[y1 * w1 + x1] - sat[y0 * w1 + x1]
-         - sat[y1 * w1 + x0] + sat[y0 * w1 + x0];
-  }
-
-  // ---------------------------------------------------------------------------
-  // Board positions → char-index splits (keep existing logic)
-
   static List<int> _toSplits(
-    List<({int x, int y, int s, double score, String? fen})> boards,
+    List<({int x, int y, int s, String fen})> boards,
     List<PdfRect> charRects, double pageH,
   ) {
     final splits = <int>[];
@@ -423,15 +337,14 @@ class BoardDetector {
   }
 
   static bool _isTopOfPage(
-    List<({int x, int y, int s, double score, String? fen})> boards,
+    List<({int x, int y, int s, String fen})> boards,
     List<PdfRect> charRects, double pageH,
   ) {
     for (final b in boards) {
       final boardTopPdf = pageH - b.y / _scale;
-      final hasAbove = charRects.any(
-        (r) => r.isNotEmpty && (r.top + r.bottom) / 2 > boardTopPdf,
-      );
-      if (!hasAbove) return true;
+      if (!charRects.any((r) => r.isNotEmpty && (r.top + r.bottom) / 2 > boardTopPdf)) {
+        return true;
+      }
     }
     return false;
   }

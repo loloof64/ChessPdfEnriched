@@ -1,7 +1,12 @@
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
+
+class ChessPieceClassifierException implements Exception {
+  final String message;
+  const ChessPieceClassifierException(this.message);
+  @override
+  String toString() => message;
+}
 
 /// Classifies chess piece types in individual board squares using TensorFlow Lite.
 ///
@@ -12,8 +17,19 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 ///                   7=bP, 8=bN, 9=bB, 10=bR, 11=bQ, 12=bK
 class ChessPieceClassifier {
   static const List<String> _classes = [
-    'empty', 'wP', 'wN', 'wB', 'wR', 'wQ', 'wK',
-    'bP', 'bN', 'bB', 'bR', 'bQ', 'bK',
+    'empty',
+    'wP',
+    'wN',
+    'wB',
+    'wR',
+    'wQ',
+    'wK',
+    'bP',
+    'bN',
+    'bB',
+    'bR',
+    'bQ',
+    'bK',
   ];
 
   static const int _inputSize = 64; // 64x64 square images
@@ -23,8 +39,8 @@ class ChessPieceClassifier {
   bool _isLoaded = false;
 
   /// Load the TFLite model from assets.
-  /// Returns null if the model file is not found (graceful fallback).
-  static Future<ChessPieceClassifier?> load() async {
+  /// Throws a [ChessPieceClassifierException] if the model cannot be loaded.
+  static Future<ChessPieceClassifier> load() async {
     final classifier = ChessPieceClassifier._();
     try {
       classifier._interpreter = await Interpreter.fromAsset(_modelAsset);
@@ -32,8 +48,12 @@ class ChessPieceClassifier {
       debugPrint('[ChessPieceClassifier] model loaded successfully');
       return classifier;
     } catch (e) {
-      debugPrint('[ChessPieceClassifier] failed to load model: $e');
-      return null; // Model not available; will skip piece classification
+      throw ChessPieceClassifierException(
+        'Failed to load TFLite model.\n'
+        'Make sure libtensorflowlite_c-linux.so is built and placed in the '
+        'blobs/ folder (see README).\n'
+        'Underlying error: $e',
+      );
     }
   }
 
@@ -47,17 +67,15 @@ class ChessPieceClassifier {
   List<String>? classify64Squares(List<Float32List> squareImages) {
     if (!_isLoaded || squareImages.length != 64) return null;
 
-    final output = List<List<double>>.generate(
-      64,
-      (_) => List<double>.filled(13, 0.0),
-    );
-
+    final results = <String>[];
     for (int i = 0; i < 64; i++) {
       final inputTensor = _reshapeToInputShape(squareImages[i]);
-      _interpreter.run(inputTensor, output[i]);
+      // Model output shape is [1, 13] — wrap in the batch dimension.
+      final output = [List<double>.filled(13, 0.0)];
+      _interpreter.run(inputTensor, output);
+      results.add(_argmaxClass(output[0]));
     }
-
-    return output.map((logits) => _argmaxClass(logits)).toList();
+    return results;
   }
 
   /// Reshape a single 64×64×3 image to [1, 64, 64, 3] batch format for the model.

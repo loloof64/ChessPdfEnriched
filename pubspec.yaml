@@ -2,7 +2,7 @@ name: chess_pdf_enriched
 description: "Read your chess pdf files with moves interactivity."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
 # A version number is three numbers separated by dots, like 1.2.43
@@ -42,7 +42,7 @@ dependencies:
   chessground: ^7.3.0
   dartchess: ^0.11.1
   path_provider: ^2.1.5
-  tflite_flutter: ^0.11.0
+  tflite_flutter: ^0.12.1
 
 dev_dependencies:
   flutter_test:

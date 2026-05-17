@@ -5,6 +5,7 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../chess/analysis_cache.dart';
 import '../chess/board_detector.dart';
+import '../chess/chess_piece_classifier.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
@@ -195,6 +196,23 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       await AnalysisCache.save(widget.filePath, _cache);
 
       if (mounted) _setPageGames(pageNumber, games);
+    } on ChessPieceClassifierException catch (e) {
+      debugPrint('[ChessPdf] classifier error: $e');
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('TFLite model error'),
+            content: Text(e.message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     } catch (e, st) {
       debugPrint('[ChessPdf] page $pageNumber analysis error: $e\n$st');
       if (mounted) {
