@@ -502,8 +502,9 @@ class MoveParser {
       position = dc.Chess.fromSetup(dc.Setup.parseFen(startFen));
     } catch (_) {
       position = dc.Chess.initial;
-      startFen = _standardFen;
-      fenSource = FenSource.standard;
+      // Keep startFen so the user can see and correct the illegal position.
+      // Mark as suspectedDiagram so the warning banner opens the editor pre-filled.
+      fenSource = FenSource.suspectedDiagram;
     }
 
     // ------------------------------------------------------------------

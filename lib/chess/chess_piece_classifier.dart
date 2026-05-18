@@ -16,7 +16,7 @@ class ChessPieceClassifierException implements Exception {
 /// Classes: 0=empty, 1=wP, 2=wN, 3=wB, 4=wR, 5=wQ, 6=wK,
 ///                   7=bP, 8=bN, 9=bB, 10=bR, 11=bQ, 12=bK
 class ChessPieceClassifier {
-  static const List<String> _classes = [
+  static const List<String> classes = [
     'empty',
     'wP',
     'wN',
@@ -59,23 +59,31 @@ class ChessPieceClassifier {
 
   ChessPieceClassifier._();
 
+  /// Classify 64 square images and return full score vectors (64 × 13).
+  ///
+  /// Returns null if not loaded or wrong input count.
+  List<List<double>>? classify64SquaresWithScores(List<Float32List> squareImages) {
+    if (!_isLoaded || squareImages.length != 64) return null;
+
+    final scores = <List<double>>[];
+    for (int i = 0; i < 64; i++) {
+      final inputTensor = _reshapeToInputShape(squareImages[i]);
+      final output = [List<double>.filled(13, 0.0)];
+      _interpreter.run(inputTensor, output);
+      scores.add(List<double>.unmodifiable(output[0]));
+    }
+    return scores;
+  }
+
   /// Classify 64 square images (one for each board square).
   ///
   /// [squareImages]: list of 64 Float32Lists, each 64×64×3 pixels normalized [0,1]
   /// Returns: list of 64 class strings ('empty', 'wP', etc.)
   ///          If not loaded: returns null.
   List<String>? classify64Squares(List<Float32List> squareImages) {
-    if (!_isLoaded || squareImages.length != 64) return null;
-
-    final results = <String>[];
-    for (int i = 0; i < 64; i++) {
-      final inputTensor = _reshapeToInputShape(squareImages[i]);
-      // Model output shape is [1, 13] — wrap in the batch dimension.
-      final output = [List<double>.filled(13, 0.0)];
-      _interpreter.run(inputTensor, output);
-      results.add(_argmaxClass(output[0]));
-    }
-    return results;
+    final scores = classify64SquaresWithScores(squareImages);
+    if (scores == null) return null;
+    return scores.map<String>(argmaxClass).toList();
   }
 
   /// Reshape a single 64×64×3 image to [1, 64, 64, 3] batch format for the model.
@@ -104,7 +112,7 @@ class ChessPieceClassifier {
   }
 
   /// Get the class name with the highest logit score.
-  static String _argmaxClass(List<double> logits) {
+  static String argmaxClass(List<double> logits) {
     int maxIdx = 0;
     double maxVal = logits[0];
     for (int i = 1; i < logits.length; i++) {
@@ -113,7 +121,7 @@ class ChessPieceClassifier {
         maxIdx = i;
       }
     }
-    return _classes[maxIdx];
+    return classes[maxIdx];
   }
 
   void dispose() {

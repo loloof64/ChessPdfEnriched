@@ -134,7 +134,7 @@ class BoardDetector {
                 final squareImages = _extractSquares(gray, iW, iH, x0, y0, s);
                 final labels = classifier.classify64Squares(squareImages);
                 if (labels != null) {
-                  final fen = _buildAndValidateFen(labels);
+                  final fen = _buildFen(labels);
                   if (fen != null) {
                     debugPrint('[BoardDetector] confirmed board x=$x0 y=$y0 s=$s FEN=$fen');
                     boards.add((x: x0, y: y0, s: s, fen: fen));
@@ -271,7 +271,9 @@ class BoardDetector {
     return squares;
   }
 
-  static String? _buildAndValidateFen(List<String> labels) {
+  /// Build a FEN string from classifier labels. Returns it even if the position
+  /// is illegal — the user can correct it manually in the UI.
+  static String? _buildFen(List<String> labels) {
     if (labels.length != 64) return null;
     const pieceMap = {
       'empty': ' ', 'wP': 'P', 'wN': 'N', 'wB': 'B', 'wR': 'R', 'wQ': 'Q', 'wK': 'K',
@@ -289,17 +291,16 @@ class BoardDetector {
       fenRows.add(row);
     }
     final fen = '${fenRows.join('/')} w - - 0 1';
-    debugPrint('[BoardDetector] FEN attempt: $fen');
+    debugPrint('[BoardDetector] FEN: $fen');
     final labelCounts = <String, int>{};
     for (final l in labels) { labelCounts[l] = (labelCounts[l] ?? 0) + 1; }
     debugPrint('[BoardDetector] label counts: $labelCounts');
     try {
       dc.Chess.fromSetup(dc.Setup.parseFen(fen));
-      return fen;
     } catch (e) {
-      debugPrint('[BoardDetector] FEN rejected: $e');
-      return null;
+      debugPrint('[BoardDetector] FEN is illegal (user can correct): $e');
     }
+    return fen;
   }
 
   // ─────────────────────────────────────────────────────────────────────────

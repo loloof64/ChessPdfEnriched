@@ -91,6 +91,50 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     if (_currentPage < total) _changePage(_currentPage + 1);
   }
 
+  void _goToFirstPage() {
+    if (_currentPage != 1) _changePage(1);
+  }
+
+  void _goToLastPage() {
+    final total = _document!.pages.length;
+    if (_currentPage != total) _changePage(total);
+  }
+
+  Future<void> _showGoToPageDialog() async {
+    final total = _document!.pages.length;
+    final controller = TextEditingController();
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Icon(Icons.find_in_page),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(hintText: '1 – $total'),
+          autofocus: true,
+          onSubmitted: (v) {
+            final n = int.tryParse(v);
+            if (n != null && n >= 1 && n <= total) Navigator.pop(ctx, n);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(MaterialLocalizations.of(ctx).cancelButtonLabel),
+          ),
+          TextButton(
+            onPressed: () {
+              final n = int.tryParse(controller.text);
+              if (n != null && n >= 1 && n <= total) Navigator.pop(ctx, n);
+            },
+            child: Text(MaterialLocalizations.of(ctx).okButtonLabel),
+          ),
+        ],
+      ),
+    );
+    if (result != null) _changePage(result);
+  }
+
   void _changePage(int page) {
     setState(() {
       _currentPage = page;
@@ -596,6 +640,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           IconButton(
+            icon: const Icon(Icons.first_page),
+            onPressed: _currentPage > 1 ? _goToFirstPage : null,
+          ),
+          IconButton(
             icon: const Icon(Icons.chevron_left),
             tooltip: l.previousPage,
             onPressed: _currentPage > 1 ? _goToPreviousPage : null,
@@ -605,9 +653,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             style: Theme.of(context).textTheme.bodyLarge,
           ),
           IconButton(
+            icon: const Icon(Icons.find_in_page),
+            onPressed: _showGoToPageDialog,
+          ),
+          IconButton(
             icon: const Icon(Icons.chevron_right),
             tooltip: l.nextPage,
             onPressed: _currentPage < total ? _goToNextPage : null,
+          ),
+          IconButton(
+            icon: const Icon(Icons.last_page),
+            onPressed: _currentPage < total ? _goToLastPage : null,
           ),
         ],
       ),
