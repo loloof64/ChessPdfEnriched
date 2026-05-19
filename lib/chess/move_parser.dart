@@ -433,7 +433,7 @@ class MoveParser {
     // Multiple board-confirmed segments.
     // splitPoints[0] = 0 (page start), splitPoints.last = fullText.length.
     final splitPoints = [0, ...diagramSplits, fullText.length];
-    return [
+    final segments = [
       for (int i = 0; i < splitPoints.length - 1; i++)
         maybeMarkIntermediate(
           _parseSegment(
@@ -455,6 +455,18 @@ class MoveParser {
           i,
         ),
     ];
+
+    // N boards produce N+1 segments; the last covers text after the final board
+    // and has no associated detected FEN. Drop it when it has no moves and the
+    // user has not explicitly provided a FEN for it.
+    final lastIdx = segments.length - 1;
+    if (segments.length > 1 &&
+        segments.last.moves.isEmpty &&
+        (forcedFens == null || !forcedFens.containsKey(lastIdx))) {
+      segments.removeLast();
+    }
+
+    return segments;
   }
 
   static List<PdfRect> _sliceRects(List<PdfRect> rects, int start, int end) {

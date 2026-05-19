@@ -1,7 +1,11 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:dartchess/dartchess.dart' as dc;
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'chess_piece_classifier.dart';
@@ -38,6 +42,15 @@ class BoardDetector {
 
   // Fraction of pixels along each side that must show gradient for rectangle verification.
   static const _minSideCoverage = 0.35;
+
+  // Minimum fraction of pixels at an internal grid row/column to count as a line.
+  static const _minInternalLineCov = 0.10;
+
+  // Minimum number of internal lines (out of 7) that must show gradient.
+  static const _minInternalLinesRequired = 3;
+
+  // Set to true to save each detected board's 64 squares to disk for training.
+  static const _saveTrainingData = true;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Public entry point
@@ -128,6 +141,11 @@ class BoardDetector {
               if (cTop < _minSideCoverage || cBot < _minSideCoverage ||
                   cLeft < _minSideCoverage || cRight < _minSideCoverage) { continue; }
 
+              if (!_hasInternalGrid(dV, dH, iW, x0, y0, s)) {
+                debugPrint('[BoardDetector] rejected (no internal grid): x=$x0 y=$y0 s=$s');
+                continue;
+              }
+
               debugPrint('[BoardDetector] candidate x=$x0 y=$y0 s=$s (hS=${hS.toStringAsFixed(1)} vS=${vS.toStringAsFixed(1)})');
 
               try {
@@ -138,6 +156,9 @@ class BoardDetector {
                   if (fen != null) {
                     debugPrint('[BoardDetector] confirmed board x=$x0 y=$y0 s=$s FEN=$fen');
                     boards.add((x: x0, y: y0, s: s, fen: fen));
+                    if (_saveTrainingData) {
+                      unawaited(_saveSquaresForTraining(squareImages, labels));
+                    }
                   }
                 }
               } catch (e) {
@@ -243,6 +264,26 @@ class BoardDetector {
     return count / (y2 - y1 + 1);
   }
 
+  /// Returns true if at least [_minInternalLinesRequired] of the 7 internal
+  /// horizontal lines AND 7 internal vertical lines show gradient ≥ [_minInternalLineCov].
+  /// A real chess board has alternating light/dark squares, so each row/column
+  /// boundary should have some contrast. Non-board rectangles (text blocks,
+  /// decorative borders) typically lack this regular internal structure.
+  static bool _hasInternalGrid(Float32List dV, Float32List dH, int iW, int x0, int y0, int s) {
+    final x1 = x0 + 8 * s;
+    final y1 = y0 + 8 * s;
+    int hCount = 0;
+    for (int k = 1; k <= 7; k++) {
+      if (_rowCoverage(dV, iW, y0 + k * s, x0, x1) >= _minInternalLineCov) hCount++;
+    }
+    int vCount = 0;
+    for (int k = 1; k <= 7; k++) {
+      if (_colCoverage(dH, iW, x0 + k * s, y0, y1) >= _minInternalLineCov) vCount++;
+    }
+    debugPrint('[BoardDetector] internal grid check x=$x0 y=$y0 s=$s → hLines=$hCount/7 vLines=$vCount/7');
+    return hCount >= _minInternalLinesRequired && vCount >= _minInternalLinesRequired;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Square extraction and FEN building
 
@@ -280,7 +321,7 @@ class BoardDetector {
       'bP': 'p', 'bN': 'n', 'bB': 'b', 'bR': 'r', 'bQ': 'q', 'bK': 'k',
     };
     final fenRows = <String>[];
-    for (int rank = 7; rank >= 0; rank--) {
+    for (int rank = 0; rank < 8; rank++) {
       int empty = 0; String row = '';
       for (int file = 0; file < 8; file++) {
         final piece = pieceMap[labels[rank * 8 + file]] ?? ' ';
@@ -348,5 +389,107 @@ class BoardDetector {
       }
     }
     return false;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Training data export
+
+  /// Saves the 64 squares from a detected board into
+  /// `<documents>/chess_training/<timestamp>/<label>/rR_fF.png`.
+  /// Also saves `board.png` (the full 8×8 grid) and `labels.txt` (rank-major
+  /// label grid) as visual references for reviewing and correcting labels.
+  /// The folder structure mirrors the training class layout so the user only
+  /// needs to move misclassified files to the correct folder before retraining.
+  static Future<void> _saveSquaresForTraining(
+    List<Float32List> squares,
+    List<String> labels,
+  ) async {
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final boardRoot = '${docsDir.path}/chess_training/$ts';
+
+      // Save individual squares organised by detected label.
+      for (int i = 0; i < 64; i++) {
+        final rank = i ~/ 8;
+        final file = i % 8;
+        final label = labels[i];
+        final classDir = Directory('$boardRoot/$label');
+        await classDir.create(recursive: true);
+        final png = await _squareToPng(squares[i]);
+        await File('${classDir.path}/r${rank}_f$file.png').writeAsBytes(png);
+      }
+
+      // Save a full 8×8 board PNG (squares tiled, 512×512 px).
+      await _saveBoardImage(squares, '$boardRoot/board.png');
+
+      // Save a human-readable label grid for quick review.
+      final labelGrid = StringBuffer();
+      for (int rank = 0; rank < 8; rank++) {
+        labelGrid.writeln(
+          List.generate(8, (f) => labels[rank * 8 + f].padRight(6)).join(' '),
+        );
+      }
+      await File('$boardRoot/labels.txt').writeAsString(labelGrid.toString());
+
+      debugPrint('[BoardDetector] Training squares saved → $boardRoot');
+    } catch (e) {
+      debugPrint('[BoardDetector] Training save error: $e');
+    }
+  }
+
+  /// Tiles all 64 squares into a single 512×512 PNG for visual reference.
+  static Future<void> _saveBoardImage(
+    List<Float32List> squares,
+    String path,
+  ) async {
+    const sqSize = 64;
+    const boardSize = sqSize * 8;
+    final rgba = Uint8List(boardSize * boardSize * 4);
+    for (int i = 0; i < 64; i++) {
+      final rankOff = (i ~/ 8) * sqSize;
+      final fileOff = (i % 8) * sqSize;
+      for (int y = 0; y < sqSize; y++) {
+        for (int x = 0; x < sqSize; x++) {
+          final v = (squares[i][(y * sqSize + x) * 3] * 255).clamp(0, 255).round();
+          final dst = ((rankOff + y) * boardSize + fileOff + x) * 4;
+          rgba[dst] = v; rgba[dst + 1] = v; rgba[dst + 2] = v; rgba[dst + 3] = 255;
+        }
+      }
+    }
+    final buffer = await ui.ImmutableBuffer.fromUint8List(rgba);
+    final descriptor = ui.ImageDescriptor.raw(
+      buffer, width: boardSize, height: boardSize, pixelFormat: ui.PixelFormat.rgba8888,
+    );
+    final codec = await descriptor.instantiateCodec();
+    final frame = await codec.getNextFrame();
+    final byteData = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+    await File(path).writeAsBytes(byteData!.buffer.asUint8List());
+  }
+
+  /// Converts a 64×64×3 grayscale Float32List square to a PNG byte array.
+  static Future<Uint8List> _squareToPng(Float32List square) async {
+    const size = 64;
+    final rgba = Uint8List(size * size * 4);
+    for (int i = 0; i < size * size; i++) {
+      final v = (square[i * 3] * 255).clamp(0, 255).round();
+      rgba[i * 4] = v;
+      rgba[i * 4 + 1] = v;
+      rgba[i * 4 + 2] = v;
+      rgba[i * 4 + 3] = 255;
+    }
+    final buffer = await ui.ImmutableBuffer.fromUint8List(rgba);
+    final descriptor = ui.ImageDescriptor.raw(
+      buffer,
+      width: size,
+      height: size,
+      pixelFormat: ui.PixelFormat.rgba8888,
+    );
+    final codec = await descriptor.instantiateCodec();
+    final frame = await codec.getNextFrame();
+    final byteData = await frame.image.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+    return byteData!.buffer.asUint8List();
   }
 }
