@@ -396,11 +396,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     );
   }
 
-  /// Called when the user overrides a suspected new-game diagram to be treated
-  /// as an intermediate diagram (game continues, no custom start FEN needed).
+  /// Called when the user overrides a diagram to be treated as intermediate.
+  /// The forced FEN (if any) is kept so the board position is preserved.
   void _onMarkAsIntermediate(int gameIndex) {
     final overrides = _collectUserOverrides(_currentPage);
-    overrides.forcedFens.remove(gameIndex);
+    // Do NOT remove forcedFens[gameIndex] — the position shown before discarding
+    // must be preserved as the starting point of the intermediate game.
     overrides.forcedIntermediates.add(gameIndex);
     overrides.forcedNotADiagrams.remove(gameIndex);
     _loadPageAnalysis(

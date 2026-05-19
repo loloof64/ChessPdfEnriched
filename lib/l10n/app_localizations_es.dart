@@ -139,4 +139,13 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get markAsSuspectedDiagram => 'Deshacer';
+
+  @override
+  String get discard => 'Eliminar';
+
+  @override
+  String get discardBecauseIntermediate => 'porque es intermedio';
+
+  @override
+  String get discardBecauseNewGame => 'porque es nueva partida';
 }

@@ -58,5 +58,8 @@
   "markAsIntermediate": "Intermediate",
   "markAsNotADiagram": "Not a diagram",
   "notADiagramLabel": "Confirmed: not a board diagram — game continues.",
-  "markAsSuspectedDiagram": "Undo"
+  "markAsSuspectedDiagram": "Undo",
+  "discard": "Delete",
+  "discardBecauseIntermediate": "because is intermediate",
+  "discardBecauseNewGame": "because is new game"
 }

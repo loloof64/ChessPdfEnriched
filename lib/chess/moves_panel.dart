@@ -70,6 +70,8 @@ class MovesPanel extends StatelessWidget {
           _InheritedFenBanner(
             fen: startFen,
             onEdit: onStartFenProvided,
+            onMarkAsIntermediate: onMarkAsIntermediate,
+            onMarkAsNotADiagram: onMarkAsNotADiagram,
           ),
         if (fenSource == FenSource.suspectedDiagram)
           _DiagramWarningBanner(
@@ -94,6 +96,8 @@ class MovesPanel extends StatelessWidget {
           _UserFenBanner(
             fen: startFen,
             onEdit: onStartFenProvided,
+            onMarkAsIntermediate: onMarkAsIntermediate,
+            onMarkAsNotADiagram: onMarkAsNotADiagram,
           ),
       ],
     );
@@ -250,9 +254,16 @@ class _DetectedFenBanner extends StatelessWidget {
 }
 
 class _InheritedFenBanner extends StatelessWidget {
-  const _InheritedFenBanner({required this.fen, required this.onEdit});
+  const _InheritedFenBanner({
+    required this.fen,
+    required this.onEdit,
+    this.onMarkAsIntermediate,
+    this.onMarkAsNotADiagram,
+  });
   final String fen;
   final ValueChanged<String> onEdit;
+  final VoidCallback? onMarkAsIntermediate;
+  final VoidCallback? onMarkAsNotADiagram;
 
   @override
   Widget build(BuildContext context) {
@@ -279,6 +290,13 @@ class _InheritedFenBanner extends StatelessWidget {
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               child: Text(l.edit, style: const TextStyle(fontSize: 11)),
+            ),
+            _DiscardPopup(
+              label: l.discard,
+              intermediateLabel: l.discardBecauseIntermediate,
+              newGameLabel: l.discardBecauseNewGame,
+              onMarkAsIntermediate: onMarkAsIntermediate,
+              onMarkAsNotADiagram: onMarkAsNotADiagram,
             ),
           ],
         ),
@@ -537,9 +555,16 @@ class _NotADiagramBanner extends StatelessWidget {
 }
 
 class _UserFenBanner extends StatelessWidget {
-  const _UserFenBanner({required this.fen, required this.onEdit});
+  const _UserFenBanner({
+    required this.fen,
+    required this.onEdit,
+    this.onMarkAsIntermediate,
+    this.onMarkAsNotADiagram,
+  });
   final String fen;
   final ValueChanged<String> onEdit;
+  final VoidCallback? onMarkAsIntermediate;
+  final VoidCallback? onMarkAsNotADiagram;
 
   @override
   Widget build(BuildContext context) {
@@ -568,6 +593,13 @@ class _UserFenBanner extends StatelessWidget {
               ),
               child: Text(l.edit, style: const TextStyle(fontSize: 11)),
             ),
+            _DiscardPopup(
+              label: l.discard,
+              intermediateLabel: l.discardBecauseIntermediate,
+              newGameLabel: l.discardBecauseNewGame,
+              onMarkAsIntermediate: onMarkAsIntermediate,
+              onMarkAsNotADiagram: onMarkAsNotADiagram,
+            ),
           ],
         ),
       ),
@@ -585,6 +617,61 @@ class _UserFenBanner extends StatelessWidget {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+
+class _DiscardPopup extends StatelessWidget {
+  const _DiscardPopup({
+    required this.label,
+    required this.intermediateLabel,
+    required this.newGameLabel,
+    this.onMarkAsIntermediate,
+    this.onMarkAsNotADiagram,
+  });
+
+  final String label;
+  final String intermediateLabel;
+  final String newGameLabel;
+  final VoidCallback? onMarkAsIntermediate;
+  final VoidCallback? onMarkAsNotADiagram;
+
+  @override
+  Widget build(BuildContext context) {
+    if (onMarkAsIntermediate == null && onMarkAsNotADiagram == null) {
+      return const SizedBox.shrink();
+    }
+    return PopupMenuButton<_DiscardChoice>(
+      tooltip: label,
+      padding: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Text(label,
+            style: const TextStyle(fontSize: 11, color: Colors.red)),
+      ),
+      onSelected: (choice) {
+        if (choice == _DiscardChoice.intermediate) {
+          onMarkAsIntermediate?.call();
+        } else {
+          onMarkAsNotADiagram?.call();
+        }
+      },
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          value: _DiscardChoice.intermediate,
+          child: Text(intermediateLabel,
+              style: const TextStyle(fontSize: 13)),
+        ),
+        PopupMenuItem(
+          value: _DiscardChoice.newGame,
+          child: Text(newGameLabel,
+              style: const TextStyle(fontSize: 13)),
+        ),
+      ],
+    );
+  }
+}
+
+enum _DiscardChoice { intermediate, newGame }
 
 // ---------------------------------------------------------------------------
 // Board editor dialog

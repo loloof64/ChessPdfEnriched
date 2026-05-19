@@ -333,6 +333,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Undo'**
   String get markAsSuspectedDiagram;
+
+  /// No description provided for @discard.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get discard;
+
+  /// No description provided for @discardBecauseIntermediate.
+  ///
+  /// In en, this message translates to:
+  /// **'because is intermediate'**
+  String get discardBecauseIntermediate;
+
+  /// No description provided for @discardBecauseNewGame.
+  ///
+  /// In en, this message translates to:
+  /// **'because is new game'**
+  String get discardBecauseNewGame;
 }
 
 class _AppLocalizationsDelegate

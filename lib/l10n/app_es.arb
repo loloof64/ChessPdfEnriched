@@ -58,5 +58,8 @@
   "markAsIntermediate": "Intermedio",
   "markAsNotADiagram": "No es un diagrama",
   "notADiagramLabel": "Confirmado: no es un diagrama de ajedrez — la partida continúa.",
-  "markAsSuspectedDiagram": "Deshacer"
+  "markAsSuspectedDiagram": "Deshacer",
+  "discard": "Eliminar",
+  "discardBecauseIntermediate": "porque es intermedio",
+  "discardBecauseNewGame": "porque es nueva partida"
 }

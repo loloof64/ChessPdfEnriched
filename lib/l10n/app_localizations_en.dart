@@ -137,4 +137,13 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get markAsSuspectedDiagram => 'Undo';
+
+  @override
+  String get discard => 'Delete';
+
+  @override
+  String get discardBecauseIntermediate => 'because is intermediate';
+
+  @override
+  String get discardBecauseNewGame => 'because is new game';
 }

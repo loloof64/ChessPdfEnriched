@@ -139,4 +139,13 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get markAsSuspectedDiagram => 'Annuler';
+
+  @override
+  String get discard => 'Supprimer';
+
+  @override
+  String get discardBecauseIntermediate => 'car c\'est intermédiaire';
+
+  @override
+  String get discardBecauseNewGame => 'car c\'est une nouvelle partie';
 }

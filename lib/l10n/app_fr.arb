@@ -58,5 +58,8 @@
   "markAsIntermediate": "Intermédiaire",
   "markAsNotADiagram": "Pas un diagramme",
   "notADiagramLabel": "Confirmé : pas un diagramme d'échecs — la partie continue.",
-  "markAsSuspectedDiagram": "Annuler"
+  "markAsSuspectedDiagram": "Annuler",
+  "discard": "Supprimer",
+  "discardBecauseIntermediate": "car c'est intermédiaire",
+  "discardBecauseNewGame": "car c'est une nouvelle partie"
 }

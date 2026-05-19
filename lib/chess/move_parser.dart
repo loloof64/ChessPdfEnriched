@@ -391,7 +391,8 @@ class MoveParser {
         _findDiagramSplitIndices(charRects, pageHeight: pageHeight);
 
     PageAnalysis maybeMarkIntermediate(PageAnalysis a, int idx) {
-      if (a.fenSource == FenSource.userProvided) return a;
+      // Explicit user overrides take priority over everything, including a
+      // userProvided FEN — this is what lets the user re-label a detected board.
       if (forcedNotADiagrams != null && forcedNotADiagrams.contains(idx)) {
         return PageAnalysis(
           startFen: a.startFen,
@@ -408,6 +409,8 @@ class MoveParser {
           header: a.header,
         );
       }
+      // Skip automatic diagram detection for user-provided FENs.
+      if (a.fenSource == FenSource.userProvided) return a;
       return a;
     }
 
