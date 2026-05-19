@@ -456,6 +456,17 @@ class MoveParser {
         ),
     ];
 
+    // Drop empty first segment (header/prose text that precedes the first board
+    // diagram on the page — it carries no FEN and typically contains no moves).
+    // Keep it when it has an inherited FEN: the user may want to see the
+    // continued position and can dismiss it manually.
+    if (segments.length > 1 &&
+        segments.first.moves.isEmpty &&
+        segments.first.fenSource != FenSource.inheritedFromPreviousPage &&
+        (forcedFens == null || !forcedFens.containsKey(0))) {
+      segments.removeAt(0);
+    }
+
     // N boards produce N+1 segments; the last covers text after the final board
     // and has no associated detected FEN. Drop it when it has no moves and the
     // user has not explicitly provided a FEN for it.

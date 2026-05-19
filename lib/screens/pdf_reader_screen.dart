@@ -213,10 +213,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       );
 
       // Use auto-detected FENs if available (user override takes precedence).
+      // Board i's FEN belongs to segment i+1 (the text that follows the board diagram).
       final autoDetectedFens = <int, String>{};
       for (int i = 0; i < boardResult.detectedFens.length; i++) {
         final fen = boardResult.detectedFens[i];
-        if (fen != null) autoDetectedFens[i] = fen;
+        if (fen != null) autoDetectedFens[i + 1] = fen;
       }
 
       final games = MoveParser.parse(
@@ -289,14 +290,28 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     final prevGames = _cache[pageNumber - 1];
     if (prevGames == null || prevGames.isEmpty) return null;
     final lastGame = prevGames.last;
-    if (lastGame.moves.isEmpty) return null;
+
+    // Inherit the last-reached position; if no moves were parsed yet on that
+    // page (board detected but all analysis is on the next page), fall back to
+    // the game's start FEN — but only when it came from a real source.
+    final String? fenToInherit;
+    if (lastGame.moves.isNotEmpty) {
+      fenToInherit = lastGame.moves.last.fenAfter;
+    } else if (lastGame.fenSource == FenSource.userProvided ||
+               lastGame.fenSource == FenSource.detectedInText ||
+               lastGame.fenSource == FenSource.userConfirmedIntermediate) {
+      fenToInherit = lastGame.startFen;
+    } else {
+      fenToInherit = null;
+    }
+    if (fenToInherit == null) return null;
 
     final sample = fullText.length > 200
         ? fullText.substring(0, 200)
         : fullText;
     if (RegExp(r'\b1\.').hasMatch(sample)) return null;
 
-    return lastGame.moves.last.fenAfter;
+    return fenToInherit;
   }
 
   Future<void> _loadRawTextForDebug(int pageNumber) async {

@@ -394,12 +394,10 @@ class BoardDetector {
   // ─────────────────────────────────────────────────────────────────────────
   // Training data export
 
-  /// Saves the 64 squares from a detected board into
-  /// `<documents>/chess_training/<timestamp>/<label>/rR_fF.png`.
-  /// Also saves `board.png` (the full 8×8 grid) and `labels.txt` (rank-major
-  /// label grid) as visual references for reviewing and correcting labels.
-  /// The folder structure mirrors the training class layout so the user only
-  /// needs to move misclassified files to the correct folder before retraining.
+  /// Saves the 64 squares from a detected board directly into
+  /// `<documents>/chess_training/book_squares/<label>/<timestamp>_rR_fF.png`.
+  /// The timestamp prefix avoids filename collisions when multiple boards are
+  /// saved concurrently. The folder structure mirrors the training class layout.
   static Future<void> _saveSquaresForTraining(
     List<Float32List> squares,
     List<String> labels,
@@ -407,64 +405,22 @@ class BoardDetector {
     try {
       final docsDir = await getApplicationDocumentsDirectory();
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final boardRoot = '${docsDir.path}/chess_training/$ts';
+      final bookSquaresRoot = '${docsDir.path}/chess_training/book_squares';
 
-      // Save individual squares organised by detected label.
       for (int i = 0; i < 64; i++) {
         final rank = i ~/ 8;
         final file = i % 8;
         final label = labels[i];
-        final classDir = Directory('$boardRoot/$label');
+        final classDir = Directory('$bookSquaresRoot/$label');
         await classDir.create(recursive: true);
         final png = await _squareToPng(squares[i]);
-        await File('${classDir.path}/r${rank}_f$file.png').writeAsBytes(png);
+        await File('${classDir.path}/${ts}_r${rank}_f$file.png').writeAsBytes(png);
       }
 
-      // Save a full 8×8 board PNG (squares tiled, 512×512 px).
-      await _saveBoardImage(squares, '$boardRoot/board.png');
-
-      // Save a human-readable label grid for quick review.
-      final labelGrid = StringBuffer();
-      for (int rank = 0; rank < 8; rank++) {
-        labelGrid.writeln(
-          List.generate(8, (f) => labels[rank * 8 + f].padRight(6)).join(' '),
-        );
-      }
-      await File('$boardRoot/labels.txt').writeAsString(labelGrid.toString());
-
-      debugPrint('[BoardDetector] Training squares saved → $boardRoot');
+      debugPrint('[BoardDetector] Training squares saved → $bookSquaresRoot');
     } catch (e) {
       debugPrint('[BoardDetector] Training save error: $e');
     }
-  }
-
-  /// Tiles all 64 squares into a single 512×512 PNG for visual reference.
-  static Future<void> _saveBoardImage(
-    List<Float32List> squares,
-    String path,
-  ) async {
-    const sqSize = 64;
-    const boardSize = sqSize * 8;
-    final rgba = Uint8List(boardSize * boardSize * 4);
-    for (int i = 0; i < 64; i++) {
-      final rankOff = (i ~/ 8) * sqSize;
-      final fileOff = (i % 8) * sqSize;
-      for (int y = 0; y < sqSize; y++) {
-        for (int x = 0; x < sqSize; x++) {
-          final v = (squares[i][(y * sqSize + x) * 3] * 255).clamp(0, 255).round();
-          final dst = ((rankOff + y) * boardSize + fileOff + x) * 4;
-          rgba[dst] = v; rgba[dst + 1] = v; rgba[dst + 2] = v; rgba[dst + 3] = 255;
-        }
-      }
-    }
-    final buffer = await ui.ImmutableBuffer.fromUint8List(rgba);
-    final descriptor = ui.ImageDescriptor.raw(
-      buffer, width: boardSize, height: boardSize, pixelFormat: ui.PixelFormat.rgba8888,
-    );
-    final codec = await descriptor.instantiateCodec();
-    final frame = await codec.getNextFrame();
-    final byteData = await frame.image.toByteData(format: ui.ImageByteFormat.png);
-    await File(path).writeAsBytes(byteData!.buffer.asUint8List());
   }
 
   /// Converts a 64×64×3 grayscale Float32List square to a PNG byte array.
