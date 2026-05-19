@@ -60,7 +60,6 @@ class BoardDetector {
     final iW = (page.width * _scale).round();
     final iH = (page.height * _scale).round();
 
-    debugPrint('[BoardDetector] rendering $iW×$iH px…');
     final image = await page.render(
       x: 0, y: 0,
       width: iW, height: iH,
@@ -100,8 +99,6 @@ class BoardDetector {
       final hLines = _linePositions(hRun, iH);
       final vLines = _linePositions(vRun, iW);
 
-      debugPrint('[BoardDetector] drawn hLines=${hLines.length}  vLines=${vLines.length}');
-
       final classifier = await ChessPieceClassifier.load();
 
       final boards = <({int x, int y, int s, String fen})>[];
@@ -135,18 +132,10 @@ class BoardDetector {
               final cBot   = _rowCoverage(dV, iW, hLines[hj], vLines[vi], vLines[vj]);
               final cLeft  = _colCoverage(dH, iW, vLines[vi], hLines[hi], hLines[hj]);
               final cRight = _colCoverage(dH, iW, vLines[vj], hLines[hi], hLines[hj]);
-              debugPrint('[BoardDetector] rect x=$x0 y=$y0 s=$s '
-                  'cov top=${cTop.toStringAsFixed(2)} bot=${cBot.toStringAsFixed(2)} '
-                  'left=${cLeft.toStringAsFixed(2)} right=${cRight.toStringAsFixed(2)}');
               if (cTop < _minSideCoverage || cBot < _minSideCoverage ||
                   cLeft < _minSideCoverage || cRight < _minSideCoverage) { continue; }
 
-              if (!_hasInternalGrid(dV, dH, iW, x0, y0, s)) {
-                debugPrint('[BoardDetector] rejected (no internal grid): x=$x0 y=$y0 s=$s');
-                continue;
-              }
-
-              debugPrint('[BoardDetector] candidate x=$x0 y=$y0 s=$s (hS=${hS.toStringAsFixed(1)} vS=${vS.toStringAsFixed(1)})');
+              if (!_hasInternalGrid(dV, dH, iW, x0, y0, s)) continue;
 
               try {
                 final squareImages = _extractSquares(gray, iW, iH, x0, y0, s);
@@ -154,16 +143,13 @@ class BoardDetector {
                 if (labels != null) {
                   final fen = _buildFen(labels);
                   if (fen != null) {
-                    debugPrint('[BoardDetector] confirmed board x=$x0 y=$y0 s=$s FEN=$fen');
                     boards.add((x: x0, y: y0, s: s, fen: fen));
                     if (_saveTrainingData) {
                       unawaited(_saveSquaresForTraining(squareImages, labels));
                     }
                   }
                 }
-              } catch (e) {
-                debugPrint('[BoardDetector] classification error: $e');
-              }
+              } catch (_) {}
             }
           }
         }
@@ -171,13 +157,10 @@ class BoardDetector {
 
       classifier.dispose();
 
-      debugPrint('[BoardDetector] ${boards.length} board(s) confirmed');
-
       final splits = _toSplits(boards, charRects, page.height);
       final top = _isTopOfPage(boards, charRects, page.height);
       final detectedFens = boards.map((b) => b.fen as String?).toList();
 
-      debugPrint('[BoardDetector] splits=$splits  topBoard=$top  fens=$detectedFens');
       return (splitIndices: splits, topOfPageBoardDetected: top, detectedFens: detectedFens);
     } finally {
       image.dispose();
@@ -280,7 +263,6 @@ class BoardDetector {
     for (int k = 1; k <= 7; k++) {
       if (_colCoverage(dH, iW, x0 + k * s, y0, y1) >= _minInternalLineCov) vCount++;
     }
-    debugPrint('[BoardDetector] internal grid check x=$x0 y=$y0 s=$s → hLines=$hCount/7 vLines=$vCount/7');
     return hCount >= _minInternalLinesRequired && vCount >= _minInternalLinesRequired;
   }
 
@@ -332,15 +314,9 @@ class BoardDetector {
       fenRows.add(row);
     }
     final fen = '${fenRows.join('/')} w - - 0 1';
-    debugPrint('[BoardDetector] FEN: $fen');
-    final labelCounts = <String, int>{};
-    for (final l in labels) { labelCounts[l] = (labelCounts[l] ?? 0) + 1; }
-    debugPrint('[BoardDetector] label counts: $labelCounts');
     try {
       dc.Chess.fromSetup(dc.Setup.parseFen(fen));
-    } catch (e) {
-      debugPrint('[BoardDetector] FEN is illegal (user can correct): $e');
-    }
+    } catch (_) {}
     return fen;
   }
 
@@ -417,10 +393,7 @@ class BoardDetector {
         await File('${classDir.path}/${ts}_r${rank}_f$file.png').writeAsBytes(png);
       }
 
-      debugPrint('[BoardDetector] Training squares saved → $bookSquaresRoot');
-    } catch (e) {
-      debugPrint('[BoardDetector] Training save error: $e');
-    }
+    } catch (_) {}
   }
 
   /// Converts a 64×64×3 grayscale Float32List square to a PNG byte array.
