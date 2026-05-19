@@ -161,8 +161,19 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _pageGames = null;
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
+      _analysing = true;
     });
-    await _loadPageAnalysis(_currentPage);
+    try {
+      final totalPages = _document!.pages.length;
+      for (int page = 1; page <= totalPages; page++) {
+        if (!mounted) break;
+        await _loadPageAnalysis(page);
+        // Keep button disabled between pages during full-document reanalysis.
+        if (mounted) setState(() => _analysing = true);
+      }
+    } finally {
+      if (mounted) setState(() => _analysing = false);
+    }
   }
 
   Future<void> _loadPageAnalysis(
