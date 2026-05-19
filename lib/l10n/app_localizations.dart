@@ -250,6 +250,24 @@ abstract class AppLocalizations {
   /// **'Castling:'**
   String get castling;
 
+  /// No description provided for @moveNumber.
+  ///
+  /// In en, this message translates to:
+  /// **'Move number:'**
+  String get moveNumber;
+
+  /// No description provided for @enPassantFile.
+  ///
+  /// In en, this message translates to:
+  /// **'En passant file:'**
+  String get enPassantFile;
+
+  /// No description provided for @halfMovesCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Half-moves (draw):'**
+  String get halfMovesCount;
+
   /// No description provided for @pasteFromClipboard.
   ///
   /// In en, this message translates to:

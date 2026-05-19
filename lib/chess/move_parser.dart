@@ -562,6 +562,33 @@ class MoveParser {
     final tokens = _tokenise(text);
 
     // ------------------------------------------------------------------
+    // 3b. Correct fullmove number from the first move-number token.
+    // Board detection always emits fullmove=1; deduce the real number here.
+    if (startFen.isNotEmpty) {
+      final pureNumRxEarly = RegExp(r'^(\d+)\.+$');
+      final combinedRxEarly = RegExp(r'^(\d+)\.{1,3}[^.]');
+      for (final tok in tokens) {
+        final t = tok.text;
+        final pm = pureNumRxEarly.firstMatch(t) ?? combinedRxEarly.firstMatch(t);
+        if (pm != null) {
+          final num = int.tryParse(pm.group(1)!);
+          if (num != null) {
+            final parts = startFen.split(' ');
+            if (parts.length == 6 && parts[5] != num.toString()) {
+              parts[5] = num.toString();
+              final correctedFen = parts.join(' ');
+              try {
+                position = dc.Chess.fromSetup(dc.Setup.parseFen(correctedFen));
+                startFen = correctedFen;
+              } catch (_) {}
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    // ------------------------------------------------------------------
     // 4. Parse chess moves.
 
     final moves = <CachedMove>[];

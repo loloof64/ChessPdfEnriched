@@ -699,6 +699,12 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
   late Pieces _pieces;
   late bool _whiteTurn;
   bool _wK = true, _wQ = true, _bK = true, _bQ = true;
+  int _moveNumber = 1;
+  late final TextEditingController _moveNumCtrl;
+  /// Single file letter a–h, or empty for no en-passant.
+  String _epFile = '';
+  int _halfMoveClock = 0;
+  late final TextEditingController _halfMoveCtrl;
 
   EditorPointerMode _pointerMode = EditorPointerMode.drag;
 
@@ -722,11 +728,15 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
       widget.initialFen.isNotEmpty ? widget.initialFen : _standardFen,
     );
     _fenCtrl = TextEditingController(text: _currentFen);
+    _moveNumCtrl = TextEditingController(text: _moveNumber.toString());
+    _halfMoveCtrl = TextEditingController(text: _halfMoveClock.toString());
   }
 
   @override
   void dispose() {
     _fenCtrl.dispose();
+    _moveNumCtrl.dispose();
+    _halfMoveCtrl.dispose();
     super.dispose();
   }
 
@@ -739,6 +749,10 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
     _wQ = c.contains('Q');
     _bK = c.contains('k');
     _bQ = c.contains('q');
+    _moveNumber = (parts.length >= 6 ? int.tryParse(parts[5]) : null) ?? 1;
+    final ep = parts.length >= 4 ? parts[3] : '-';
+    _epFile = (ep != '-' && ep.isNotEmpty) ? ep[0] : '';
+    _halfMoveClock = (parts.length >= 5 ? int.tryParse(parts[4]) : null) ?? 0;
   }
 
   String get _currentFen {
@@ -750,7 +764,9 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
       if (_bK) 'k',
       if (_bQ) 'q',
     ].join();
-    return '$board $side ${castling.isEmpty ? '-' : castling} - 0 1';
+    final epRank = _whiteTurn ? '6' : '3';
+    final ep = _epFile.isNotEmpty ? '$_epFile$epRank' : '-';
+    return '$board $side ${castling.isEmpty ? '-' : castling} $ep $_halfMoveClock $_moveNumber';
   }
 
   void _applyFenText(String text) {
@@ -762,6 +778,8 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
         _fenFieldError = null;
         _applyError = null;
         // Don't touch _fenCtrl — the text field is the source here.
+        _moveNumCtrl.text = _moveNumber.toString();
+        _halfMoveCtrl.text = _halfMoveClock.toString();
       });
     } catch (_) {
       setState(() => _fenFieldError = AppLocalizations.of(context)!.invalidFen);
@@ -1033,6 +1051,106 @@ class _BoardEditorDialogState extends State<_BoardEditorDialog> {
                 label: 'q',
                 value: _bQ,
                 onChanged: (v) => setState(() { _bQ = v; _fenCtrl.text = _currentFen; })),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text(l.moveNumber, style: const TextStyle(fontSize: 12)),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 64,
+              child: TextField(
+                controller: _moveNumCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(fontSize: 12),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                ),
+                onChanged: (v) {
+                  final n = int.tryParse(v);
+                  if (n != null && n >= 1) {
+                    setState(() {
+                      _moveNumber = n;
+                      _fenCtrl.text = _currentFen;
+                    });
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text(l.enPassantFile, style: const TextStyle(fontSize: 12)),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 80,
+              child: DropdownButtonFormField<String>(
+                initialValue: _epFile.isEmpty ? '-' : _epFile,
+                isDense: true,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                ),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+                items: [
+                  const DropdownMenuItem(value: '-', child: Text('-')),
+                  for (final f in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'])
+                    DropdownMenuItem(value: f, child: Text(f)),
+                ],
+                onChanged: (v) => setState(() {
+                  _epFile = (v == null || v == '-') ? '' : v;
+                  _fenCtrl.text = _currentFen;
+                }),
+              ),
+            ),
+            if (_epFile.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Text(
+                _whiteTurn ? '6' : '3',
+                style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text(l.halfMovesCount, style: const TextStyle(fontSize: 12)),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 64,
+              child: TextField(
+                controller: _halfMoveCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(fontSize: 12),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                ),
+                onChanged: (v) {
+                  final n = int.tryParse(v);
+                  if (n != null && n >= 0) {
+                    setState(() {
+                      _halfMoveClock = n;
+                      _fenCtrl.text = _currentFen;
+                    });
+                  }
+                },
+              ),
+            ),
           ],
         ),
       ],

@@ -94,6 +94,15 @@ class AppLocalizationsEs extends AppLocalizations {
   String get castling => 'Enroques:';
 
   @override
+  String get moveNumber => 'Número de jugada:';
+
+  @override
+  String get enPassantFile => 'Columna al paso:';
+
+  @override
+  String get halfMovesCount => 'Semijugadas (tablas):';
+
+  @override
   String get pasteFromClipboard => 'Pegar desde el portapapeles';
 
   @override

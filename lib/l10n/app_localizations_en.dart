@@ -93,6 +93,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get castling => 'Castling:';
 
   @override
+  String get moveNumber => 'Move number:';
+
+  @override
+  String get enPassantFile => 'En passant file:';
+
+  @override
+  String get halfMovesCount => 'Half-moves (draw):';
+
+  @override
   String get pasteFromClipboard => 'Paste from clipboard';
 
   @override

@@ -95,6 +95,15 @@ class AppLocalizationsFr extends AppLocalizations {
   String get castling => 'Roques :';
 
   @override
+  String get moveNumber => 'Numéro de coup :';
+
+  @override
+  String get enPassantFile => 'Colonne en passant :';
+
+  @override
+  String get halfMovesCount => 'Demi-coups (nulle) :';
+
+  @override
   String get pasteFromClipboard => 'Coller depuis le presse-papiers';
 
   @override
