@@ -603,7 +603,8 @@ class MoveParser {
           currentMoveNum = num;
           expectBlack = dots.length > 1;
           // Fall through to try parsing movePart as the move below.
-          final normalised = _normaliseToken(movePart);
+          // Apply fontMap before normalisation so it overrides language mappings.
+          final normalised = _normaliseToken(_applyFontMapToFirst(movePart, fontMap));
           final move = _resolveMove(normalised, position, fontMap);
           if (move != null) {
             final fenBefore = position.fen;
@@ -629,7 +630,7 @@ class MoveParser {
 
       if (currentMoveNum == null) continue;
 
-      final normalised = _normaliseToken(raw);
+      final normalised = _normaliseToken(_applyFontMapToFirst(raw, fontMap));
       final move = _resolveMove(normalised, position, fontMap);
       if (move == null) {
         debugPrint('[MoveParser] skip "$raw" (norm="$normalised") move=$currentMoveNum black=$expectBlack');
@@ -741,6 +742,16 @@ class MoveParser {
       result.add(_Token(text.substring(start, i), start, i));
     }
     return result;
+  }
+
+  /// Replace the first character of [token] using [fontMap] before any
+  /// language normalisation, so fontMap entries always take priority over
+  /// the French/German piece-letter translations in [_normaliseToken].
+  static String _applyFontMapToFirst(String token, Map<String, String>? fontMap) {
+    if (fontMap == null || token.isEmpty) return token;
+    final mapped = fontMap[token[0]];
+    if (mapped == null) return token;
+    return mapped + token.substring(1);
   }
 
   static bool _isDigit(String c) {

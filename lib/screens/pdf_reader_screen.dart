@@ -1,5 +1,7 @@
 import 'dart:math' show min;
+import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -50,6 +52,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   Future<void> _loadDocument() async {
     try {
+      // Pre-populate font map from the Colab-generated figurine mapping.
+      final raw = await rootBundle.loadString('assets/figurine_mapping.json');
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      final mapping = json['mapping'] as Map<String, dynamic>;
+      _fontMap.addAll(mapping.map((k, v) => MapEntry(k, v as String)));
+
       final doc = await PdfDocument.openFile(widget.filePath);
       final cached = await AnalysisCache.load(widget.filePath);
 
@@ -226,7 +234,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         preComputedSplits: boardResult.splitIndices,
         topOfPageBoardDetected: boardResult.topOfPageBoardDetected,
         inheritedFen: inheritedFen,
-        forcedFens: forcedFens ?? (autoDetectedFens.isEmpty ? null : autoDetectedFens),
+        forcedFens:
+            forcedFens ?? (autoDetectedFens.isEmpty ? null : autoDetectedFens),
         forcedIntermediates: forcedIntermediates,
         forcedNotADiagrams: forcedNotADiagrams,
         fontMap: _fontMap,
@@ -298,8 +307,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     if (lastGame.moves.isNotEmpty) {
       fenToInherit = lastGame.moves.last.fenAfter;
     } else if (lastGame.fenSource == FenSource.userProvided ||
-               lastGame.fenSource == FenSource.detectedInText ||
-               lastGame.fenSource == FenSource.userConfirmedIntermediate) {
+        lastGame.fenSource == FenSource.detectedInText ||
+        lastGame.fenSource == FenSource.userConfirmedIntermediate) {
       fenToInherit = lastGame.startFen;
     } else {
       fenToInherit = null;

@@ -94,6 +94,7 @@ copy C:\tmp\tflite_out\Release\tensorflowlite_c.dll ^
 ```
 
 > **Note:** The Windows `CMakeLists.txt` equivalent of the Linux install snippet is:
+>
 > ```cmake
 > install(
 >   FILES "${PROJECT_BUILD_DIR}/../blobs/libtensorflowlite_c-win.dll"
@@ -101,4 +102,10 @@ copy C:\tmp\tflite_out\Release\tensorflowlite_c.dll ^
 >   COMPONENT Runtime
 > )
 > ```
+>
 > Add this to `windows/CMakeLists.txt` if you need release builds to bundle it.
+
+### Figurine mapping model
+
+1. Import the **train_figurine_mapper.ipynb** into your Google Colab, and execute all cells (don't forget to add a pdf book to your Google drive and adapt step 3 cell)
+2. Download the produced model in folder **assets**
