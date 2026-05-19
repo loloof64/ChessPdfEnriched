@@ -124,7 +124,9 @@ class MoveParser {
     // 1. Apply learnt font mapping to the leading character.
     String remapped = token;
     if (fontMap != null && fontMap.containsKey(token[0])) {
-      remapped = fontMap[token[0]]! + token.substring(1);
+      final pieceStr = fontMap[token[0]]!;
+      // Empty mapping means pawn glyph: the file letter is already token[0], keep it.
+      if (pieceStr.isNotEmpty) remapped = pieceStr + token.substring(1);
     }
 
     // 2. Standard parseSan.
@@ -564,25 +566,39 @@ class MoveParser {
     final tokens = _tokenise(text);
 
     // ------------------------------------------------------------------
-    // 3b. Correct fullmove number from the first move-number token.
-    // Board detection always emits fullmove=1; deduce the real number here.
+    // 3b. Correct fullmove number AND side to move from the first move-number
+    // token. Board detection always emits fullmove=1 and side=white; the dots
+    // ("." vs "...") tell us which side actually moves first.
     if (startFen.isNotEmpty) {
-      final pureNumRxEarly = RegExp(r'^(\d+)\.+$');
-      final combinedRxEarly = RegExp(r'^(\d+)\.{1,3}[^.]');
+      final pureNumRxEarly = RegExp(r'^(\d+)(\.+)$');
+      final combinedRxEarly = RegExp(r'^(\d+)(\.{1,3})[^.]');
       for (final tok in tokens) {
         final t = tok.text;
         final pm = pureNumRxEarly.firstMatch(t) ?? combinedRxEarly.firstMatch(t);
         if (pm != null) {
           final num = int.tryParse(pm.group(1)!);
           if (num != null) {
+            final dots = pm.group(2) ?? '.';
+            final firstMoveIsBlack = dots.length > 1;
             final parts = startFen.split(' ');
-            if (parts.length == 6 && parts[5] != num.toString()) {
-              parts[5] = num.toString();
-              final correctedFen = parts.join(' ');
-              try {
-                position = dc.Chess.fromSetup(dc.Setup.parseFen(correctedFen));
-                startFen = correctedFen;
-              } catch (_) {}
+            if (parts.length == 6) {
+              bool changed = false;
+              if (parts[5] != num.toString()) {
+                parts[5] = num.toString();
+                changed = true;
+              }
+              final expectedSide = firstMoveIsBlack ? 'b' : 'w';
+              if (parts[1] != expectedSide) {
+                parts[1] = expectedSide;
+                changed = true;
+              }
+              if (changed) {
+                final correctedFen = parts.join(' ');
+                try {
+                  position = dc.Chess.fromSetup(dc.Setup.parseFen(correctedFen));
+                  startFen = correctedFen;
+                } catch (_) {}
+              }
             }
             break;
           }
@@ -594,6 +610,9 @@ class MoveParser {
     // 4. Parse chess moves.
 
     final moves = <CachedMove>[];
+    // Position tree: one checkpoint saved *before* each accepted move.
+    // Enables backtracking when commentary moves corrupt currentMoveNum/position.
+    final checkpoints = <_PositionCheckpoint>[];
     int? currentMoveNum;
     bool expectBlack = false;
 
@@ -626,36 +645,75 @@ class MoveParser {
         final num = int.parse(combined.group(1)!);
         final dots = combined.group(2)!;
         final movePart = combined.group(3)!;
-        // Treat as a move number only when it's plausible (not a huge backward
-        // jump, which would indicate the digit is actually a piece glyph).
-        if (currentMoveNum == null || num >= currentMoveNum - 1) {
+        final targetIsBlack = dots.length > 1;
+        // Apply fontMap before normalisation so it overrides language mappings.
+        final (mapped1, wasMapped1) = _applyFontMapToFirst(movePart, fontMap);
+        final normalised = _normaliseToken(mapped1, skipPieceTranslation: wasMapped1);
+        // Treat as a move number when plausible (not a huge backward jump).
+        final isPlausible = currentMoveNum == null || num >= currentMoveNum - 1;
+        if (isPlausible) {
           currentMoveNum = num;
-          expectBlack = dots.length > 1;
-          // Fall through to try parsing movePart as the move below.
-          // Apply fontMap before normalisation so it overrides language mappings.
-          final (mapped1, wasMapped1) = _applyFontMapToFirst(movePart, fontMap);
-          final normalised = _normaliseToken(mapped1, skipPieceTranslation: wasMapped1);
-          final move = _resolveMove(normalised, position, fontMap);
-          if (move != null) {
-            final fenBefore = position.fen;
-            final (newPosition, san) = position.makeSan(move);
-            moves.add(CachedMove(
-              moveNumber: currentMoveNum,
-              isBlack: expectBlack,
-              san: san,
-              rawToken: raw,
-              fenBefore: fenBefore,
-              fenAfter: newPosition.fen,
-              bounds: _computeBounds(charRects, tok.start, tok.end),
-            ));
-            position = newPosition;
-            expectBlack = !expectBlack;
-            if (!expectBlack) currentMoveNum = currentMoveNum + 1;
-          }
-          continue;
+          expectBlack = targetIsBlack;
         }
-        // Number not plausible as move number — fall through to treat the
-        // whole token as a move (e.g. "2.d6" where "2" is a piece glyph).
+        // Try to resolve the move at the current position.
+        var move = _resolveMove(normalised, position, fontMap);
+        // If implausible and resolution failed, search the checkpoint tree for a
+        // saved position that matches this move number and side, then backtrack.
+        if (move == null && !isPlausible) {
+          final idx = checkpoints.lastIndexWhere(
+            (cp) => cp.moveNum == num && cp.isBlack == targetIsBlack,
+          );
+          if (idx >= 0) {
+            final cp = checkpoints[idx];
+            // Restore position and moves list to the state before commentary diverged.
+            try {
+              position = dc.Chess.fromSetup(dc.Setup.parseFen(cp.fen));
+            } catch (_) {
+              position = dc.Chess.initial;
+            }
+            moves.removeRange(cp.moveCount, moves.length);
+            checkpoints.removeRange(idx, checkpoints.length);
+            currentMoveNum = num;
+            expectBlack = targetIsBlack;
+            move = _resolveMove(normalised, position, fontMap);
+            debugPrint(
+              '[MoveParser] backtrack to move $num ${targetIsBlack ? "b" : "w"} for "$raw": ${move != null ? "ok" : "still failed"}',
+            );
+          }
+        }
+        if (move != null) {
+          if (!isPlausible) {
+            // Legal at current or backtracked position — adopt the embedded number.
+            currentMoveNum = num;
+            expectBlack = targetIsBlack;
+          }
+          final moveNum = currentMoveNum; // non-null: set by isPlausible or !isPlausible branch above
+          checkpoints.add(_PositionCheckpoint(
+            moveNum: moveNum,
+            isBlack: expectBlack,
+            fen: position.fen,
+            moveCount: moves.length,
+          ));
+          final fenBefore = position.fen;
+          final (newPosition, san) = position.makeSan(move);
+          moves.add(CachedMove(
+            moveNumber: moveNum,
+            isBlack: expectBlack,
+            san: san,
+            rawToken: raw,
+            fenBefore: fenBefore,
+            fenAfter: newPosition.fen,
+            bounds: _computeBounds(charRects, tok.start, tok.end),
+          ));
+          position = newPosition;
+          expectBlack = !expectBlack;
+          if (!expectBlack) currentMoveNum = moveNum + 1;
+        } else {
+          debugPrint(
+            '[MoveParser] skip combined "$raw" (norm="$normalised") num=$num currentMoveNum=$currentMoveNum',
+          );
+        }
+        continue; // never fall through to plain-token path for combined tokens
       }
 
       if (currentMoveNum == null) continue;
@@ -668,11 +726,14 @@ class MoveParser {
         continue;
       }
 
+      checkpoints.add(_PositionCheckpoint(
+        moveNum: currentMoveNum,
+        isBlack: expectBlack,
+        fen: position.fen,
+        moveCount: moves.length,
+      ));
       final fenBefore = position.fen;
       final (newPosition, san) = position.makeSan(move);
-      final fenAfter = newPosition.fen;
-      final bounds = _computeBounds(charRects, tok.start, tok.end);
-
       moves.add(
         CachedMove(
           moveNumber: currentMoveNum,
@@ -680,8 +741,8 @@ class MoveParser {
           san: san,
           rawToken: raw,
           fenBefore: fenBefore,
-          fenAfter: fenAfter,
-          bounds: bounds,
+          fenAfter: newPosition.fen,
+          bounds: _computeBounds(charRects, tok.start, tok.end),
         ),
       );
 
@@ -827,4 +888,20 @@ class _Token {
   final String text;
   final int start;
   final int end;
+}
+
+/// One node in the FEN tree built during move parsing.
+/// Saved *before* each accepted move so we can backtrack when commentary
+/// moves corrupt [position] or [currentMoveNum].
+class _PositionCheckpoint {
+  const _PositionCheckpoint({
+    required this.moveNum,
+    required this.isBlack,
+    required this.fen,
+    required this.moveCount,
+  });
+  final int moveNum;
+  final bool isBlack;
+  final String fen;
+  final int moveCount;
 }

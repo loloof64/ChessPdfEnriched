@@ -37,8 +37,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   List<PageAnalysis>? _pageGames;
   // Index of the selected game within the current page (for multi-game pages).
   int _selectedGameIndex = 0;
-  // Raw extracted text for the current page (debug use).
-  String? _rawPageText;
   // Index of the selected move (-1 = show starting position).
   int _selectedMoveIndex = -1;
   // True while the page's move analysis is being computed.
@@ -149,7 +147,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _pageGames = _cache[page];
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
-      _rawPageText = null;
     });
     _loadPageAnalysis(page);
   }
@@ -185,7 +182,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       });
-      _loadRawTextForDebug(pageNumber);
       return;
     }
 
@@ -204,8 +200,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         ]);
         return;
       }
-
-      if (mounted) setState(() => _rawPageText = rawText.fullText);
 
       debugPrint('[ChessPdf] page $pageNumber raw text:\n${rawText.fullText}');
       debugPrint(
@@ -323,37 +317,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     return fenToInherit;
   }
 
-  Future<void> _loadRawTextForDebug(int pageNumber) async {
-    try {
-      final page = _document!.pages[pageNumber - 1];
-      final rawText = await page.loadText();
-      if (mounted && rawText != null) {
-        setState(() => _rawPageText = rawText.fullText);
-      }
-    } catch (_) {}
-  }
-
-  void _showRawTextDialog(String text) {
-    final l = AppLocalizations.of(context)!;
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l.rawTextDialogTitle(_currentPage)),
-        content: SingleChildScrollView(
-          child: SelectableText(
-            text.isEmpty ? l.emptyText : text,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text(l.close),
-          ),
-        ],
-      ),
-    );
-  }
 
   /// Collects user overrides already persisted in the page cache so they
   /// survive a re-parse triggered by a new user action.
@@ -469,12 +432,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          if (_rawPageText != null)
-            IconButton(
-              icon: const Icon(Icons.text_snippet_outlined),
-              tooltip: l.showRawText,
-              onPressed: () => _showRawTextDialog(_rawPageText!),
-            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: l.reanalyse,
