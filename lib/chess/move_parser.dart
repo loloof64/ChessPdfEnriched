@@ -44,7 +44,8 @@ class MoveParser {
   static const _frenchPieces = {'R': 'K', 'D': 'Q', 'T': 'R', 'F': 'B', 'C': 'N'};
   static const _germanPieces = {'K': 'K', 'D': 'Q', 'T': 'R', 'L': 'B', 'S': 'N'};
 
-  static String _normaliseToken(String token) {
+  static String _normaliseToken(String token,
+      {bool skipPieceTranslation = false}) {
     var s = token;
     // 1. Replace figurine symbols.
     for (final entry in _figurineMap.entries) {
@@ -70,7 +71,8 @@ class MoveParser {
       s = 'O-O${s.substring(3)}';
     }
     // 7. If the first character looks like a non-English piece letter, translate.
-    if (s.isNotEmpty) {
+    // Skip when fontMap already resolved it to an English letter.
+    if (!skipPieceTranslation && s.isNotEmpty) {
       final first = s[0];
       final rest = s.substring(1);
       // Only translate when the rest looks like a valid SAN suffix (file/rank/x…)
@@ -631,7 +633,8 @@ class MoveParser {
           expectBlack = dots.length > 1;
           // Fall through to try parsing movePart as the move below.
           // Apply fontMap before normalisation so it overrides language mappings.
-          final normalised = _normaliseToken(_applyFontMapToFirst(movePart, fontMap));
+          final (mapped1, wasMapped1) = _applyFontMapToFirst(movePart, fontMap);
+          final normalised = _normaliseToken(mapped1, skipPieceTranslation: wasMapped1);
           final move = _resolveMove(normalised, position, fontMap);
           if (move != null) {
             final fenBefore = position.fen;
@@ -657,7 +660,8 @@ class MoveParser {
 
       if (currentMoveNum == null) continue;
 
-      final normalised = _normaliseToken(_applyFontMapToFirst(raw, fontMap));
+      final (mapped2, wasMapped2) = _applyFontMapToFirst(raw, fontMap);
+      final normalised = _normaliseToken(mapped2, skipPieceTranslation: wasMapped2);
       final move = _resolveMove(normalised, position, fontMap);
       if (move == null) {
         debugPrint('[MoveParser] skip "$raw" (norm="$normalised") move=$currentMoveNum black=$expectBlack');
@@ -774,11 +778,20 @@ class MoveParser {
   /// Replace the first character of [token] using [fontMap] before any
   /// language normalisation, so fontMap entries always take priority over
   /// the French/German piece-letter translations in [_normaliseToken].
-  static String _applyFontMapToFirst(String token, Map<String, String>? fontMap) {
-    if (fontMap == null || token.isEmpty) return token;
+  ///
+  /// Returns the (possibly modified) token and a flag that is true when a
+  /// fontMap entry was found (so the caller can skip redundant language
+  /// translation — the mapped value is already an English piece letter).
+  /// When the mapping is "" (pawn glyph) the token is returned unchanged
+  /// because the file letter is already the first character of the move.
+  static (String, bool) _applyFontMapToFirst(
+      String token, Map<String, String>? fontMap) {
+    if (fontMap == null || token.isEmpty) return (token, false);
     final mapped = fontMap[token[0]];
-    if (mapped == null) return token;
-    return mapped + token.substring(1);
+    if (mapped == null) return (token, false);
+    // Pawn glyph: the file letter is already present — keep token as-is.
+    if (mapped.isEmpty) return (token, true);
+    return (mapped + token.substring(1), true);
   }
 
   static bool _isDigit(String c) {
