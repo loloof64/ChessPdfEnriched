@@ -59,9 +59,9 @@ class MoveParser {
     // 4. Remove ) or . that appears between chars in a move token — some fonts
     //    use multi-char sequences like "2)xf7" or "2.d6" for a piece+move.
     s = s.replaceAll(RegExp(r'[).](?=[a-hx=1-8])'), '');
-    // 5. Strip trailing human annotations (!, ?, !?, ?!, !!, ??) — they are not
+    // 5. Strip trailing prose punctuation and human annotations — they are not
     //    part of SAN and cause parseSan to fail.
-    s = s.replaceAll(RegExp(r'[!?]+$'), '');
+    s = s.replaceAll(RegExp(r'[!?,;:.]+$'), '');
     // 6. Castling: "0-0-0" / "0-0" with digit zero → standard "O-O-O" / "O-O".
     //    Many chess books (especially French/Spanish) use zeros instead of O.
     //    Must check 0-0-0 before 0-0 to avoid a partial match.
@@ -622,7 +622,8 @@ class MoveParser {
     // The move part must start with a non-dot character.
     final combinedRx = RegExp(r'^(\d+)(\.{1,3})([^.].*)$');
 
-    for (final tok in tokens) {
+    for (int ti = 0; ti < tokens.length; ti++) {
+      final tok = tokens[ti];
       final raw = tok.text;
 
       if (raw == '1-0' || raw == '0-1' || raw == '1/2-1/2' || raw == '*') {
@@ -650,7 +651,7 @@ class MoveParser {
         final (mapped1, wasMapped1) = _applyFontMapToFirst(movePart, fontMap);
         final normalised = _normaliseToken(mapped1, skipPieceTranslation: wasMapped1);
         // Treat as a move number when plausible (not a huge backward jump).
-        final isPlausible = currentMoveNum == null || num >= currentMoveNum - 1;
+        var isPlausible = currentMoveNum == null || num >= currentMoveNum - 1;
         if (isPlausible) {
           currentMoveNum = num;
           expectBlack = targetIsBlack;
@@ -679,6 +680,38 @@ class MoveParser {
             debugPrint(
               '[MoveParser] backtrack to move $num ${targetIsBlack ? "b" : "w"} for "$raw": ${move != null ? "ok" : "still failed"}',
             );
+          }
+        }
+        // Dotted-piece fallback: "2.d6?" has num=2 (implausible) but the "2"
+        // is actually a figurine piece glyph. Re-try as piece+rest at the
+        // current (unchanged) position/moveNum.
+        if (move == null && !isPlausible && num >= 1 && num <= 9 &&
+            movePart.isNotEmpty) {
+          final pieceAndRest = num.toString() + movePart;
+          final (pm, wm) = _applyFontMapToFirst(pieceAndRest, fontMap);
+          final pieceNorm = _normaliseToken(pm, skipPieceTranslation: wm);
+          move = _resolveMove(pieceNorm, position, fontMap);
+          if (move != null) {
+            isPlausible = true; // use current currentMoveNum/expectBlack
+            debugPrint('[MoveParser] dotted-piece "$raw" → "$pieceNorm"');
+          }
+        }
+        // Split-token lookahead: figurine glyph in one font run, rest in next.
+        // e.g. "23.2" + "xf7!" → try "2xf7".
+        if (move == null && movePart.length <= 2 && ti + 1 < tokens.length) {
+          final nextText = tokens[ti + 1].text;
+          if (nextText.isNotEmpty &&
+              (nextText[0] == 'x' ||
+               (nextText[0].compareTo('a') >= 0 && nextText[0].compareTo('h') <= 0))) {
+            final joined = movePart + nextText;
+            final (jm, jw) = _applyFontMapToFirst(joined, fontMap);
+            final joinedNorm = _normaliseToken(jm, skipPieceTranslation: jw);
+            final joinedMove = _resolveMove(joinedNorm, position, fontMap);
+            if (joinedMove != null) {
+              move = joinedMove;
+              ti++; // consume the next token too
+              debugPrint('[MoveParser] split-token "$raw"+"${tokens[ti].text}" → "$joinedNorm"');
+            }
           }
         }
         if (move != null) {

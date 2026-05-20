@@ -1,13 +1,12 @@
 import 'dart:math' show min;
-import 'dart:convert';
 
-import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../chess/analysis_cache.dart';
 import '../chess/board_detector.dart';
 import '../chess/chess_piece_classifier.dart';
+import '../chess/figurine_classifier.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
@@ -41,6 +40,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   int _selectedMoveIndex = -1;
   // True while the page's move analysis is being computed.
   bool _analysing = false;
+  // Figurine glyph classifier — loaded once per document session.
+  FigurineClassifier? _figurineClassifier;
 
   @override
   void initState() {
@@ -50,11 +51,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   Future<void> _loadDocument() async {
     try {
-      // Pre-populate font map from the Colab-generated figurine mapping.
-      final raw = await rootBundle.loadString('assets/figurine_mapping.json');
-      final json = jsonDecode(raw) as Map<String, dynamic>;
-      final mapping = json['mapping'] as Map<String, dynamic>;
-      _fontMap.addAll(mapping.map((k, v) => MapEntry(k, v as String)));
+      _figurineClassifier = await FigurineClassifier.load();
 
       final doc = await PdfDocument.openFile(widget.filePath);
       final cached = await AnalysisCache.load(widget.filePath);
@@ -77,6 +74,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   @override
   void dispose() {
     _document?.dispose();
+    _figurineClassifier?.dispose();
     super.dispose();
   }
 

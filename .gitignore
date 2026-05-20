@@ -49,3 +49,5 @@ assets/models/chess_pieces.tflite
 
 # TFLite native libraries — machine-specific, built locally by each developer
 blobs/
+
+logs

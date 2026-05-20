@@ -6,7 +6,7 @@ Read your chess pdf files with moves interactivity.
 
 ### TfLite model
 
-1. Upload the Google Colab notebook (`train_chess_classifier_v3.ipynb`) to your account
+1. Upload the Google Colab notebook (`train_chess_classifier.ipynb`) to your account
 2. Run the Colab (with GPU)
 3. Download the generated model and save it as **`assets/models/chess_pieces.tflite`**
 
@@ -105,7 +105,7 @@ copy C:\tmp\tflite_out\Release\tensorflowlite_c.dll ^
 >
 > Add this to `windows/CMakeLists.txt` if you need release builds to bundle it.
 
-### Figurine mapping model
+### Figurine/text mapping model
 
-1. Import the **train_figurine_mapper.ipynb** into your Google Colab, and execute all cells (don't forget to add a pdf book to your Google drive and adapt step 3 cell)
-2. Download the produced model in folder **assets**
+1. Import the **train_figurine_classifier.ipynb** and **train_text_classifier.ipynb** into your Google Colab, and execute all cells (don't forget adapt the pdf book)
+2. Download the produced models in folder **assets**
