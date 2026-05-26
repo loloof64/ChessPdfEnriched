@@ -6,10 +6,10 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 /// Used to auto-build the fontMap for PDFs that use figurine fonts.
 ///
 /// Model input:  [1, 32, 32, 1] float32, grayscale, values in [0, 1]
-/// Model output: [1, 6]  float32 softmax
-/// Classes (index):  0=K  1=Q  2=R  3=B  4=N  5=P
+/// Model output: [1, 5]  float32 softmax
+/// Classes (index):  0=K  1=Q  2=R  3=B  4=N  (Pawn has no figurine letter)
 class FigurineClassifier {
-  static const List<String> classes = ['K', 'Q', 'R', 'B', 'N', 'P'];
+  static const List<String> classes = ['K', 'Q', 'R', 'B', 'N'];
 
   static const int inputSize = 32;
   static const String _modelAsset = 'assets/models/figurine_classifier.tflite';

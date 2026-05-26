@@ -38,6 +38,28 @@ enum FenSource {
   userConfirmedNotADiagram,
 }
 
+/// A detected figurine glyph with its bounds and classified piece type.
+class DetectedFigurine {
+  const DetectedFigurine({
+    required this.charIndex,
+    required this.bounds,
+    required this.piece,
+    required this.confidence,
+  });
+
+  /// Index in the raw text where this glyph was found.
+  final int charIndex;
+
+  /// Position and size in page coordinates (PDF space).
+  final MoveBounds bounds;
+
+  /// Classified piece ('K', 'Q', 'R', 'B', 'N', 'P').
+  final String piece;
+
+  /// TFLite model confidence (0.0 to 1.0).
+  final double confidence;
+}
+
 /// Bounding box of a move token in PDF page coordinates.
 /// Origin is bottom-left; y increases upward (PDF convention).
 class MoveBounds {
@@ -162,4 +184,72 @@ class PageAnalysis {
         moves: recomputedMoves,
         header: header,
       );
+}
+
+/// Results from analyzing a PDF page: summary of what was found and processed.
+class PageAnalysisResult {
+  const PageAnalysisResult({
+    required this.pageNumber,
+    required this.gameCount,
+    required this.moveCount,
+    required this.figurinesDetected,
+    required this.boardsDetected,
+    required this.processingTimeMs,
+    this.notationMode,
+    this.errors,
+  });
+
+  final int pageNumber;
+  final int gameCount;
+  final int moveCount;
+  final int figurinesDetected;
+  final int boardsDetected;
+  final int processingTimeMs;
+  final NotationMode? notationMode;
+  final List<String>? errors;
+
+  @override
+  String toString() {
+    final parts = <String>[
+      'Page $pageNumber: $gameCount game(s)',
+      '$moveCount move(s)',
+    ];
+    if (figurinesDetected > 0) {
+      parts.add('$figurinesDetected figurine(s)');
+    }
+    if (boardsDetected > 0) {
+      parts.add('$boardsDetected board(s) detected');
+    }
+    parts.add('${processingTimeMs}ms');
+    if (notationMode != null) {
+      parts.add('(${notationMode!.name})');
+    }
+    if (errors != null && errors!.isNotEmpty) {
+      parts.add('⚠ ${errors!.length} issue(s)');
+    }
+    return parts.join(' • ');
+  }
+}
+
+/// Summary of figurine glyph detection results across all pages.
+class FigurineSummary {
+  const FigurineSummary({
+    required this.totalGlyphsDetected,
+    required this.glyphsByPage,
+    required this.fontMapEntries,
+  });
+
+  final int totalGlyphsDetected;
+
+  /// Detected glyphs per page (pageNum → count).
+  final Map<int, int> glyphsByPage;
+
+  /// Resolved character → piece mappings.
+  final Map<String, String> fontMapEntries;
+
+  @override
+  String toString() => totalGlyphsDetected > 0
+      ? '$totalGlyphsDetected figurine glyph(s) detected across ${glyphsByPage.length} page(s) • '
+          '${fontMapEntries.length} mapping(s) learned'
+      : 'No figurine glyphs detected';
 }

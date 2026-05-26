@@ -7,6 +7,7 @@ import '../chess/analysis_cache.dart';
 import '../chess/board_detector.dart';
 import '../chess/chess_piece_classifier.dart';
 import '../chess/figurine_classifier.dart';
+import '../chess/figurine_detector.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
@@ -42,8 +43,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   bool _analysing = false;
   // Figurine glyph classifier — loaded once per document session.
   FigurineClassifier? _figurineClassifier;
+  // Figurine detector — wraps the classifier for per-page glyph detection.
+  FigurineDetector? _figurineDetector;
   // Notation mode selected by the user in the options dialog.
   NotationMode _notationMode = NotationMode.textSan;
+  // Render scale used for figurine detection (forwarded from options dialog;
+  // placeholder for a future zoom feature — currently always 2.0).
+  // ignore: prefer_final_fields
+  double _renderScale = 2.0;
 
   @override
   void initState() {
@@ -54,6 +61,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   Future<void> _loadDocument() async {
     try {
       _figurineClassifier = await FigurineClassifier.load();
+      _figurineDetector = FigurineDetector(classifier: _figurineClassifier!);
 
       final doc = await PdfDocument.openFile(widget.filePath);
       final cached = await AnalysisCache.load(widget.filePath);
@@ -268,11 +276,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         return;
       }
 
-      debugPrint('[ChessPdf] page $pageNumber raw text:\n${rawText.fullText}');
-      debugPrint(
-        '[ChessPdf] page $pageNumber code units (first 80):\n'
-        '${rawText.fullText.runes.take(80).map((r) => 'U+${r.toRadixString(16).padLeft(4, '0')}').join(' ')}',
-      );
+      final effectiveMode = notationMode ?? _notationMode;
 
       final inheritedFen = _inheritedFenForPage(pageNumber, rawText.fullText);
 
@@ -280,6 +284,18 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         page,
         rawText.charRects,
       );
+
+      // In FAN mode, detect and classify figurine glyphs before parsing.
+      List<DetectedFigurine>? detectedFigurines;
+      if (effectiveMode == NotationMode.figurineFan &&
+          _figurineDetector != null) {
+        detectedFigurines = await _figurineDetector!.detectFigurines(
+          page,
+          rawText.fullText,
+          rawText.charRects,
+          renderScale: _renderScale,
+        );
+      }
 
       // Use auto-detected FENs if available (user override takes precedence).
       // Board i's FEN belongs to segment i+1 (the text that follows the board diagram).
@@ -300,12 +316,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         forcedIntermediates: forcedIntermediates,
         forcedNotADiagrams: forcedNotADiagrams,
         fontMap: _fontMap,
-        notationMode: notationMode ?? _notationMode,
+        notationMode: effectiveMode,
+        detectedFigurines: detectedFigurines,
       );
 
+      final totalMoves = games.fold(0, (s, g) => s + g.moves.length);
       debugPrint(
-        '[ChessPdf] page $pageNumber → ${games.length} game(s), '
-        '${games.map((g) => g.moves.length).join('+')} moves',
+        '[ChessPdf] page $pageNumber ($effectiveMode) → '
+        '${games.length} game(s), $totalMoves move(s)'
+        '${detectedFigurines != null && detectedFigurines.isNotEmpty ? ", ${detectedFigurines.length} figurine(s)" : ""}',
       );
 
       _cache[pageNumber] = games;

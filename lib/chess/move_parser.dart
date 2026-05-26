@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:dartchess/dartchess.dart' as dc;
 import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
@@ -390,6 +392,7 @@ class MoveParser {
     Set<int>? forcedNotADiagrams,
     Map<String, String>? fontMap,
     NotationMode notationMode = NotationMode.textSan,
+    List<DetectedFigurine>? detectedFigurines,
   }) {
     final fullText = rawText.fullText;
     final charRects = rawText.charRects;
@@ -440,6 +443,7 @@ class MoveParser {
         pixelDetectionUsed: pixelDetectionUsed,
         forceSuspectedDiagram: topOfPageBoardDetected,
         notationMode: notationMode,
+        detectedFigurines: detectedFigurines,
       );
       return [maybeMarkIntermediate(a, 0)];
     }
@@ -462,10 +466,9 @@ class MoveParser {
                 (forcedIntermediates?.contains(i) ?? false) ||
                 (forcedNotADiagrams?.contains(i) ?? false),
             pixelDetectionUsed: pixelDetectionUsed,
-            // First segment: board at top of page (if detected).
-            // Later segments: always preceded by a confirmed board gap.
             forceSuspectedDiagram: i == 0 ? topOfPageBoardDetected : true,
             notationMode: notationMode,
+            detectedFigurines: detectedFigurines,
           ),
           i,
         ),
@@ -513,6 +516,7 @@ class MoveParser {
     bool pixelDetectionUsed = false,
     bool forceSuspectedDiagram = false,
     NotationMode notationMode = NotationMode.textSan,
+    List<DetectedFigurine>? detectedFigurines,
   }) {
     // ------------------------------------------------------------------
     // 1. Determine starting position.
@@ -567,15 +571,36 @@ class MoveParser {
       }
     }
 
-    debugPrint('[MoveParser] header=$header  fenSource=$fenSource  FEN=$startFen');
+    // ------------------------------------------------------------------
+    // 3. Pre-populate fontMap from detected figurines (FAN mode).
+    //    Build a char-index → piece lookup for spatial merge and bounds trimming.
+
+    final figurineCharIndices = <int>{};
+    if (detectedFigurines != null && detectedFigurines.isNotEmpty) {
+      for (final fig in detectedFigurines) {
+        if (fig.charIndex < text.length) {
+          final char = text[fig.charIndex];
+          fontMap?[char] = fig.piece; // '' for pawn
+          figurineCharIndices.add(fig.charIndex);
+        }
+      }
+    }
 
     // ------------------------------------------------------------------
-    // 3. Tokenise, skipping comments and variations.
+    // 4. Tokenise, skipping comments and variations.
 
-    final tokens = _tokenise(text);
+    var tokens = _tokenise(text);
 
     // ------------------------------------------------------------------
-    // 3b. Correct fullmove number AND side to move from the first move-number
+    // 4b. Spatially merge standalone figurine tokens with adjacent move text.
+    //     e.g. "♘" token + "f3" token → "Nf3" token (if spatially adjacent).
+
+    if (figurineCharIndices.isNotEmpty) {
+      tokens = _mergeFigurineTokens(tokens, charRects, figurineCharIndices, text);
+    }
+
+    // ------------------------------------------------------------------
+    // 4c. Correct fullmove number AND side to move from the first move-number
     // token. Board detection always emits fullmove=1 and side=white; the dots
     // ("." vs "...") tell us which side actually moves first.
     if (startFen.isNotEmpty) {
@@ -616,9 +641,10 @@ class MoveParser {
     }
 
     // ------------------------------------------------------------------
-    // 4. Parse chess moves.
+    // 5. Parse chess moves.
 
     final moves = <CachedMove>[];
+    int skippedTokens = 0;
     // Position tree: one checkpoint saved *before* each accepted move.
     // Enables backtracking when commentary moves corrupt currentMoveNum/position.
     final checkpoints = <_PositionCheckpoint>[];
@@ -738,6 +764,9 @@ class MoveParser {
           ));
           final fenBefore = position.fen;
           final (newPosition, san) = position.makeSan(move);
+          final combinedBoundsStart = figurineCharIndices.contains(tok.start)
+              ? tok.start + 1
+              : tok.start;
           moves.add(CachedMove(
             moveNumber: moveNum,
             isBlack: expectBlack,
@@ -745,15 +774,13 @@ class MoveParser {
             rawToken: raw,
             fenBefore: fenBefore,
             fenAfter: newPosition.fen,
-            bounds: _computeBounds(charRects, tok.start, tok.end),
+            bounds: _computeBounds(charRects, combinedBoundsStart, tok.end),
           ));
           position = newPosition;
           expectBlack = !expectBlack;
           if (!expectBlack) currentMoveNum = moveNum + 1;
         } else {
-          debugPrint(
-            '[MoveParser] skip combined "$raw" (norm="$normalised") num=$num currentMoveNum=$currentMoveNum',
-          );
+          skippedTokens++;
         }
         continue; // never fall through to plain-token path for combined tokens
       }
@@ -764,7 +791,7 @@ class MoveParser {
       final normalised = _normaliseToken(mapped2, skipPieceTranslation: wasMapped2, notationMode: notationMode);
       final move = _resolveMove(normalised, position, fontMap);
       if (move == null) {
-        debugPrint('[MoveParser] skip "$raw" (norm="$normalised") move=$currentMoveNum black=$expectBlack');
+        skippedTokens++;
         continue;
       }
 
@@ -776,6 +803,11 @@ class MoveParser {
       ));
       final fenBefore = position.fen;
       final (newPosition, san) = position.makeSan(move);
+      // Skip figurine prefix char when computing bounds so the overlay
+      // highlights only the square/file part (e.g. "f3" not "♘f3").
+      final boundsStart = figurineCharIndices.contains(tok.start)
+          ? tok.start + 1
+          : tok.start;
       moves.add(
         CachedMove(
           moveNumber: currentMoveNum,
@@ -784,7 +816,7 @@ class MoveParser {
           rawToken: raw,
           fenBefore: fenBefore,
           fenAfter: newPosition.fen,
-          bounds: _computeBounds(charRects, tok.start, tok.end),
+          bounds: _computeBounds(charRects, boundsStart, tok.end),
         ),
       );
 
@@ -792,6 +824,12 @@ class MoveParser {
       expectBlack = !expectBlack;
       if (!expectBlack) currentMoveNum++;
     }
+
+    debugPrint(
+      '[MoveParser] fenSource=$fenSource  ${moves.length} move(s) parsed'
+      '${skippedTokens > 0 ? "  ($skippedTokens token(s) skipped)" : ""}'
+      '${figurineCharIndices.isNotEmpty ? "  figurines=${figurineCharIndices.length}" : ""}',
+    );
 
     return PageAnalysis(
       startFen: startFen,
@@ -876,6 +914,89 @@ class MoveParser {
       result.add(_Token(text.substring(start, i), start, i));
     }
     return result;
+  }
+
+  /// Merge standalone figurine tokens with the immediately following move-text
+  /// token when they are spatially adjacent (same text line, no significant gap).
+  ///
+  /// E.g. a "♘" token followed by a "f3" token becomes a single "Nf3" token.
+  /// The figurine piece letter is resolved from [figurineCharIndices] via
+  /// [text] → fontMap (already pre-populated before this call).
+  static List<_Token> _mergeFigurineTokens(
+    List<_Token> tokens,
+    List<PdfRect> charRects,
+    Set<int> figurineCharIndices,
+    String text,
+  ) {
+    const sameLineYTolerance = 12.0; // pt — max vertical centre difference
+    const adjacentXTolerance = 10.0; // pt — max gap between figurine right and text left
+
+    final result = <_Token>[];
+    for (int i = 0; i < tokens.length; i++) {
+      final tok = tokens[i];
+
+      // A standalone figurine token: single char, classified as figurine.
+      if (tok.end - tok.start == 1 &&
+          tok.start < text.length &&
+          figurineCharIndices.contains(tok.start) &&
+          i + 1 < tokens.length) {
+        final next = tokens[i + 1];
+
+        final figRight = _tokenRight(charRects, tok.start, tok.end);
+        final figMidY = _tokenMidY(charRects, tok.start, tok.end);
+        final textLeft = _tokenLeft(charRects, next.start, next.end);
+        final textMidY = _tokenMidY(charRects, next.start, next.end);
+
+        final sameY = figMidY != null &&
+            textMidY != null &&
+            (figMidY - textMidY).abs() < sameLineYTolerance;
+        final close = figRight != null &&
+            textLeft != null &&
+            textLeft - figRight < adjacentXTolerance;
+
+        if (sameY && close) {
+          // The char at tok.start is a figurine; fontMap[char] = piece letter.
+          final figChar = text[tok.start];
+          // fontMap might already be applied; use the raw char to look up piece.
+          // The merged token text puts the piece letter first.
+          result.add(_Token(figChar + next.text, tok.start, next.end));
+          i++; // skip the consumed next token
+          continue;
+        }
+      }
+
+      result.add(tok);
+    }
+    return result;
+  }
+
+  static double? _tokenLeft(List<PdfRect> rects, int start, int end) {
+    double? v;
+    for (int i = start; i < end && i < rects.length; i++) {
+      if (rects[i].isEmpty) continue;
+      v = v == null ? rects[i].left : math.min(v, rects[i].left);
+    }
+    return v;
+  }
+
+  static double? _tokenRight(List<PdfRect> rects, int start, int end) {
+    double? v;
+    for (int i = start; i < end && i < rects.length; i++) {
+      if (rects[i].isEmpty) continue;
+      v = v == null ? rects[i].right : math.max(v, rects[i].right);
+    }
+    return v;
+  }
+
+  static double? _tokenMidY(List<PdfRect> rects, int start, int end) {
+    double? top, bottom;
+    for (int i = start; i < end && i < rects.length; i++) {
+      final r = rects[i];
+      if (r.isEmpty) continue;
+      top = top == null ? r.top : math.max(top, r.top);
+      bottom = bottom == null ? r.bottom : math.min(bottom, r.bottom);
+    }
+    return (top != null && bottom != null) ? (top + bottom) / 2 : null;
   }
 
   /// Replace the first character of [token] using [fontMap] before any
