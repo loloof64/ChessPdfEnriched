@@ -157,4 +157,19 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get discardBecauseNewGame => 'porque es nueva partida';
+
+  @override
+  String get analysisOptions => 'Opciones de análisis';
+
+  @override
+  String get notationModeLabel => 'Tipo de notación';
+
+  @override
+  String get textSanNotation => 'Texto (SAN)';
+
+  @override
+  String get figurineFanNotation => 'Figuritas (FAN)';
+
+  @override
+  String get analyse => 'Analizar';
 }

@@ -44,12 +44,17 @@ class MoveParser {
   static const _frenchPieces = {'R': 'K', 'D': 'Q', 'T': 'R', 'F': 'B', 'C': 'N'};
   static const _germanPieces = {'K': 'K', 'D': 'Q', 'T': 'R', 'L': 'B', 'S': 'N'};
 
-  static String _normaliseToken(String token,
-      {bool skipPieceTranslation = false}) {
+  static String _normaliseToken(
+    String token, {
+    bool skipPieceTranslation = false,
+    NotationMode notationMode = NotationMode.textSan,
+  }) {
     var s = token;
-    // 1. Replace figurine symbols.
-    for (final entry in _figurineMap.entries) {
-      s = s.replaceAll(entry.key, entry.value);
+    // 1. Replace figurine symbols (only in figurine mode; text mode uses letters).
+    if (notationMode == NotationMode.figurineFan) {
+      for (final entry in _figurineMap.entries) {
+        s = s.replaceAll(entry.key, entry.value);
+      }
     }
     // 2. Replace custom-font file-letter substitutions (anywhere in the token).
     //    Some PDF chess fonts render 'c' as ¢ and 'f' as £.
@@ -384,6 +389,7 @@ class MoveParser {
     Set<int>? forcedIntermediates,
     Set<int>? forcedNotADiagrams,
     Map<String, String>? fontMap,
+    NotationMode notationMode = NotationMode.textSan,
   }) {
     final fullText = rawText.fullText;
     final charRects = rawText.charRects;
@@ -433,6 +439,7 @@ class MoveParser {
         skipDiagramDetection: userOverride,
         pixelDetectionUsed: pixelDetectionUsed,
         forceSuspectedDiagram: topOfPageBoardDetected,
+        notationMode: notationMode,
       );
       return [maybeMarkIntermediate(a, 0)];
     }
@@ -458,6 +465,7 @@ class MoveParser {
             // First segment: board at top of page (if detected).
             // Later segments: always preceded by a confirmed board gap.
             forceSuspectedDiagram: i == 0 ? topOfPageBoardDetected : true,
+            notationMode: notationMode,
           ),
           i,
         ),
@@ -504,6 +512,7 @@ class MoveParser {
     bool skipDiagramDetection = false,
     bool pixelDetectionUsed = false,
     bool forceSuspectedDiagram = false,
+    NotationMode notationMode = NotationMode.textSan,
   }) {
     // ------------------------------------------------------------------
     // 1. Determine starting position.
@@ -649,7 +658,7 @@ class MoveParser {
         final targetIsBlack = dots.length > 1;
         // Apply fontMap before normalisation so it overrides language mappings.
         final (mapped1, wasMapped1) = _applyFontMapToFirst(movePart, fontMap);
-        final normalised = _normaliseToken(mapped1, skipPieceTranslation: wasMapped1);
+        final normalised = _normaliseToken(mapped1, skipPieceTranslation: wasMapped1, notationMode: notationMode);
         // Treat as a move number when plausible (not a huge backward jump).
         var isPlausible = currentMoveNum == null || num >= currentMoveNum - 1;
         if (isPlausible) {
@@ -689,7 +698,7 @@ class MoveParser {
             movePart.isNotEmpty) {
           final pieceAndRest = num.toString() + movePart;
           final (pm, wm) = _applyFontMapToFirst(pieceAndRest, fontMap);
-          final pieceNorm = _normaliseToken(pm, skipPieceTranslation: wm);
+          final pieceNorm = _normaliseToken(pm, skipPieceTranslation: wm, notationMode: notationMode);
           move = _resolveMove(pieceNorm, position, fontMap);
           if (move != null) {
             isPlausible = true; // use current currentMoveNum/expectBlack
@@ -705,7 +714,7 @@ class MoveParser {
                (nextText[0].compareTo('a') >= 0 && nextText[0].compareTo('h') <= 0))) {
             final joined = movePart + nextText;
             final (jm, jw) = _applyFontMapToFirst(joined, fontMap);
-            final joinedNorm = _normaliseToken(jm, skipPieceTranslation: jw);
+            final joinedNorm = _normaliseToken(jm, skipPieceTranslation: jw, notationMode: notationMode);
             final joinedMove = _resolveMove(joinedNorm, position, fontMap);
             if (joinedMove != null) {
               move = joinedMove;
@@ -752,7 +761,7 @@ class MoveParser {
       if (currentMoveNum == null) continue;
 
       final (mapped2, wasMapped2) = _applyFontMapToFirst(raw, fontMap);
-      final normalised = _normaliseToken(mapped2, skipPieceTranslation: wasMapped2);
+      final normalised = _normaliseToken(mapped2, skipPieceTranslation: wasMapped2, notationMode: notationMode);
       final move = _resolveMove(normalised, position, fontMap);
       if (move == null) {
         debugPrint('[MoveParser] skip "$raw" (norm="$normalised") move=$currentMoveNum black=$expectBlack');

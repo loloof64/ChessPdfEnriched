@@ -369,6 +369,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'because is new game'**
   String get discardBecauseNewGame;
+
+  /// No description provided for @analysisOptions.
+  ///
+  /// In en, this message translates to:
+  /// **'Analysis options'**
+  String get analysisOptions;
+
+  /// No description provided for @notationModeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Notation type'**
+  String get notationModeLabel;
+
+  /// No description provided for @textSanNotation.
+  ///
+  /// In en, this message translates to:
+  /// **'Text (SAN)'**
+  String get textSanNotation;
+
+  /// No description provided for @figurineFanNotation.
+  ///
+  /// In en, this message translates to:
+  /// **'Figurine (FAN)'**
+  String get figurineFanNotation;
+
+  /// No description provided for @analyse.
+  ///
+  /// In en, this message translates to:
+  /// **'Analyse'**
+  String get analyse;
 }
 
 class _AppLocalizationsDelegate

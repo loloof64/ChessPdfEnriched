@@ -64,5 +64,10 @@
   "markAsSuspectedDiagram": "Undo",
   "discard": "Delete",
   "discardBecauseIntermediate": "because is intermediate",
-  "discardBecauseNewGame": "because is new game"
+  "discardBecauseNewGame": "because is new game",
+  "analysisOptions": "Analysis options",
+  "notationModeLabel": "Notation type",
+  "textSanNotation": "Text (SAN)",
+  "figurineFanNotation": "Figurine (FAN)",
+  "analyse": "Analyse"
 }

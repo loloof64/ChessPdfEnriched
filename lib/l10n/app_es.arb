@@ -64,5 +64,10 @@
   "markAsSuspectedDiagram": "Deshacer",
   "discard": "Eliminar",
   "discardBecauseIntermediate": "porque es intermedio",
-  "discardBecauseNewGame": "porque es nueva partida"
+  "discardBecauseNewGame": "porque es nueva partida",
+  "analysisOptions": "Opciones de análisis",
+  "notationModeLabel": "Tipo de notación",
+  "textSanNotation": "Texto (SAN)",
+  "figurineFanNotation": "Figuritas (FAN)",
+  "analyse": "Analizar"
 }

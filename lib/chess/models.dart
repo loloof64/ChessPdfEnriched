@@ -1,3 +1,12 @@
+/// Notation type used to parse chess moves in the PDF.
+enum NotationMode {
+  /// Standard letter-based algebraic notation (SAN): K, Q, R, B, N.
+  textSan,
+
+  /// Figurine algebraic notation (FAN): ♔, ♕, ♖, ♗, ♘, ♙.
+  figurineFan,
+}
+
 /// Where the starting FEN for a page's game came from.
 enum FenSource {
   /// Standard chess starting position (fallback when nothing else was found).

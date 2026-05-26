@@ -157,4 +157,19 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get discardBecauseNewGame => 'car c\'est une nouvelle partie';
+
+  @override
+  String get analysisOptions => 'Options d\'analyse';
+
+  @override
+  String get notationModeLabel => 'Type de notation';
+
+  @override
+  String get textSanNotation => 'Texte (SAN)';
+
+  @override
+  String get figurineFanNotation => 'Figurines (FAN)';
+
+  @override
+  String get analyse => 'Analyser';
 }

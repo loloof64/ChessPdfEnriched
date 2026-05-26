@@ -42,6 +42,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   bool _analysing = false;
   // Figurine glyph classifier — loaded once per document session.
   FigurineClassifier? _figurineClassifier;
+  // Notation mode selected by the user in the options dialog.
+  NotationMode _notationMode = NotationMode.textSan;
 
   @override
   void initState() {
@@ -152,6 +154,61 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // -------------------------------------------------------------------------
   // Analysis
 
+  Future<void> _showGenerateOptionsDialog() async {
+    final l = AppLocalizations.of(context)!;
+    NotationMode selectedMode = _notationMode;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(l.analysisOptions),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(l.notationModeLabel),
+              const SizedBox(height: 8),
+              RadioGroup<NotationMode>(
+                groupValue: selectedMode,
+                onChanged: (v) {
+                  if (v != null) setDialogState(() => selectedMode = v);
+                },
+                child: Column(
+                  children: [
+                    RadioListTile<NotationMode>(
+                      title: Text(l.textSanNotation),
+                      value: NotationMode.textSan,
+                    ),
+                    RadioListTile<NotationMode>(
+                      title: Text(l.figurineFanNotation),
+                      value: NotationMode.figurineFan,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(l.cancel),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(l.analyse),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      setState(() => _notationMode = selectedMode);
+      await _reanalyse();
+    }
+  }
+
   Future<void> _reanalyse() async {
     await AnalysisCache.clear(widget.filePath);
     setState(() {
@@ -179,6 +236,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     Map<int, String>? forcedFens,
     Set<int>? forcedIntermediates,
     Set<int>? forcedNotADiagrams,
+    NotationMode? notationMode,
   }) async {
     // Use cached result if available (and no override is requested).
     // Still load raw text so the debug button reflects the current page.
@@ -242,6 +300,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         forcedIntermediates: forcedIntermediates,
         forcedNotADiagrams: forcedNotADiagrams,
         fontMap: _fontMap,
+        notationMode: notationMode ?? _notationMode,
       );
 
       debugPrint(
@@ -444,7 +503,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: l.reanalyse,
-            onPressed: _analysing ? null : _reanalyse,
+            onPressed: _analysing ? null : _showGenerateOptionsDialog,
           ),
         ],
       ),
