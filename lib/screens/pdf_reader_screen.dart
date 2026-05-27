@@ -1,5 +1,6 @@
 import 'dart:math' show min;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -30,6 +31,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   // Per-document page cache: page number → list of games on that page.
   Map<int, List<PageAnalysis>> _cache = {};
+  // Per-page figurine detection results (FAN mode only).
+  final Map<int, List<DetectedFigurine>> _figurinesCache = {};
   // Learnt character→piece mapping for the current document's chess font.
   // Shared across all pages so every fuzzy match discovery benefits later pages.
   final Map<String, String> _fontMap = {};
@@ -51,6 +54,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // placeholder for a future zoom feature — currently always 2.0).
   // ignore: prefer_final_fields
   double _renderScale = 2.0;
+  // Figurines detected on the current page (FAN mode only).
+  List<DetectedFigurine>? _detectedFigurines;
+  // Debug: whether to show the figurine bounding-box overlay.
+  bool _showFigurineOverlay = false;
 
   @override
   void initState() {
@@ -153,6 +160,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() {
       _currentPage = page;
       _pageGames = _cache[page];
+      _detectedFigurines = _figurinesCache[page];
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
     });
@@ -221,6 +229,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     await AnalysisCache.clear(widget.filePath);
     setState(() {
       _cache.clear();
+      _figurinesCache.clear();
+      _detectedFigurines = null;
       _pageGames = null;
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
@@ -254,6 +264,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         _cache.containsKey(pageNumber)) {
       setState(() {
         _pageGames = _cache[pageNumber];
+        _detectedFigurines = _figurinesCache[pageNumber];
         _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       });
@@ -296,6 +307,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           renderScale: _renderScale,
           verbose: true,
         );
+        _figurinesCache[pageNumber] = detectedFigurines;
+        if (mounted) setState(() => _detectedFigurines = detectedFigurines);
       }
 
       // Use auto-detected FENs if available (user override takes precedence).
@@ -520,6 +533,18 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          if (kDebugMode && _detectedFigurines != null)
+            IconButton(
+              icon: Icon(
+                _showFigurineOverlay
+                    ? Icons.visibility
+                    : Icons.visibility_off,
+                color: _showFigurineOverlay ? Colors.green : null,
+              ),
+              tooltip: 'Toggle figurine overlay',
+              onPressed: () =>
+                  setState(() => _showFigurineOverlay = !_showFigurineOverlay),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: l.reanalyse,
@@ -598,6 +623,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                     onMoveSelected: (idx) =>
                         setState(() => _selectedMoveIndex = idx),
                   ),
+                  if (kDebugMode &&
+                      _showFigurineOverlay &&
+                      _detectedFigurines != null)
+                    _FigurineOverlay(
+                      figurines: _detectedFigurines!,
+                      pageWidth: page.width,
+                      pageHeight: page.height,
+                      widgetSize: constraints.biggest,
+                    ),
                   if (_analysing)
                     const Positioned(
                       bottom: 8,
@@ -816,6 +850,63 @@ class _PdfMoveOverlay extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+class _FigurineOverlay extends StatelessWidget {
+  const _FigurineOverlay({
+    required this.figurines,
+    required this.pageWidth,
+    required this.pageHeight,
+    required this.widgetSize,
+  });
+
+  final List<DetectedFigurine> figurines;
+  final double pageWidth;
+  final double pageHeight;
+  final Size widgetSize;
+
+  @override
+  Widget build(BuildContext context) {
+    if (figurines.isEmpty) return const SizedBox.shrink();
+    final W = widgetSize.width;
+    final H = widgetSize.height;
+    if (W == 0 || H == 0) return const SizedBox.shrink();
+
+    final scale   = min(W / pageWidth, H / pageHeight);
+    final xOffset = (W - pageWidth  * scale) / 2;
+    final yOffset = (H - pageHeight * scale) / 2;
+
+    return Stack(
+      children: [
+        for (final fig in figurines)
+          Positioned(
+            left:   xOffset + fig.bounds.left * scale,
+            top:    yOffset + (pageHeight - fig.bounds.top) * scale,
+            width:  ((fig.bounds.right - fig.bounds.left) * scale).clamp(2.0, double.infinity),
+            height: ((fig.bounds.top - fig.bounds.bottom) * scale).clamp(2.0, double.infinity),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.green, width: 1.5),
+              ),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Text(
+                  fig.piece,
+                  style: const TextStyle(
+                    color: Colors.green,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    height: 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
