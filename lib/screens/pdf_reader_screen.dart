@@ -304,6 +304,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           page,
           rawText.fullText,
           rawText.charRects,
+          boardRects: boardResult.boardRects,
           renderScale: _renderScale,
           verbose: true,
         );

@@ -8,10 +8,10 @@ import 'hog_extractor.dart';
 /// Used to auto-build the fontMap for PDFs that use figurine fonts.
 ///
 /// Model input:  [1, 1767] float32 — HOG feature vector (see HogExtractor)
-/// Model output: [1, 5]    float32 — softmax probabilities
-/// Classes (index):  0=K  1=Q  2=R  3=B  4=N  (Pawn has no figurine letter)
+/// Model output: [1, 6]    float32 — softmax probabilities
+/// Classes (index):  0=K  1=Q  2=R  3=B  4=N  5=NotAFigurine (rejection class)
 class FigurineClassifier {
-  static const List<String> classes = ['K', 'Q', 'R', 'B', 'N'];
+  static const List<String> classes = ['K', 'Q', 'R', 'B', 'N', 'NotAFigurine'];
 
   /// Length of the HOG feature vector expected by the model.
   static const int inputSize = HogExtractor.featureDim; // 1767
@@ -39,23 +39,25 @@ class FigurineClassifier {
 
   /// Classify a single glyph.
   ///
-  /// [features] — Float32List of length [HogExtractor.featureDim] (1767),
-  ///              produced by [HogExtractor.extract].
-  ///
-  /// Returns the piece letter ('K', 'Q', 'R', 'B', 'N'),
-  /// or null if the model is not loaded.
+  /// Returns the piece letter ('K', 'Q', 'R', 'B', 'N'), or null if the
+  /// model is not loaded or the top prediction is the NotAFigurine class.
   String? classify(Float32List features) {
     if (!_isLoaded) return null;
     final scores = _run(features);
-    return classes[_argmax(scores)];
+    final idx = _argmax(scores);
+    if (classes[idx] == 'NotAFigurine') return null;
+    return classes[idx];
   }
 
   /// Like [classify] but also returns the confidence score.
+  /// Returns null if the model is not loaded or if the top prediction is
+  /// the NotAFigurine rejection class.
   (String piece, double confidence)? classifyWithConfidence(
       Float32List features) {
     if (!_isLoaded) return null;
     final scores = _run(features);
     final idx = _argmax(scores);
+    if (classes[idx] == 'NotAFigurine') return null;
     return (classes[idx], scores[idx]);
   }
 

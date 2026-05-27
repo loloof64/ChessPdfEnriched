@@ -55,7 +55,7 @@ class BoardDetector {
   // ─────────────────────────────────────────────────────────────────────────
   // Public entry point
 
-  static Future<({List<int> splitIndices, bool topOfPageBoardDetected, List<String?> detectedFens})>
+  static Future<({List<int> splitIndices, bool topOfPageBoardDetected, List<String?> detectedFens, List<PdfRect> boardRects})>
   detectBoards(PdfPage page, List<PdfRect> charRects) async {
     final iW = (page.width * _scale).round();
     final iH = (page.height * _scale).round();
@@ -67,7 +67,7 @@ class BoardDetector {
       backgroundColor: 0xFFFFFFFF,
     );
     if (image == null) {
-      return (splitIndices: const <int>[], topOfPageBoardDetected: false, detectedFens: const <String?>[]);
+      return (splitIndices: const <int>[], topOfPageBoardDetected: false, detectedFens: const <String?>[], boardRects: const <PdfRect>[]);
     }
 
     try {
@@ -160,8 +160,16 @@ class BoardDetector {
       final splits = _toSplits(boards, charRects, page.height);
       final top = _isTopOfPage(boards, charRects, page.height);
       final detectedFens = boards.map((b) => b.fen as String?).toList();
+      // Board rectangles in PDF coordinates for figurine-detection exclusion.
+      final boardRects = boards.map((b) {
+        final left   = b.x / _scale;
+        final right  = (b.x + 8 * b.s) / _scale;
+        final top_   = page.height - (b.y + 8 * b.s) / _scale;
+        final bottom = page.height - b.y / _scale;
+        return PdfRect(left, bottom, right, top_);
+      }).toList();
 
-      return (splitIndices: splits, topOfPageBoardDetected: top, detectedFens: detectedFens);
+      return (splitIndices: splits, topOfPageBoardDetected: top, detectedFens: detectedFens, boardRects: boardRects);
     } finally {
       image.dispose();
     }
