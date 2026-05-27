@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'figurine_classifier.dart';
+import 'hog_extractor.dart';
 import 'models.dart';
 
 /// Detects and classifies figurine chess-piece glyphs from a rendered PDF page.
@@ -101,8 +102,9 @@ class FigurineDetector {
         final pw = math.max(1, ((c.rect.right - c.rect.left) * renderScale).round());
         final ph = math.max(1, ((c.rect.top - c.rect.bottom) * renderScale).round());
 
-        final pixels = _cropAndResize32(gray, iW, iH, px, py, pw, ph);
-        final hit = classifier.classifyWithConfidence(pixels);
+        final pixels   = _cropAndResize32(gray, iW, iH, px, py, pw, ph);
+        final features = HogExtractor.extract(pixels, pw, ph);
+        final hit      = classifier.classifyWithConfidence(features);
         if (hit == null) continue;
 
         final (piece, confidence) = hit;
@@ -160,7 +162,7 @@ class FigurineDetector {
   }
 
   /// Crop [px,py,pw,ph] from [gray] and nearest-neighbour resize to
-  /// [FigurineClassifier.inputSize] × [FigurineClassifier.inputSize].
+  /// [HogExtractor.imageSize] × [HogExtractor.imageSize] (32×32).
   static Float32List _cropAndResize32(
     Float32List gray,
     int imgW,
@@ -170,7 +172,7 @@ class FigurineDetector {
     int pw,
     int ph,
   ) {
-    const size = FigurineClassifier.inputSize; // 32
+    const size = HogExtractor.imageSize; // 32
     final out = Float32List(size * size);
     for (int dy = 0; dy < size; dy++) {
       for (int dx = 0; dx < size; dx++) {

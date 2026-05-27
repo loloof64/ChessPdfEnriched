@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'figurine_classifier.dart';
+import 'hog_extractor.dart';
 
 /// Builds a `fontMap` entry for each unknown figurine character found on a
 /// PDF page by cropping the character's bounding box from the rendered page
@@ -131,10 +132,11 @@ class FigurineMapBuilder {
         imgTop,
         cropW,
         cropH,
-        FigurineClassifier.inputSize,
+        HogExtractor.imageSize, // resize to 32×32 before HOG
       );
 
-      final prediction = classifier.classifyWithConfidence(pixels);
+      final features   = HogExtractor.extract(pixels, cropW, cropH);
+      final prediction = classifier.classifyWithConfidence(features);
       if (prediction == null) continue;
       final (piece, confidence) = prediction;
 
