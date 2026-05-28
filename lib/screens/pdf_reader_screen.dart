@@ -33,6 +33,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   Map<int, List<PageAnalysis>> _cache = {};
   // Per-page figurine detection results (FAN mode only).
   final Map<int, List<DetectedFigurine>> _figurinesCache = {};
+  // Per-page candidate blob boxes for debug overlay (FAN mode only).
+  final Map<int, List<MoveBounds>> _wordBoxesCache = {};
   // Learnt character→piece mapping for the current document's chess font.
   // Shared across all pages so every fuzzy match discovery benefits later pages.
   final Map<String, String> _fontMap = {};
@@ -165,7 +167,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _currentPage = page;
       _pageGames = _cache[page];
       _detectedFigurines = _figurinesCache[page];
-      _detectedWordBoxes = null;
+      _detectedWordBoxes = _wordBoxesCache[page];
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
     });
@@ -235,6 +237,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() {
       _cache.clear();
       _figurinesCache.clear();
+      _wordBoxesCache.clear();
       _detectedFigurines = null;
       _detectedWordBoxes = null;
       _pageGames = null;
@@ -271,6 +274,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       setState(() {
         _pageGames = _cache[pageNumber];
         _detectedFigurines = _figurinesCache[pageNumber];
+        _detectedWordBoxes = _wordBoxesCache[pageNumber];
         _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       });
@@ -317,6 +321,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           onWordBoxes: kDebugMode ? (boxes) => wordBoxes = boxes : null,
         );
         _figurinesCache[pageNumber] = detectedFigurines;
+        final wb = wordBoxes;
+        if (wb != null) _wordBoxesCache[pageNumber] = wb;
         if (mounted) {
           setState(() {
             _detectedFigurines = detectedFigurines;
