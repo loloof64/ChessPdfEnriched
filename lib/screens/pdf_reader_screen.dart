@@ -306,11 +306,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         rawText.charRects,
       );
 
+      // In debug mode, compute word-level bounding boxes from the PDF text layer.
+      if (kDebugMode) {
+        final wb = _computeWordBoxes(rawText);
+        _wordBoxesCache[pageNumber] = wb;
+        if (mounted) setState(() => _detectedWordBoxes = wb);
+      }
+
       // In FAN mode, detect and classify figurine glyphs before parsing.
       List<DetectedFigurine>? detectedFigurines;
       if (effectiveMode == NotationMode.figurineFan &&
           _figurineDetector != null) {
-        List<MoveBounds>? wordBoxes;
         detectedFigurines = await _figurineDetector!.detectFigurines(
           page,
           boardRects: boardResult.boardRects,
@@ -318,17 +324,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           verbose: true,
           debugLogPath: kDebugMode ? 'figurine_blobs.log' : null,
           debugPageNumber: pageNumber,
-          onWordBoxes: kDebugMode ? (boxes) => wordBoxes = boxes : null,
         );
         _figurinesCache[pageNumber] = detectedFigurines;
-        final wb = wordBoxes;
-        if (wb != null) _wordBoxesCache[pageNumber] = wb;
-        if (mounted) {
-          setState(() {
-            _detectedFigurines = detectedFigurines;
-            _detectedWordBoxes = wordBoxes;
-          });
-        }
+        if (mounted) setState(() => _detectedFigurines = detectedFigurines);
       }
 
       // Use auto-detected FENs if available (user override takes precedence).
@@ -405,6 +403,46 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       }
       _analysing = false;
     });
+  }
+
+  /// Groups consecutive non-whitespace characters in [rawText] into word-level
+  /// bounding boxes using the PDF text layer's character rects.
+  static List<MoveBounds> _computeWordBoxes(PdfPageRawText rawText) {
+    final text = rawText.fullText;
+    final rects = rawText.charRects;
+    final words = <MoveBounds>[];
+
+    int i = 0;
+    while (i < text.length) {
+      while (i < text.length &&
+          (text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')) {
+        i++;
+      }
+      if (i >= text.length) break;
+
+      final wordStart = i;
+      while (i < text.length &&
+          text[i] != ' ' && text[i] != '\n' && text[i] != '\r' && text[i] != '\t') {
+        i++;
+      }
+
+      double? left, top, right, bottom;
+      for (int j = wordStart; j < i; j++) {
+        if (j >= rects.length) break;
+        final r = rects[j];
+        if (r.isEmpty) continue;
+        left   = left   == null || r.left   < left   ? r.left   : left;
+        bottom = bottom == null || r.bottom < bottom ? r.bottom : bottom;
+        right  = right  == null || r.right  > right  ? r.right  : right;
+        top    = top    == null || r.top    > top    ? r.top    : top;
+      }
+
+      if (left != null) {
+        words.add(MoveBounds(left: left, top: top!, right: right!, bottom: bottom!));
+      }
+    }
+
+    return words;
   }
 
   /// If the page's text does not open a new game (no "1." near the start),

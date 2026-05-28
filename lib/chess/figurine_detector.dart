@@ -94,7 +94,24 @@ class FigurineDetector {
             '| renderScale=$renderScale ===');
       }
 
-      for (final cb in allBlobs) {
+      // Merge horizontally close blobs that are vertically overlapping (fragments
+      // of the same glyph — e.g. counters, dots, serifs separated by CCL).
+      final mergeGapPx = (minGlyphSizePt * renderScale * 0.4).round().clamp(2, 8);
+      final merged = _mergeNearbyBlobs(allBlobs, mergeGapPx);
+
+      // Expand wide blobs by vertical splitting so each character is processed.
+      final candidates = <({int x0, int y0, int x1, int y1})>[];
+      for (final cb in merged) {
+        final cw = cb.x1 - cb.x0 + 1;
+        final ch = cb.y1 - cb.y0 + 1;
+        if (cw > ch * maxAspectRatio) {
+          candidates.addAll(_splitBlobVertically(binary, iW, cb, maxAspectRatio));
+        } else {
+          candidates.add(cb);
+        }
+      }
+
+      for (final cb in candidates) {
         final cw = cb.x1 - cb.x0 + 1;
         final ch = cb.y1 - cb.y0 + 1;
         final cLeftPt = cb.x0 / renderScale;
@@ -319,6 +336,87 @@ class FigurineDetector {
     return bx0.keys
         .map((k) => (x0: bx0[k]!, y0: by0[k]!, x1: bx1[k]!, y1: by1[k]!))
         .toList();
+  }
+
+  /// Merge blobs that are close enough horizontally and overlap vertically —
+  /// they are likely fragments of the same glyph (counters, dots, serifs).
+  /// [maxGapPx] is the maximum horizontal gap in pixels to trigger a merge.
+  static List<({int x0, int y0, int x1, int y1})> _mergeNearbyBlobs(
+    List<({int x0, int y0, int x1, int y1})> blobs,
+    int maxGapPx,
+  ) {
+    if (blobs.isEmpty) return blobs;
+
+    // Sort by left edge so we only need a single forward pass.
+    final sorted = blobs.toList()
+      ..sort((a, b) => a.x0.compareTo(b.x0));
+
+    final out = <({int x0, int y0, int x1, int y1})>[];
+    var cur = sorted[0];
+
+    for (int i = 1; i < sorted.length; i++) {
+      final next = sorted[i];
+      final hGap = next.x0 - cur.x1 - 1;           // pixels between right of cur and left of next
+      final vOverlap = cur.y1 >= next.y0 && next.y1 >= cur.y0; // vertical bands overlap
+      if (hGap <= maxGapPx && vOverlap) {
+        // Absorb next into cur.
+        cur = (
+          x0: cur.x0,
+          y0: cur.y0 < next.y0 ? cur.y0 : next.y0,
+          x1: cur.x1 > next.x1 ? cur.x1 : next.x1,
+          y1: cur.y1 > next.y1 ? cur.y1 : next.y1,
+        );
+      } else {
+        out.add(cur);
+        cur = next;
+      }
+    }
+    out.add(cur);
+    return out;
+  }
+
+  /// Split a wide blob at vertical ink-density valleys so each piece has an
+  /// acceptable aspect ratio. Recurses until narrow enough or unsplittable.
+  static List<({int x0, int y0, int x1, int y1})> _splitBlobVertically(
+    Uint8List binary,
+    int iW,
+    ({int x0, int y0, int x1, int y1}) blob,
+    double maxAspectRatio,
+  ) {
+    final bw = blob.x1 - blob.x0 + 1;
+    final bh = blob.y1 - blob.y0 + 1;
+    if (bw <= bh * maxAspectRatio || bw < 4) return [blob];
+
+    // Column-wise ink density within the blob.
+    final proj = List<int>.filled(bw, 0);
+    for (int ry = 0; ry < bh; ry++) {
+      for (int rx = 0; rx < bw; rx++) {
+        proj[rx] += binary[(blob.y0 + ry) * iW + (blob.x0 + rx)];
+      }
+    }
+
+    // Find the column with minimum ink (best split point), excluding edges.
+    int minVal = proj[1];
+    int minRx = 1;
+    for (int rx = 1; rx < bw - 1; rx++) {
+      if (proj[rx] < minVal) {
+        minVal = proj[rx];
+        minRx = rx;
+      }
+    }
+
+    // Refuse to split if the minimum is more than 30% of the peak — characters
+    // that genuinely overlap cannot be separated this way.
+    final peak = proj.reduce((a, b) => a > b ? a : b);
+    if (minVal > peak * 0.3) return [blob];
+
+    final left  = (x0: blob.x0,          y0: blob.y0, x1: blob.x0 + minRx - 1, y1: blob.y1);
+    final right = (x0: blob.x0 + minRx + 1, y0: blob.y0, x1: blob.x1, y1: blob.y1);
+
+    return [
+      ..._splitBlobVertically(binary, iW, left,  maxAspectRatio),
+      ..._splitBlobVertically(binary, iW, right, maxAspectRatio),
+    ];
   }
 
   static bool _boundsOverlap(MoveBounds a, MoveBounds b) {
