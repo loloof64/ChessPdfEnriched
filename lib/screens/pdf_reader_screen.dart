@@ -1,6 +1,6 @@
 import 'dart:math' show min;
 
-import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -308,7 +308,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       // In debug mode, compute word-level bounding boxes from the PDF text layer.
       if (kDebugMode) {
-        final wb = _computeWordBoxes(rawText);
+        final wb = _computeWordBoxes(rawText, pageNumber);
         _wordBoxesCache[pageNumber] = wb;
         if (mounted) setState(() => _detectedWordBoxes = wb);
       }
@@ -407,7 +407,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   /// Groups consecutive non-whitespace characters in [rawText] into word-level
   /// bounding boxes using the PDF text layer's character rects.
-  static List<MoveBounds> _computeWordBoxes(PdfPageRawText rawText) {
+  static List<MoveBounds> _computeWordBoxes(PdfPageRawText rawText, int pageNumber) {
     final text = rawText.fullText;
     final rects = rawText.charRects;
     final words = <MoveBounds>[];
@@ -425,23 +425,73 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           text[i] != ' ' && text[i] != '\n' && text[i] != '\r' && text[i] != '\t') {
         i++;
       }
+      final wordEnd = i;
 
-      double? left, top, right, bottom;
-      for (int j = wordStart; j < i; j++) {
+      // Collect left-edges and vertical bounds from non-empty char rects.
+      // We use consecutive left-edge gaps as the average advance width, then
+      // project that past the last character to get the true word right edge.
+      // (charRects in pdfrx are glyph/ink bounds, not layout cells, so r.right
+      // undershoots the advance width — hence we cannot use r.right directly.)
+      double? top, bottom;
+      double? firstLeft, lastLeft;
+      double advanceSum = 0.0;
+      int advanceSamples = 0;
+
+      for (int j = wordStart; j < wordEnd; j++) {
         if (j >= rects.length) break;
         final r = rects[j];
         if (r.isEmpty) continue;
-        left   = left   == null || r.left   < left   ? r.left   : left;
+
         bottom = bottom == null || r.bottom < bottom ? r.bottom : bottom;
-        right  = right  == null || r.right  > right  ? r.right  : right;
         top    = top    == null || r.top    > top    ? r.top    : top;
+
+        if (firstLeft == null) {
+          firstLeft = r.left;
+        } else {
+          advanceSum += r.left - lastLeft!;
+          advanceSamples++;
+        }
+        lastLeft = r.left;
       }
 
-      if (left != null) {
-        words.add(MoveBounds(left: left, top: top!, right: right!, bottom: bottom!));
+      if (firstLeft == null || lastLeft == null || top == null || bottom == null) {
+        continue;
       }
+
+      // Average advance width; fall back to 60 % of line height for single-char words.
+      final avgAdvance = advanceSamples > 0
+          ? advanceSum / advanceSamples
+          : (top - bottom) * 0.6;
+
+      final right = lastLeft + avgAdvance;
+
+      words.add(MoveBounds(
+        left:   firstLeft,
+        top:    top,
+        right:  right,
+        bottom: bottom,
+      ));
     }
 
+    // Diagnostic: sample the first word's raw charRects to understand the data.
+    if (words.isNotEmpty) {
+      int si = 0;
+      while (si < rawText.fullText.length &&
+          (rawText.fullText[si] == ' ' || rawText.fullText[si] == '\n' ||
+           rawText.fullText[si] == '\r' || rawText.fullText[si] == '\t')) { si++; }
+      final rawEnd = rawText.fullText.indexOf(' ', si);
+      final sEnd = (rawEnd < 0 ? rawText.fullText.length : rawEnd).clamp(si, si + 10);
+      final sample = rawText.fullText.substring(si, sEnd);
+      final sRects = <String>[];
+      for (int j = si; j < sEnd && j < rawText.charRects.length; j++) {
+        final r = rawText.charRects[j];
+        sRects.add(r.isEmpty ? '?' : 'L${r.left.toStringAsFixed(1)}-R${r.right.toStringAsFixed(1)}');
+      }
+      debugPrint('[WordBoxes] page $pageNumber → ${words.length} word box(es) '
+          '| first word "$sample": ${sRects.join(', ')}');
+    } else {
+      debugPrint('[WordBoxes] page $pageNumber → 0 word box(es)');
+    }
     return words;
   }
 
