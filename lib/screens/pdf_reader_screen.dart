@@ -56,8 +56,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   double _renderScale = 2.0;
   // Figurines detected on the current page (FAN mode only).
   List<DetectedFigurine>? _detectedFigurines;
+  // Debug: word blobs detected on the current page.
+  List<MoveBounds>? _detectedWordBoxes;
   // Debug: whether to show the figurine bounding-box overlay.
   bool _showFigurineOverlay = false;
+  // Debug: whether to show word-blob rectangles in red.
+  bool _showWordBoxOverlay = false;
 
   @override
   void initState() {
@@ -161,6 +165,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _currentPage = page;
       _pageGames = _cache[page];
       _detectedFigurines = _figurinesCache[page];
+      _detectedWordBoxes = null;
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
     });
@@ -231,6 +236,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _cache.clear();
       _figurinesCache.clear();
       _detectedFigurines = null;
+      _detectedWordBoxes = null;
       _pageGames = null;
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
@@ -300,16 +306,23 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       List<DetectedFigurine>? detectedFigurines;
       if (effectiveMode == NotationMode.figurineFan &&
           _figurineDetector != null) {
+        List<MoveBounds>? wordBoxes;
         detectedFigurines = await _figurineDetector!.detectFigurines(
           page,
-          rawText.fullText,
-          rawText.charRects,
           boardRects: boardResult.boardRects,
           renderScale: _renderScale,
           verbose: true,
+          debugLogPath: kDebugMode ? 'figurine_blobs.log' : null,
+          debugPageNumber: pageNumber,
+          onWordBoxes: kDebugMode ? (boxes) => wordBoxes = boxes : null,
         );
         _figurinesCache[pageNumber] = detectedFigurines;
-        if (mounted) setState(() => _detectedFigurines = detectedFigurines);
+        if (mounted) {
+          setState(() {
+            _detectedFigurines = detectedFigurines;
+            _detectedWordBoxes = wordBoxes;
+          });
+        }
       }
 
       // Use auto-detected FENs if available (user override takes precedence).
@@ -536,11 +549,32 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         actions: [
           if (kDebugMode && _detectedFigurines != null)
             IconButton(
-              icon: Icon(
-                _showFigurineOverlay
-                    ? Icons.visibility
-                    : Icons.visibility_off,
-                color: _showFigurineOverlay ? Colors.green : null,
+              icon: Text(
+                'W',
+                style: TextStyle(
+                  color: _showWordBoxOverlay ? Colors.red : null,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  decoration: _showWordBoxOverlay ? TextDecoration.lineThrough : null,
+                  decorationColor: Colors.red,
+                  decorationThickness: 2.5,
+                ),
+              ),
+              tooltip: 'Toggle word-blob overlay',
+              onPressed: () =>
+                  setState(() => _showWordBoxOverlay = !_showWordBoxOverlay),
+            ),
+          if (kDebugMode && _detectedFigurines != null)
+            IconButton(
+              icon: Text(
+                '♛',
+                style: TextStyle(
+                  color: _showFigurineOverlay ? Colors.green : null,
+                  fontSize: 20,
+                  decoration: _showFigurineOverlay ? TextDecoration.lineThrough : null,
+                  decorationColor: Colors.green,
+                  decorationThickness: 2.5,
+                ),
               ),
               tooltip: 'Toggle figurine overlay',
               onPressed: () =>
@@ -624,6 +658,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                     onMoveSelected: (idx) =>
                         setState(() => _selectedMoveIndex = idx),
                   ),
+                  if (kDebugMode &&
+                      _showWordBoxOverlay &&
+                      _detectedWordBoxes != null)
+                    _WordBoxOverlay(
+                      wordBoxes: _detectedWordBoxes!,
+                      pageWidth: page.width,
+                      pageHeight: page.height,
+                      widgetSize: constraints.biggest,
+                    ),
                   if (kDebugMode &&
                       _showFigurineOverlay &&
                       _detectedFigurines != null)
@@ -904,6 +947,51 @@ class _FigurineOverlay extends StatelessWidget {
                     height: 1,
                   ),
                 ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+class _WordBoxOverlay extends StatelessWidget {
+  const _WordBoxOverlay({
+    required this.wordBoxes,
+    required this.pageWidth,
+    required this.pageHeight,
+    required this.widgetSize,
+  });
+
+  final List<MoveBounds> wordBoxes;
+  final double pageWidth;
+  final double pageHeight;
+  final Size widgetSize;
+
+  @override
+  Widget build(BuildContext context) {
+    if (wordBoxes.isEmpty) return const SizedBox.shrink();
+    final W = widgetSize.width;
+    final H = widgetSize.height;
+    if (W == 0 || H == 0) return const SizedBox.shrink();
+
+    final scale   = min(W / pageWidth, H / pageHeight);
+    final xOffset = (W - pageWidth  * scale) / 2;
+    final yOffset = (H - pageHeight * scale) / 2;
+
+    return Stack(
+      children: [
+        for (final b in wordBoxes)
+          Positioned(
+            left:   xOffset + b.left * scale,
+            top:    yOffset + (pageHeight - b.top) * scale,
+            width:  ((b.right - b.left) * scale).clamp(1.0, double.infinity),
+            height: ((b.top - b.bottom) * scale).clamp(1.0, double.infinity),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.red, width: 1),
               ),
             ),
           ),

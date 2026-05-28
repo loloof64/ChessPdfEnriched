@@ -45,7 +45,7 @@ class FigurineClassifier {
     if (!_isLoaded) return null;
     final scores = _run(features);
     final idx = _argmax(scores);
-    if (classes[idx] == 'NotAFigurine') return null;
+    if (idx >= classes.length || classes[idx] == 'NotAFigurine') return null;
     return classes[idx];
   }
 
@@ -57,7 +57,7 @@ class FigurineClassifier {
     if (!_isLoaded) return null;
     final scores = _run(features);
     final idx = _argmax(scores);
-    if (classes[idx] == 'NotAFigurine') return null;
+    if (idx >= classes.length || classes[idx] == 'NotAFigurine') return null;
     return (classes[idx], scores[idx]);
   }
 
@@ -65,9 +65,11 @@ class FigurineClassifier {
     assert(features.length == inputSize,
         'Expected $inputSize features, got ${features.length}');
 
-    // Input tensor shape: [1, 1767]
-    final input = [features.toList()];
-    final output = [List<double>.filled(classes.length, 0.0)];
+    // Read actual output size from the loaded model rather than classes.length so
+    // the old 5-class model and the new 6-class model both work correctly.
+    final outputSize = _interpreter.getOutputTensor(0).shape.last;
+    final input  = [features.toList()];
+    final output = [List<double>.filled(outputSize, 0.0)];
     _interpreter.run(input, output);
     return output[0];
   }

@@ -52,5 +52,6 @@ blobs/
 
 # customs
 logs.txt
+figurine_blobs.log
 /assets/models
 expected_figurines.txt

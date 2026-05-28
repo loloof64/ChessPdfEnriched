@@ -572,19 +572,10 @@ class MoveParser {
     }
 
     // ------------------------------------------------------------------
-    // 3. Pre-populate fontMap from detected figurines (FAN mode).
-    //    Build a char-index → piece lookup for spatial merge and bounds trimming.
+    // 3. (Visual detection — no charIndex / fontMap pre-population needed.)
+    //    Figurine identification is done spatially via DetectedFigurine.bounds.
 
-    final figurineCharIndices = <int>{};
-    if (detectedFigurines != null && detectedFigurines.isNotEmpty) {
-      for (final fig in detectedFigurines) {
-        if (fig.charIndex < text.length) {
-          final char = text[fig.charIndex];
-          fontMap?[char] = fig.piece; // '' for pawn
-          figurineCharIndices.add(fig.charIndex);
-        }
-      }
-    }
+    final figurines = detectedFigurines ?? const <DetectedFigurine>[];
 
     // ------------------------------------------------------------------
     // 4. Tokenise, skipping comments and variations.
@@ -595,8 +586,8 @@ class MoveParser {
     // 4b. Spatially merge standalone figurine tokens with adjacent move text.
     //     e.g. "♘" token + "f3" token → "Nf3" token (if spatially adjacent).
 
-    if (figurineCharIndices.isNotEmpty) {
-      tokens = _mergeFigurineTokens(tokens, charRects, figurineCharIndices, text);
+    if (figurines.isNotEmpty) {
+      tokens = _mergeFigurineTokens(tokens, charRects, figurines);
     }
 
     // ------------------------------------------------------------------
@@ -764,7 +755,7 @@ class MoveParser {
           ));
           final fenBefore = position.fen;
           final (newPosition, san) = position.makeSan(move);
-          final combinedBoundsStart = figurineCharIndices.contains(tok.start)
+          final combinedBoundsStart = _startsWithFigurine(tok.start, charRects, figurines)
               ? tok.start + 1
               : tok.start;
           moves.add(CachedMove(
@@ -805,7 +796,7 @@ class MoveParser {
       final (newPosition, san) = position.makeSan(move);
       // Skip figurine prefix char when computing bounds so the overlay
       // highlights only the square/file part (e.g. "f3" not "♘f3").
-      final boundsStart = figurineCharIndices.contains(tok.start)
+      final boundsStart = _startsWithFigurine(tok.start, charRects, figurines)
           ? tok.start + 1
           : tok.start;
       moves.add(
@@ -828,7 +819,7 @@ class MoveParser {
     debugPrint(
       '[MoveParser] fenSource=$fenSource  ${moves.length} move(s) parsed'
       '${skippedTokens > 0 ? "  ($skippedTokens token(s) skipped)" : ""}'
-      '${figurineCharIndices.isNotEmpty ? "  figurines=${figurineCharIndices.length}" : ""}',
+      '${figurines.isNotEmpty ? "  figurines=${figurines.length}" : ""}',
     );
 
     return PageAnalysis(
@@ -920,48 +911,45 @@ class MoveParser {
   /// token when they are spatially adjacent (same text line, no significant gap).
   ///
   /// E.g. a "♘" token followed by a "f3" token becomes a single "Nf3" token.
-  /// The figurine piece letter is resolved from [figurineCharIndices] via
-  /// [text] → fontMap (already pre-populated before this call).
+  /// Merges a standalone figurine token with the immediately following move text
+  /// when they are spatially adjacent (same text line, no significant gap).
+  ///
+  /// E.g. a "♘" token followed by a "f3" token becomes a single "Nf3" token.
+  /// The piece letter comes directly from the matching [DetectedFigurine].
   static List<_Token> _mergeFigurineTokens(
     List<_Token> tokens,
     List<PdfRect> charRects,
-    Set<int> figurineCharIndices,
-    String text,
+    List<DetectedFigurine> figurines,
   ) {
-    const sameLineYTolerance = 12.0; // pt — max vertical centre difference
-    const adjacentXTolerance = 10.0; // pt — max gap between figurine right and text left
+    const sameLineYTolerance = 12.0; // pt
+    const adjacentXTolerance = 10.0; // pt
 
     final result = <_Token>[];
     for (int i = 0; i < tokens.length; i++) {
       final tok = tokens[i];
 
-      // A standalone figurine token: single char, classified as figurine.
-      if (tok.end - tok.start == 1 &&
-          tok.start < text.length &&
-          figurineCharIndices.contains(tok.start) &&
-          i + 1 < tokens.length) {
-        final next = tokens[i + 1];
+      // A standalone single-char token that spatially matches a figurine.
+      if (tok.end - tok.start == 1 && i + 1 < tokens.length) {
+        final fig = _figurineForCharPos(tok.start, charRects, figurines);
+        if (fig != null) {
+          final next = tokens[i + 1];
 
-        final figRight = _tokenRight(charRects, tok.start, tok.end);
-        final figMidY = _tokenMidY(charRects, tok.start, tok.end);
-        final textLeft = _tokenLeft(charRects, next.start, next.end);
-        final textMidY = _tokenMidY(charRects, next.start, next.end);
+          // Use the figurine's own bounds for proximity; fall back to charRects.
+          final figRight = fig.bounds.right;
+          final figMidY  = (fig.bounds.top + fig.bounds.bottom) / 2;
+          final textLeft = _tokenLeft(charRects, next.start, next.end);
+          final textMidY = _tokenMidY(charRects, next.start, next.end);
 
-        final sameY = figMidY != null &&
-            textMidY != null &&
-            (figMidY - textMidY).abs() < sameLineYTolerance;
-        final close = figRight != null &&
-            textLeft != null &&
-            textLeft - figRight < adjacentXTolerance;
+          final sameY = textMidY != null &&
+              (figMidY - textMidY).abs() < sameLineYTolerance;
+          final close = textLeft != null &&
+              textLeft - figRight < adjacentXTolerance;
 
-        if (sameY && close) {
-          // The char at tok.start is a figurine; fontMap[char] = piece letter.
-          final figChar = text[tok.start];
-          // fontMap might already be applied; use the raw char to look up piece.
-          // The merged token text puts the piece letter first.
-          result.add(_Token(figChar + next.text, tok.start, next.end));
-          i++; // skip the consumed next token
-          continue;
+          if (sameY && close) {
+            result.add(_Token(fig.piece + next.text, tok.start, next.end));
+            i++; // consume next token
+            continue;
+          }
         }
       }
 
@@ -970,20 +958,43 @@ class MoveParser {
     return result;
   }
 
+  /// Returns the [DetectedFigurine] whose visual bounds overlap the charRect at
+  /// [charIdx], or null if none matches. Used to identify figurine tokens.
+  static DetectedFigurine? _figurineForCharPos(
+    int charIdx,
+    List<PdfRect> charRects,
+    List<DetectedFigurine> figurines,
+  ) {
+    if (charIdx >= charRects.length || figurines.isEmpty) return null;
+    const yTol = 15.0;
+    const xTol =  5.0;
+    final r = charRects[charIdx];
+    if (r.isEmpty) return null;
+    final midY = (r.top + r.bottom) / 2;
+    for (final fig in figurines) {
+      final figMidY = (fig.bounds.top + fig.bounds.bottom) / 2;
+      if ((midY - figMidY).abs() > yTol) continue;
+      if (r.right < fig.bounds.left - xTol) continue;
+      if (r.left  > fig.bounds.right + xTol) continue;
+      return fig;
+    }
+    return null;
+  }
+
+  /// Returns true if the character at [charIdx] spatially overlaps a detected
+  /// figurine. Used to skip the figurine glyph when computing move bounds.
+  static bool _startsWithFigurine(
+    int charIdx,
+    List<PdfRect> charRects,
+    List<DetectedFigurine> figurines,
+  ) =>
+      _figurineForCharPos(charIdx, charRects, figurines) != null;
+
   static double? _tokenLeft(List<PdfRect> rects, int start, int end) {
     double? v;
     for (int i = start; i < end && i < rects.length; i++) {
       if (rects[i].isEmpty) continue;
       v = v == null ? rects[i].left : math.min(v, rects[i].left);
-    }
-    return v;
-  }
-
-  static double? _tokenRight(List<PdfRect> rects, int start, int end) {
-    double? v;
-    for (int i = start; i < end && i < rects.length; i++) {
-      if (rects[i].isEmpty) continue;
-      v = v == null ? rects[i].right : math.max(v, rects[i].right);
     }
     return v;
   }

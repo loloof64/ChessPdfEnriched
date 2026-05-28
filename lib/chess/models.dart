@@ -41,22 +41,18 @@ enum FenSource {
 /// A detected figurine glyph with its bounds and classified piece type.
 class DetectedFigurine {
   const DetectedFigurine({
-    required this.charIndex,
     required this.bounds,
     required this.piece,
     required this.confidence,
   });
 
-  /// Index in the raw text where this glyph was found.
-  final int charIndex;
-
-  /// Position and size in page coordinates (PDF space).
+  /// Position in PDF page coordinates (origin bottom-left, y up).
   final MoveBounds bounds;
 
-  /// Classified piece ('K', 'Q', 'R', 'B', 'N', 'P').
+  /// Classified piece letter ('K', 'Q', 'R', 'B', 'N').
   final String piece;
 
-  /// TFLite model confidence (0.0 to 1.0).
+  /// TFLite model confidence (0.0–1.0).
   final double confidence;
 }
 
