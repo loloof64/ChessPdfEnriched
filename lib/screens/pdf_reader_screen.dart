@@ -46,6 +46,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   int _selectedMoveIndex = -1;
   // True while the page's move analysis is being computed.
   bool _analysing = false;
+  // Progress during a full-document reanalysis: (current page, total pages).
+  // Null when analysing a single page or not analysing.
+  ({int current, int total})? _analysingProgress;
   // Figurine glyph classifier — loaded once per document session.
   FigurineClassifier? _figurineClassifier;
   // Figurine detector — wraps the classifier for per-page glyph detection.
@@ -249,12 +252,19 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       final totalPages = _document!.pages.length;
       for (int page = 1; page <= totalPages; page++) {
         if (!mounted) break;
+        if (mounted) {
+          setState(() => _analysingProgress = (current: page, total: totalPages));
+        }
         await _loadPageAnalysis(page);
-        // Keep button disabled between pages during full-document reanalysis.
         if (mounted) setState(() => _analysing = true);
       }
     } finally {
-      if (mounted) setState(() => _analysing = false);
+      if (mounted) {
+        setState(() {
+          _analysing = false;
+          _analysingProgress = null;
+        });
+      }
     }
   }
 
@@ -308,6 +318,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       // In debug mode, compute word-level bounding boxes from the PDF text layer.
       if (kDebugMode) {
+        debugPrint('[WordBoxes] page $pageNumber page size: '
+            '${page.width.toStringAsFixed(2)} × ${page.height.toStringAsFixed(2)} pt');
         final wb = _computeWordBoxes(rawText, pageNumber);
         _wordBoxesCache[pageNumber] = wb;
         if (mounted) setState(() => _detectedWordBoxes = wb);
@@ -405,92 +417,108 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     });
   }
 
-  /// Groups consecutive non-whitespace characters in [rawText] into word-level
-  /// bounding boxes using the PDF text layer's character rects.
+  /// Groups charRects into word-level bounding boxes using visual position gaps.
+  ///
+  /// Two-pass strategy:
+  ///   Pass 1 — scan text-whitespace tokens to compute the maximum intra-word
+  ///             horizontal gap (i.e. the largest gap that can occur between two
+  ///             charRects that belong to the same text token). This gives us a
+  ///             data-driven split threshold without relying on Unicode values.
+  ///   Pass 2 — iterate all non-empty charRects in stream order and open a new
+  ///             group whenever the gap to the previous rect exceeds the threshold
+  ///             (inter-word space) or goes negative (line / column wrap).
+  ///
+  /// This is encoding-agnostic: custom chess-font figurine glyphs, PUA
+  /// characters, or any other non-standard encoding are treated identically
+  /// to regular glyphs — only their position matters.
   static List<MoveBounds> _computeWordBoxes(PdfPageRawText rawText, int pageNumber) {
     final text = rawText.fullText;
     final rects = rawText.charRects;
     final words = <MoveBounds>[];
+    final wordGaps = <double>[]; // right-extension per group, for diagnostic logging
 
-    int i = 0;
-    while (i < text.length) {
-      while (i < text.length &&
-          (text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')) {
-        i++;
-      }
-      if (i >= text.length) break;
-
-      final wordStart = i;
-      while (i < text.length &&
-          text[i] != ' ' && text[i] != '\n' && text[i] != '\r' && text[i] != '\t') {
-        i++;
-      }
-      final wordEnd = i;
-
-      // Collect left-edges and vertical bounds from non-empty char rects.
-      // We use consecutive left-edge gaps as the average advance width, then
-      // project that past the last character to get the true word right edge.
-      // (charRects in pdfrx are glyph/ink bounds, not layout cells, so r.right
-      // undershoots the advance width — hence we cannot use r.right directly.)
-      double? top, bottom;
-      double? firstLeft, lastLeft;
-      double advanceSum = 0.0;
-      int advanceSamples = 0;
-
-      for (int j = wordStart; j < wordEnd; j++) {
-        if (j >= rects.length) break;
-        final r = rects[j];
-        if (r.isEmpty) continue;
-
-        bottom = bottom == null || r.bottom < bottom ? r.bottom : bottom;
-        top    = top    == null || r.top    > top    ? r.top    : top;
-
-        if (firstLeft == null) {
-          firstLeft = r.left;
-        } else {
-          advanceSum += r.left - lastLeft!;
-          advanceSamples++;
+    // ── Pass 1: compute max intra-word charRect gap ─────────────────────────
+    // Iterate text-whitespace tokens and record the largest horizontal gap
+    // observed between consecutive non-empty charRects within a single token.
+    // This gives a data-driven split threshold without hardcoding a constant.
+    double maxIntraGap = 0.0;
+    {
+      int i = 0;
+      while (i < text.length) {
+        while (i < text.length &&
+            (text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')) {
+          i++;
         }
-        lastLeft = r.left;
+        if (i >= text.length) break;
+        final wordStart = i;
+        while (i < text.length &&
+            text[i] != ' ' && text[i] != '\n' && text[i] != '\r' && text[i] != '\t') {
+          i++;
+        }
+        final wordEnd = i;
+        double? prevR;
+        for (int j = wordStart; j < wordEnd && j < rects.length; j++) {
+          final r = rects[j];
+          if (r.isEmpty) continue;
+          if (prevR != null) {
+            final g = r.left - prevR;
+            if (g > maxIntraGap) maxIntraGap = g;
+          }
+          prevR = r.right;
+        }
       }
+    }
+    // Any gap larger than 1.5× the max intra-word gap is an inter-word space.
+    // Floor at 2 pt to guard against edge cases where all intra-word gaps are 0.
+    final splitThreshold = (maxIntraGap * 1.5).clamp(2.0, double.infinity);
+    debugPrint('[WordBoxes] page $pageNumber maxIntraGap=${maxIntraGap.toStringAsFixed(2)}pt '
+        'splitThreshold=${splitThreshold.toStringAsFixed(2)}pt');
 
-      if (firstLeft == null || lastLeft == null || top == null || bottom == null) {
-        continue;
-      }
+    // ── Pass 2: group charRects by visual proximity ──────────────────────────
+    // A new group starts when the gap to the previous rect exceeds splitThreshold
+    // (inter-word space) or is negative (line / column wrap).
+    // This is encoding-agnostic: figurine glyphs, PUA chars, custom fonts are
+    // all treated the same — only their position in the page matters.
+    double? gTop, gBottom, gLeft, gRight;
+    double? prevRight;
 
-      // Average advance width; fall back to 60 % of line height for single-char words.
-      final avgAdvance = advanceSamples > 0
-          ? advanceSum / advanceSamples
-          : (top - bottom) * 0.6;
-
-      final right = lastLeft + avgAdvance;
-
+    void flushGroup() {
+      if (gLeft == null || gRight == null || gTop == null || gBottom == null) return;
+      final lineH = gTop! - gBottom!;
+      final ext = lineH * 0.35;
       words.add(MoveBounds(
-        left:   firstLeft,
-        top:    top,
-        right:  right,
-        bottom: bottom,
+        left:   gLeft!   - lineH * 0.05,
+        top:    gTop!    + lineH * 0.10,
+        right:  gRight!  + ext,
+        bottom: gBottom! - lineH * 0.30,
       ));
+      wordGaps.add(ext);
+      gTop = gBottom = gLeft = gRight = prevRight = null;
     }
 
-    // Diagnostic: sample the first word's raw charRects to understand the data.
-    if (words.isNotEmpty) {
-      int si = 0;
-      while (si < rawText.fullText.length &&
-          (rawText.fullText[si] == ' ' || rawText.fullText[si] == '\n' ||
-           rawText.fullText[si] == '\r' || rawText.fullText[si] == '\t')) { si++; }
-      final rawEnd = rawText.fullText.indexOf(' ', si);
-      final sEnd = (rawEnd < 0 ? rawText.fullText.length : rawEnd).clamp(si, si + 10);
-      final sample = rawText.fullText.substring(si, sEnd);
-      final sRects = <String>[];
-      for (int j = si; j < sEnd && j < rawText.charRects.length; j++) {
-        final r = rawText.charRects[j];
-        sRects.add(r.isEmpty ? '?' : 'L${r.left.toStringAsFixed(1)}-R${r.right.toStringAsFixed(1)}');
+    for (int i = 0; i < rects.length; i++) {
+      final r = rects[i];
+      if (r.isEmpty) continue;
+
+      if (prevRight != null) {
+        final gap = r.left - prevRight!;
+        if (gap > splitThreshold || gap < 0) flushGroup();
       }
-      debugPrint('[WordBoxes] page $pageNumber → ${words.length} word box(es) '
-          '| first word "$sample": ${sRects.join(', ')}');
-    } else {
-      debugPrint('[WordBoxes] page $pageNumber → 0 word box(es)');
+
+      gLeft   ??= r.left;
+      gRight  = r.right;
+      gBottom = gBottom == null ? r.bottom : (r.bottom < gBottom! ? r.bottom : gBottom);
+      gTop    = gTop    == null ? r.top    : (r.top    > gTop!    ? r.top    : gTop);
+      prevRight = r.right;
+    }
+    flushGroup();
+
+    debugPrint('[WordBoxes] page $pageNumber → ${words.length} word box(es)');
+    for (int wi = 0; wi < words.length && wi < 6; wi++) {
+      final b = words[wi];
+      debugPrint('[WordBoxes]   [$wi] '
+          'left=${b.left.toStringAsFixed(1)} right=${b.right.toStringAsFixed(1)} '
+          'width=${(b.right - b.left).toStringAsFixed(1)}pt');
     }
     return words;
   }
@@ -771,10 +799,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                       widgetSize: constraints.biggest,
                     ),
                   if (_analysing)
-                    const Positioned(
+                    Positioned(
                       bottom: 8,
                       right: 8,
-                      child: _AnalysingBadge(),
+                      child: _AnalysingBadge(progress: _analysingProgress),
                     ),
                 ],
               );
@@ -1075,6 +1103,19 @@ class _WordBoxOverlay extends StatelessWidget {
     final xOffset = (W - pageWidth  * scale) / 2;
     final yOffset = (H - pageHeight * scale) / 2;
 
+    // One-shot diagnostic on first build.
+    debugPrint('[WordBoxOverlay] widgetSize=${W.toStringAsFixed(1)}×${H.toStringAsFixed(1)} '
+        'page=${pageWidth.toStringAsFixed(1)}×${pageHeight.toStringAsFixed(1)} '
+        'scale=${scale.toStringAsFixed(4)} xOff=${xOffset.toStringAsFixed(1)} yOff=${yOffset.toStringAsFixed(1)}');
+    if (wordBoxes.isNotEmpty) {
+      final b = wordBoxes.first;
+      final px = xOffset + b.left * scale;
+      final pw = (b.right - b.left) * scale;
+      debugPrint('[WordBoxOverlay]   first box px: left=${px.toStringAsFixed(1)} '
+          'width=${pw.toStringAsFixed(1)} '
+          '(pdf left=${b.left.toStringAsFixed(2)} right=${b.right.toStringAsFixed(2)})');
+    }
+
     return Stack(
       children: [
         for (final b in wordBoxes)
@@ -1097,11 +1138,20 @@ class _WordBoxOverlay extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _AnalysingBadge extends StatelessWidget {
-  const _AnalysingBadge();
+  const _AnalysingBadge({this.progress});
+
+  final ({int current, int total})? progress;
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
+    final String label;
+    if (progress != null) {
+      final pct = (progress!.current / progress!.total * 100).round();
+      label = '${l.analysing} ${progress!.current}/${progress!.total} ($pct%)';
+    } else {
+      label = l.analysing;
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -1121,7 +1171,7 @@ class _AnalysingBadge extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Text(
-            l.analysing,
+            label,
             style: const TextStyle(color: Colors.white, fontSize: 11),
           ),
         ],
