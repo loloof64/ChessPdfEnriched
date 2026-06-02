@@ -417,68 +417,44 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     });
   }
 
-  /// Groups charRects into word-level bounding boxes using visual position gaps.
+  /// Groups charRects into content chunks using local gap context.
   ///
-  /// Two-pass strategy:
-  ///   Pass 1 — scan text-whitespace tokens to compute the maximum intra-word
-  ///             horizontal gap (i.e. the largest gap that can occur between two
-  ///             charRects that belong to the same text token). This gives us a
-  ///             data-driven split threshold without relying on Unicode values.
-  ///   Pass 2 — iterate all non-empty charRects in stream order and open a new
-  ///             group whenever the gap to the previous rect exceeds the threshold
-  ///             (inter-word space) or goes negative (line / column wrap).
+  /// A "chunk" is any contiguous unit: a chess move ("1.♕xf7+"), a word,
+  /// a hyphenated fragment, or a mix of text and figurine glyphs.
   ///
-  /// This is encoding-agnostic: custom chess-font figurine glyphs, PUA
-  /// characters, or any other non-standard encoding are treated identically
-  /// to regular glyphs — only their position matters.
+  /// Instead of a global per-page threshold, each gap is compared to the
+  /// recent local context: a rolling window of the last [_kWindowSize] gaps.
+  /// A gap is a chunk boundary when it is more than [_kSplitFactor]× the
+  /// local median — or when it goes negative (line / column wrap).
+  ///
+  /// This is naturally generic: tight body text, wide-spaced titles, and
+  /// figurine notation all self-calibrate from their own surroundings.
+  // A gap larger than this is always a line-wrap / column-change.
+  // Kerning produces at most a few pt of overlap; real wraps jump 50–400 pt.
+  static const double _kLineWrapThreshold = -5.0;
+  // A gap is a word boundary when it exceeds the 25th-percentile of recent
+  // gaps by at least this margin.  Using p25 (not median) keeps the baseline
+  // anchored to the intra-char spacing even when many short words appear and
+  // word-space gaps start to outnumber intra-char gaps in the window.
+  static const double _kWordSpaceMargin  = 0.9;
+  static const int    _kWindowSize       = 10;
+
   static List<MoveBounds> _computeWordBoxes(PdfPageRawText rawText, int pageNumber) {
-    final text = rawText.fullText;
     final rects = rawText.charRects;
     final words = <MoveBounds>[];
-    final wordGaps = <double>[]; // right-extension per group, for diagnostic logging
+    final wordGaps = <double>[];
 
-    // ── Pass 1: compute max intra-word charRect gap ─────────────────────────
-    // Iterate text-whitespace tokens and record the largest horizontal gap
-    // observed between consecutive non-empty charRects within a single token.
-    // This gives a data-driven split threshold without hardcoding a constant.
-    double maxIntraGap = 0.0;
-    {
-      int i = 0;
-      while (i < text.length) {
-        while (i < text.length &&
-            (text[i] == ' ' || text[i] == '\n' || text[i] == '\r' || text[i] == '\t')) {
-          i++;
-        }
-        if (i >= text.length) break;
-        final wordStart = i;
-        while (i < text.length &&
-            text[i] != ' ' && text[i] != '\n' && text[i] != '\r' && text[i] != '\t') {
-          i++;
-        }
-        final wordEnd = i;
-        double? prevR;
-        for (int j = wordStart; j < wordEnd && j < rects.length; j++) {
-          final r = rects[j];
-          if (r.isEmpty) continue;
-          if (prevR != null) {
-            final g = r.left - prevR;
-            if (g > maxIntraGap) maxIntraGap = g;
-          }
-          prevR = r.right;
-        }
-      }
+    // Rolling window of ALL recent gaps (positive AND negative), so that
+    // even fonts whose intra-char gaps are slightly negative establish the
+    // correct local baseline without being excluded from the window.
+    final window = <double>[];
+    double localThreshold() {
+      if (window.isEmpty) return _kWordSpaceMargin;
+      final s = [...window]..sort();
+      final p25 = s[s.length ~/ 4]; // 25th-percentile ≈ typical intra-char gap
+      return p25 + _kWordSpaceMargin;
     }
-    // Any gap larger than 1.5× the max intra-word gap is an inter-word space.
-    // Floor at 2 pt to guard against edge cases where all intra-word gaps are 0.
-    final splitThreshold = (maxIntraGap * 1.5).clamp(2.0, double.infinity);
-    debugPrint('[WordBoxes] page $pageNumber maxIntraGap=${maxIntraGap.toStringAsFixed(2)}pt '
-        'splitThreshold=${splitThreshold.toStringAsFixed(2)}pt');
 
-    // ── Pass 2: group charRects by visual proximity ──────────────────────────
-    // A new group starts when the gap to the previous rect exceeds splitThreshold
-    // (inter-word space) or is negative (line / column wrap).
-    // This is encoding-agnostic: figurine glyphs, PUA chars, custom fonts are
-    // all treated the same — only their position in the page matters.
     double? gTop, gBottom, gLeft, gRight;
     double? prevRight;
 
@@ -502,7 +478,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       if (prevRight != null) {
         final gap = r.left - prevRight!;
-        if (gap > splitThreshold || gap < 0) flushGroup();
+        if (gap < _kLineWrapThreshold) {
+          // Large negative gap = line-wrap or column-change.
+          // Clear the window so the next text block calibrates from scratch.
+          flushGroup();
+          window.clear();
+        } else {
+          if (gap > localThreshold()) flushGroup();
+          window.add(gap);
+          if (window.length > _kWindowSize) window.removeAt(0);
+        }
       }
 
       gLeft   ??= r.left;
@@ -513,7 +498,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     }
     flushGroup();
 
-    debugPrint('[WordBoxes] page $pageNumber → ${words.length} word box(es)');
+    debugPrint('[WordBoxes] page $pageNumber → ${words.length} chunk(s)');
     for (int wi = 0; wi < words.length && wi < 6; wi++) {
       final b = words[wi];
       debugPrint('[WordBoxes]   [$wi] '
