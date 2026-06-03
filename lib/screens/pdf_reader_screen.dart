@@ -322,7 +322,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         debugPrint('[WordBoxes] page $pageNumber page size: '
             '${page.width.toStringAsFixed(2)} × ${page.height.toStringAsFixed(2)} pt');
       }
-      final wb = _computeWordBoxes(rawText, pageNumber);
+      final wb = _computeWordBoxes(rawText, pageNumber,
+          boardRects: boardResult.boardRects);
       _wordBoxesCache[pageNumber] = wb;
       if (mounted) setState(() => _detectedWordBoxes = wb);
 
@@ -440,10 +441,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   static const double _kWordSpaceMargin  = 0.9;
   static const int    _kWindowSize       = 10;
 
-  static List<MoveBounds> _computeWordBoxes(PdfPageRawText rawText, int pageNumber) {
+  static List<MoveBounds> _computeWordBoxes(
+    PdfPageRawText rawText,
+    int pageNumber, {
+    List<PdfRect> boardRects = const [],
+    double minWidthPt = 4.0,
+  }) {
     final rects = rawText.charRects;
-    final words = <MoveBounds>[];
-    final wordGaps = <double>[];
+    final raw = <MoveBounds>[];
 
     // Rolling window of ALL recent gaps (positive AND negative), so that
     // even fonts whose intra-char gaps are slightly negative establish the
@@ -463,13 +468,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       if (gLeft == null || gRight == null || gTop == null || gBottom == null) return;
       final lineH = gTop! - gBottom!;
       final ext = lineH * 0.35;
-      words.add(MoveBounds(
+      raw.add(MoveBounds(
         left:   gLeft!   - lineH * 0.05,
         top:    gTop!    + lineH * 0.10,
         right:  gRight!  + ext,
         bottom: gBottom! - lineH * 0.30,
       ));
-      wordGaps.add(ext);
       gTop = gBottom = gLeft = gRight = prevRight = null;
     }
 
@@ -480,8 +484,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       if (prevRight != null) {
         final gap = r.left - prevRight!;
         if (gap < _kLineWrapThreshold) {
-          // Large negative gap = line-wrap or column-change.
-          // Clear the window so the next text block calibrates from scratch.
           flushGroup();
           window.clear();
         } else {
@@ -499,7 +501,21 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     }
     flushGroup();
 
-    debugPrint('[WordBoxes] page $pageNumber → ${words.length} chunk(s)');
+    // Filter: drop boxes that are too narrow (noise/single garbled chars)
+    // or whose centre falls inside a detected board diagram.
+    final words = raw.where((b) {
+      if (b.right - b.left < minWidthPt) return false;
+      final cx = (b.left + b.right) / 2;
+      final cy = (b.top  + b.bottom) / 2;
+      for (final br in boardRects) {
+        if (cx >= br.left && cx <= br.right &&
+            cy >= br.bottom && cy <= br.top) { return false; }
+      }
+      return true;
+    }).toList();
+
+    debugPrint('[WordBoxes] page $pageNumber → ${words.length} chunk(s)'
+        ' (${raw.length - words.length} filtered)');
     for (int wi = 0; wi < words.length && wi < 6; wi++) {
       final b = words[wi];
       debugPrint('[WordBoxes]   [$wi] '
