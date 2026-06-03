@@ -316,14 +316,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         rawText.charRects,
       );
 
-      // In debug mode, compute word-level bounding boxes from the PDF text layer.
+      // Compute word-level bounding boxes from the PDF text layer.
+      // Always needed (FAN mode uses them for per-block figurine detection).
       if (kDebugMode) {
         debugPrint('[WordBoxes] page $pageNumber page size: '
             '${page.width.toStringAsFixed(2)} × ${page.height.toStringAsFixed(2)} pt');
-        final wb = _computeWordBoxes(rawText, pageNumber);
-        _wordBoxesCache[pageNumber] = wb;
-        if (mounted) setState(() => _detectedWordBoxes = wb);
       }
+      final wb = _computeWordBoxes(rawText, pageNumber);
+      _wordBoxesCache[pageNumber] = wb;
+      if (mounted) setState(() => _detectedWordBoxes = wb);
 
       // In FAN mode, detect and classify figurine glyphs before parsing.
       List<DetectedFigurine>? detectedFigurines;
