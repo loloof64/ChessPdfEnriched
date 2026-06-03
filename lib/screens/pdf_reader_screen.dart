@@ -438,14 +438,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // gaps by at least this margin.  Using p25 (not median) keeps the baseline
   // anchored to the intra-char spacing even when many short words appear and
   // word-space gaps start to outnumber intra-char gaps in the window.
-  static const double _kWordSpaceMargin  = 0.9;
-  static const int    _kWindowSize       = 10;
+  static const double _kWordSpaceMargin  = 0.5;
+  static const int    _kWindowSize       = 6;
 
   static List<MoveBounds> _computeWordBoxes(
     PdfPageRawText rawText,
     int pageNumber, {
     List<PdfRect> boardRects = const [],
-    double minWidthPt = 4.0,
+    double minWidthPt = 8.0,
+    double minHeightPt = 7.0,
+    double boardMarginFactor = 0.15,
   }) {
     final rects = rawText.charRects;
     final raw = <MoveBounds>[];
@@ -458,7 +460,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       if (window.isEmpty) return _kWordSpaceMargin;
       final s = [...window]..sort();
       final p25 = s[s.length ~/ 4]; // 25th-percentile ≈ typical intra-char gap
-      return p25 + _kWordSpaceMargin;
+      // Split when gap exceeds p25 by the margin, but never below 1.0 pt
+      // (avoid splitting on tight kerning pairs).
+      return (p25 + _kWordSpaceMargin).clamp(1.0, double.infinity);
     }
 
     double? gTop, gBottom, gLeft, gRight;
@@ -477,9 +481,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       gTop = gBottom = gLeft = gRight = prevRight = null;
     }
 
+    final fullText = rawText.fullText;
+
     for (int i = 0; i < rects.length; i++) {
       final r = rects[i];
       if (r.isEmpty) continue;
+      // Skip whitespace characters — in some PDFs they carry non-empty rects
+      // that split the inter-word gap into two small sub-gaps, defeating detection.
+      if (i < fullText.length && fullText[i].trim().isEmpty) continue;
 
       if (prevRight != null) {
         final gap = r.left - prevRight!;
@@ -487,9 +496,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           flushGroup();
           window.clear();
         } else {
-          if (gap > localThreshold()) flushGroup();
-          window.add(gap);
-          if (window.length > _kWindowSize) window.removeAt(0);
+          if (gap > localThreshold()) {
+            flushGroup();
+            // Don't add word-space gaps to the window — they inflate p25
+            // and make the next boundary harder to detect.
+          } else {
+            window.add(gap);
+            if (window.length > _kWindowSize) window.removeAt(0);
+          }
         }
       }
 
@@ -501,15 +515,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     }
     flushGroup();
 
-    // Filter: drop boxes that are too narrow (noise/single garbled chars)
-    // or whose centre falls inside a detected board diagram.
+    // Filter: drop noise boxes and boxes inside (or near) board diagrams.
     final words = raw.where((b) {
       if (b.right - b.left < minWidthPt) return false;
+      if (b.top - b.bottom < minHeightPt) return false;
       final cx = (b.left + b.right) / 2;
       final cy = (b.top  + b.bottom) / 2;
       for (final br in boardRects) {
-        if (cx >= br.left && cx <= br.right &&
-            cy >= br.bottom && cy <= br.top) { return false; }
+        final mw = (br.right - br.left) * boardMarginFactor;
+        final mh = (br.top - br.bottom) * boardMarginFactor;
+        if (cx >= br.left - mw && cx <= br.right + mw &&
+            cy >= br.bottom - mh && cy <= br.top + mh) { return false; }
       }
       return true;
     }).toList();
