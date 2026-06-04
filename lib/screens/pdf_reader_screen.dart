@@ -35,6 +35,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   final Map<int, List<DetectedFigurine>> _figurinesCache = {};
   // Per-page candidate blob boxes for debug overlay (FAN mode only).
   final Map<int, List<MoveBounds>> _wordBoxesCache = {};
+  // Per-page move bounding boxes detected by the CV pipeline (FAN mode only).
+  final Map<int, List<MoveBounds>> _moveBoxesCache = {};
+  // Per-page ALL blobs tested by the figurine classifier (debug).
+  final Map<int, List<BlobResult>> _blobResultsCache = {};
   // Learnt character→piece mapping for the current document's chess font.
   // Shared across all pages so every fuzzy match discovery benefits later pages.
   final Map<String, String> _fontMap = {};
@@ -63,10 +67,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   List<DetectedFigurine>? _detectedFigurines;
   // Debug: word blobs detected on the current page.
   List<MoveBounds>? _detectedWordBoxes;
-  // Debug: whether to show the figurine bounding-box overlay.
-  bool _showFigurineOverlay = false;
+  // Debug: move boxes detected by the CV pipeline on the current page.
+  List<MoveBounds>? _detectedMoveBoxes;
+  // Debug: all blobs tested by the figurine classifier on the current page.
+  List<BlobResult>? _detectedBlobResults;
   // Debug: whether to show word-blob rectangles in red.
   bool _showWordBoxOverlay = false;
+  // Debug: whether to show move-box rectangles in blue.
+  bool _showMoveBoxOverlay = false;
+  // Debug: whether to show all classifier-tested blobs.
+  bool _showBlobOverlay = false;
 
   @override
   void initState() {
@@ -169,8 +179,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() {
       _currentPage = page;
       _pageGames = _cache[page];
-      _detectedFigurines = _figurinesCache[page];
-      _detectedWordBoxes = _wordBoxesCache[page];
+      _detectedFigurines  = _figurinesCache[page];
+      _detectedWordBoxes  = _wordBoxesCache[page];
+      _detectedMoveBoxes  = _moveBoxesCache[page];
+      _detectedBlobResults = _blobResultsCache[page];
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
     });
@@ -241,8 +253,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _cache.clear();
       _figurinesCache.clear();
       _wordBoxesCache.clear();
-      _detectedFigurines = null;
-      _detectedWordBoxes = null;
+      _moveBoxesCache.clear();
+      _blobResultsCache.clear();
+      _detectedFigurines   = null;
+      _detectedWordBoxes   = null;
+      _detectedMoveBoxes   = null;
+      _detectedBlobResults = null;
       _pageGames = null;
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
@@ -282,9 +298,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         forcedNotADiagrams == null &&
         _cache.containsKey(pageNumber)) {
       setState(() {
-        _pageGames = _cache[pageNumber];
-        _detectedFigurines = _figurinesCache[pageNumber];
-        _detectedWordBoxes = _wordBoxesCache[pageNumber];
+        _pageGames           = _cache[pageNumber];
+        _detectedFigurines   = _figurinesCache[pageNumber];
+        _detectedWordBoxes   = _wordBoxesCache[pageNumber];
+        _detectedMoveBoxes   = _moveBoxesCache[pageNumber];
+        _detectedBlobResults = _blobResultsCache[pageNumber];
         _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       });
@@ -327,20 +345,30 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _wordBoxesCache[pageNumber] = wb;
       if (mounted) setState(() => _detectedWordBoxes = wb);
 
-      // In FAN mode, detect and classify figurine glyphs before parsing.
+      // In FAN mode, run the CV pipeline: segment blobs per word block,
+      // classify figurines, OCR non-figurines, test SAN.
       List<DetectedFigurine>? detectedFigurines;
       if (effectiveMode == NotationMode.figurineFan &&
           _figurineDetector != null) {
-        detectedFigurines = await _figurineDetector!.detectFigurines(
-          page,
-          boardRects: boardResult.boardRects,
-          renderScale: _renderScale,
-          verbose: true,
-          debugLogPath: kDebugMode ? 'figurine_blobs.log' : null,
-          debugPageNumber: pageNumber,
-        );
-        _figurinesCache[pageNumber] = detectedFigurines;
-        if (mounted) setState(() => _detectedFigurines = detectedFigurines);
+        final rendered = await FigurineDetector.renderPage(page,
+            scale: _renderScale);
+        if (rendered != null) {
+          final result = _computeMoveBoxesCv(
+            wb, rawText.charRects, rawText.fullText,
+            rendered, page.height, _renderScale, _figurineDetector!,
+          );
+          detectedFigurines = result.figurines;
+          _moveBoxesCache[pageNumber]    = result.moveBoxes;
+          _blobResultsCache[pageNumber]  = result.blobs;
+          if (mounted) {
+            setState(() {
+              _detectedMoveBoxes   = result.moveBoxes;
+              _detectedBlobResults = result.blobs;
+            });
+          }
+        }
+        _figurinesCache[pageNumber] = detectedFigurines ?? [];
+        if (mounted) { setState(() => _detectedFigurines = detectedFigurines); }
       }
 
       // Use auto-detected FENs if available (user override takes precedence).
@@ -541,6 +569,136 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     return words;
   }
 
+  // SAN move pattern (English piece letters only).
+  static final _sanMoveRegex = RegExp(
+    r'^(O-O-O|O-O|[KQRBN]([a-h]|[1-8]|[a-h][1-8])?x?[a-h][1-8]|[a-h](x[a-h])?[1-8])(=[QRBN])?[+#]?$',
+  );
+
+
+  /// Per-block CV pipeline:
+  ///   • No figurine in block → OCR the whole block text.
+  ///   • Figurine(s) found    → OCR left part + piece letter + OCR right part.
+  ///   Then strip move number / annotations and test against the SAN regex.
+  static ({List<MoveBounds> moveBoxes, List<DetectedFigurine> figurines, List<BlobResult> blobs})
+      _computeMoveBoxesCv(
+    List<MoveBounds> wordBlocks,
+    List<PdfRect> charRects,
+    String fullText,
+    RenderedPage rendered,
+    double pageHeight,
+    double renderScale,
+    FigurineDetector detector,
+  ) {
+    final moveBoxes    = <MoveBounds>[];
+    final allFigurines = <DetectedFigurine>[];
+    final allBlobs     = <BlobResult>[];
+
+    for (int i = 0; i < wordBlocks.length; i++) {
+      final blockBounds = wordBlocks[i];
+
+      // Detect figurines (if any) inside this block.
+      final blobs = detector.analyseWordBlock(
+          rendered, blockBounds, pageHeight, renderScale);
+      allBlobs.addAll(blobs);
+      final figurines = blobs.where((b) => b.piece != null).toList();
+
+      String assembled;
+
+      if (figurines.isEmpty) {
+        // No figurine → OCR the whole block.
+        assembled = _ocrRegion(blockBounds, charRects, fullText);
+        if (kDebugMode && assembled.isNotEmpty) {
+          debugPrint('[BlockAnalysis] block[$i] no figurine → ocr "$assembled"');
+        }
+      } else {
+        // Has figurine(s): collect them for the overlay and build the string.
+        for (final f in figurines) {
+          allFigurines.add(DetectedFigurine(
+              bounds: f.bounds, piece: f.piece!, confidence: f.confidence));
+          if (kDebugMode) {
+            debugPrint('[BlockAnalysis] block[$i] '
+                'figurine@${f.bounds.left.toStringAsFixed(1)}'
+                ' → ${f.piece}(conf=${f.confidence.toStringAsFixed(2)})');
+          }
+        }
+
+        // Sort figurines left→right, then interleave OCR segments.
+        figurines.sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
+        final buf = StringBuffer();
+        double segLeft = blockBounds.left;
+        for (final f in figurines) {
+          // OCR text to the left of this figurine.
+          final leftRegion = MoveBounds(
+            left: segLeft, right: f.bounds.left,
+            top: blockBounds.top, bottom: blockBounds.bottom,
+          );
+          buf.write(_ocrRegion(leftRegion, charRects, fullText));
+          buf.write(f.piece);
+          segLeft = f.bounds.right;
+        }
+        // OCR text to the right of the last figurine.
+        final rightRegion = MoveBounds(
+          left: segLeft, right: blockBounds.right,
+          top: blockBounds.top, bottom: blockBounds.bottom,
+        );
+        buf.write(_ocrRegion(rightRegion, charRects, fullText));
+        assembled = buf.toString();
+        if (kDebugMode) {
+          debugPrint('[BlockAnalysis] block[$i] assembled → "$assembled"');
+        }
+      }
+
+      if (kDebugMode) debugPrint('[BlockString] block[$i] → "$assembled"');
+      if (assembled.isEmpty) continue;
+
+      // Strip move-number prefix and trailing annotations, then test SAN.
+      var text = assembled.trim();
+      text = text.replaceFirst(RegExp(r'^\d+\.+\s*'), '');
+      text = text.replaceFirst(RegExp(r'[!?]+$'), '');
+
+      if (text.isNotEmpty && _sanMoveRegex.hasMatch(text)) {
+        if (kDebugMode) debugPrint('[MoveCheck] block[$i] "$text" → MATCH');
+        moveBoxes.add(blockBounds);
+      } else {
+        if (kDebugMode && text.isNotEmpty) {
+          debugPrint('[MoveCheck] block[$i] "$text" → no match');
+        }
+      }
+    }
+
+    debugPrint('[MoveBoxesCv] → ${moveBoxes.length} move(s)'
+        ', ${allFigurines.length} figurine(s), ${allBlobs.length} blob(s) tested');
+    return (moveBoxes: moveBoxes, figurines: allFigurines, blobs: allBlobs);
+  }
+
+  /// Returns the concatenation of all PDF text chars whose rect centre falls
+  /// within [region], in left-to-right order.  Skips whitespace characters.
+  static String _ocrRegion(
+    MoveBounds region,
+    List<PdfRect> charRects,
+    String fullText,
+  ) {
+    final chars = <(double x, String ch)>[];
+    for (int i = 0; i < charRects.length; i++) {
+      final r = charRects[i];
+      if (r.isEmpty) continue;
+      final cx = (r.left + r.right) / 2;
+      final cy = (r.top  + r.bottom) / 2;
+      if (cx >= region.left  && cx <= region.right &&
+          cy >= region.bottom && cy <= region.top) {
+        if (i < fullText.length) {
+          final ch = fullText[i];
+          if (ch.trim().isNotEmpty) chars.add((cx, ch));
+        }
+      }
+    }
+    chars.sort((a, b) => a.$1.compareTo(b.$1));
+    return chars.map((e) => e.$2).join();
+  }
+
+  /// Returns the PDF text character whose rect centre is closest to [blobBounds].
+  /// Returns null for whitespace or if no match is found.
+
   /// If the page's text does not open a new game (no "1." near the start),
   /// inherit the last FEN from the last game of the previous page.
   String? _inheritedFenForPage(int pageNumber, String fullText) {
@@ -687,6 +845,39 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          if (kDebugMode && _detectedBlobResults != null)
+            IconButton(
+              icon: Text(
+                'B',
+                style: TextStyle(
+                  color: _showBlobOverlay ? Colors.orange : null,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  decoration: _showBlobOverlay ? TextDecoration.lineThrough : null,
+                  decorationColor: Colors.orange,
+                  decorationThickness: 2.5,
+                ),
+              ),
+              tooltip: 'Toggle classifier blob overlay',
+              onPressed: () =>
+                  setState(() => _showBlobOverlay = !_showBlobOverlay),
+            ),
+          if (kDebugMode && _detectedMoveBoxes != null)
+            IconButton(
+              icon: Text(
+                '♛',
+                style: TextStyle(
+                  color: _showMoveBoxOverlay ? Colors.blue : null,
+                  fontSize: 20,
+                  decoration: _showMoveBoxOverlay ? TextDecoration.lineThrough : null,
+                  decorationColor: Colors.blue,
+                  decorationThickness: 2.5,
+                ),
+              ),
+              tooltip: 'Toggle move-box overlay',
+              onPressed: () =>
+                  setState(() => _showMoveBoxOverlay = !_showMoveBoxOverlay),
+            ),
           if (kDebugMode && _detectedFigurines != null)
             IconButton(
               icon: Text(
@@ -703,22 +894,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
               tooltip: 'Toggle word-blob overlay',
               onPressed: () =>
                   setState(() => _showWordBoxOverlay = !_showWordBoxOverlay),
-            ),
-          if (kDebugMode && _detectedFigurines != null)
-            IconButton(
-              icon: Text(
-                '♛',
-                style: TextStyle(
-                  color: _showFigurineOverlay ? Colors.green : null,
-                  fontSize: 20,
-                  decoration: _showFigurineOverlay ? TextDecoration.lineThrough : null,
-                  decorationColor: Colors.green,
-                  decorationThickness: 2.5,
-                ),
-              ),
-              tooltip: 'Toggle figurine overlay',
-              onPressed: () =>
-                  setState(() => _showFigurineOverlay = !_showFigurineOverlay),
             ),
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -808,10 +983,20 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                       widgetSize: constraints.biggest,
                     ),
                   if (kDebugMode &&
-                      _showFigurineOverlay &&
-                      _detectedFigurines != null)
-                    _FigurineOverlay(
-                      figurines: _detectedFigurines!,
+                      _showMoveBoxOverlay &&
+                      _detectedMoveBoxes != null)
+                    _WordBoxOverlay(
+                      wordBoxes: _detectedMoveBoxes!,
+                      pageWidth: page.width,
+                      pageHeight: page.height,
+                      widgetSize: constraints.biggest,
+                      color: Colors.blue,
+                    ),
+                  if (kDebugMode &&
+                      _showBlobOverlay &&
+                      _detectedBlobResults != null)
+                    _BlobOverlay(
+                      blobs: _detectedBlobResults!,
                       pageWidth: page.width,
                       pageHeight: page.height,
                       widgetSize: constraints.biggest,
@@ -1040,61 +1225,6 @@ class _PdfMoveOverlay extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 
-class _FigurineOverlay extends StatelessWidget {
-  const _FigurineOverlay({
-    required this.figurines,
-    required this.pageWidth,
-    required this.pageHeight,
-    required this.widgetSize,
-  });
-
-  final List<DetectedFigurine> figurines;
-  final double pageWidth;
-  final double pageHeight;
-  final Size widgetSize;
-
-  @override
-  Widget build(BuildContext context) {
-    if (figurines.isEmpty) return const SizedBox.shrink();
-    final W = widgetSize.width;
-    final H = widgetSize.height;
-    if (W == 0 || H == 0) return const SizedBox.shrink();
-
-    final scale   = min(W / pageWidth, H / pageHeight);
-    final xOffset = (W - pageWidth  * scale) / 2;
-    final yOffset = (H - pageHeight * scale) / 2;
-
-    return Stack(
-      children: [
-        for (final fig in figurines)
-          Positioned(
-            left:   xOffset + fig.bounds.left * scale,
-            top:    yOffset + (pageHeight - fig.bounds.top) * scale,
-            width:  ((fig.bounds.right - fig.bounds.left) * scale).clamp(2.0, double.infinity),
-            height: ((fig.bounds.top - fig.bounds.bottom) * scale).clamp(2.0, double.infinity),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.green, width: 1.5),
-              ),
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: Text(
-                  fig.piece,
-                  style: const TextStyle(
-                    color: Colors.green,
-                    fontSize: 8,
-                    fontWeight: FontWeight.bold,
-                    height: 1,
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 
 class _WordBoxOverlay extends StatelessWidget {
@@ -1103,10 +1233,12 @@ class _WordBoxOverlay extends StatelessWidget {
     required this.pageWidth,
     required this.pageHeight,
     required this.widgetSize,
+    this.color = Colors.red,
   });
 
   final List<MoveBounds> wordBoxes;
   final double pageWidth;
+  final Color color;
   final double pageHeight;
   final Size widgetSize;
 
@@ -1144,7 +1276,7 @@ class _WordBoxOverlay extends StatelessWidget {
             height: ((b.top - b.bottom) * scale).clamp(1.0, double.infinity),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.red, width: 1),
+                border: Border.all(color: color, width: 1),
               ),
             ),
           ),
@@ -1194,6 +1326,74 @@ class _AnalysingBadge extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Shows every blob tested by the figurine classifier.
+/// Green = classified as a piece (figurine hit).
+/// Red   = rejected (NotAFigurine).
+/// The piece letter and confidence are shown as small text inside each box.
+class _BlobOverlay extends StatelessWidget {
+  const _BlobOverlay({
+    required this.blobs,
+    required this.pageWidth,
+    required this.pageHeight,
+    required this.widgetSize,
+  });
+
+  final List<BlobResult> blobs;
+  final double pageWidth;
+  final double pageHeight;
+  final Size widgetSize;
+
+  @override
+  Widget build(BuildContext context) {
+    if (blobs.isEmpty) return const SizedBox.shrink();
+    final W = widgetSize.width;
+    final H = widgetSize.height;
+    if (W == 0 || H == 0) return const SizedBox.shrink();
+
+    final scale   = min(W / pageWidth, H / pageHeight);
+    final xOffset = (W - pageWidth  * scale) / 2;
+    final yOffset = (H - pageHeight * scale) / 2;
+
+    return Stack(
+      children: [
+        for (final blob in blobs)
+          Positioned(
+            left:   xOffset + blob.bounds.left * scale,
+            top:    yOffset + (pageHeight - blob.bounds.top) * scale,
+            width:  ((blob.bounds.right - blob.bounds.left) * scale)
+                .clamp(2.0, double.infinity),
+            height: ((blob.bounds.top - blob.bounds.bottom) * scale)
+                .clamp(2.0, double.infinity),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: blob.piece != null ? Colors.green : Colors.red,
+                  width: 1,
+                ),
+              ),
+              child: blob.piece != null
+                  ? Align(
+                      alignment: Alignment.topLeft,
+                      child: Text(
+                        '${blob.piece}${(blob.confidence * 100).round()}',
+                        style: const TextStyle(
+                          color: Colors.green,
+                          fontSize: 7,
+                          fontWeight: FontWeight.bold,
+                          height: 1,
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+          ),
+      ],
     );
   }
 }

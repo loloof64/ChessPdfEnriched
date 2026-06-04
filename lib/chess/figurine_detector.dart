@@ -17,10 +17,130 @@ import 'models.dart';
 ///   5. Filter by size / aspect ratio; skip blobs inside detected board rects.
 ///   6. Resize each blob to 32×32, extract HOG features, run TFLite classifier.
 ///      The NotAFigurine class rejects non-piece characters naturally.
+/// Pre-rendered page image shared between analysis steps.
+typedef RenderedPage = ({
+  Float32List gray,
+  Uint8List binary,
+  int width,
+  int height,
+});
+
+/// One blob inside a word block, with its figurine classification result.
+typedef BlobResult = ({
+  MoveBounds bounds,   // PDF-coordinate bounding box
+  String? piece,       // piece letter if classified as figurine, null otherwise
+  double confidence,   // classifier confidence (0 if NotAFigurine)
+});
+
 class FigurineDetector {
   FigurineDetector({required this.classifier});
 
   final FigurineClassifier classifier;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Page rendering
+
+  /// Renders [page] to grayscale + binary at [scale] px/pt.
+  static Future<RenderedPage?> renderPage(
+    PdfPage page, {
+    double scale = 2.0,
+    double binarizeThreshold = 0.85,
+  }) async {
+    final iW = (page.width  * scale).round();
+    final iH = (page.height * scale).round();
+    final image = await page.render(
+      x: 0, y: 0, width: iW, height: iH,
+      fullWidth: iW.toDouble(), fullHeight: iH.toDouble(),
+      backgroundColor: 0xFFFFFFFF,
+    );
+    if (image == null) return null;
+    try {
+      final gray   = _toGray(image.pixels, iW, iH);
+      final binary = _binarize(gray, iW, iH, binarizeThreshold);
+      return (gray: gray, binary: binary, width: iW, height: iH);
+    } finally {
+      image.dispose();
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Per-block analysis
+
+  /// Segments all character blobs within [blockBounds] and classifies each
+  /// with the figurine classifier.  Returns one [BlobResult] per blob,
+  /// sorted left-to-right.  Non-figurine blobs have [BlobResult.piece] == null.
+  List<BlobResult> analyseWordBlock(
+    RenderedPage rendered,
+    MoveBounds blockBounds,
+    double pageHeight,
+    double renderScale, {
+    double minConfidence = 0.45,
+    double minGlyphSizePt = 8.0,
+    double maxAspectRatio = 2.0,
+  }) {
+    final iW = rendered.width;
+    final iH = rendered.height;
+
+    final px0 = (blockBounds.left   * renderScale).round().clamp(0, iW);
+    final py0 = ((pageHeight - blockBounds.top)    * renderScale).round().clamp(0, iH);
+    final px1 = (blockBounds.right  * renderScale).round().clamp(0, iW);
+    final py1 = ((pageHeight - blockBounds.bottom) * renderScale).round().clamp(0, iH);
+    if (px1 <= px0 || py1 <= py0) return [];
+
+    final allBlobs = _connectedBoxes(rendered.binary, iW, iH,
+        clipX0: px0, clipY0: py0, clipX1: px1, clipY1: py1);
+    if (allBlobs.isEmpty) return [];
+
+    final minSizePx = (minGlyphSizePt * renderScale).round();
+    // Use a tight merge gap (max 3 px) so glyph fragments fuse but adjacent
+    // characters — especially figurines next to letters — stay separate.
+    final mergeGap  = (minGlyphSizePt * renderScale * 0.15).round().clamp(1, 3);
+    final merged    = _mergeNearbyBlobs(allBlobs, mergeGap);
+
+    // Use a tighter aspect ratio (1.5) so blobs wider than 1.5× their height
+    // are split — figurines are roughly square, so this separates them from
+    // any remaining multi-char runs more aggressively.
+    const splitAspect = 1.5;
+    final candidates = <({int x0, int y0, int x1, int y1})>[];
+    for (final cb in merged) {
+      final cw = cb.x1 - cb.x0 + 1;
+      final ch = cb.y1 - cb.y0 + 1;
+      if (cw > ch * splitAspect) {
+        candidates.addAll(_splitBlobVertically(rendered.binary, iW, cb, splitAspect));
+      } else {
+        candidates.add(cb);
+      }
+    }
+
+    final results = <BlobResult>[];
+    for (final cb in candidates) {
+      final cw = cb.x1 - cb.x0 + 1;
+      final ch = cb.y1 - cb.y0 + 1;
+      if (cw < minSizePx || ch < minSizePx) continue;
+      final ar = cw / ch;
+      if (ar < 1.0 / maxAspectRatio || ar > maxAspectRatio) continue;
+
+      final pdfBounds = MoveBounds(
+        left:   cb.x0        / renderScale,
+        top:    pageHeight - cb.y0        / renderScale,
+        right:  (cb.x1 + 1) / renderScale,
+        bottom: pageHeight - (cb.y1 + 1) / renderScale,
+      );
+
+      final pixels   = _cropAndResize32(rendered.gray, iW, iH, cb.x0, cb.y0, cw, ch);
+      final features = HogExtractor.extract(pixels, cw, ch);
+      final hit      = classifier.classifyWithConfidence(features);
+
+      if (hit != null && hit.$2 >= minConfidence) {
+        results.add((bounds: pdfBounds, piece: hit.$1, confidence: hit.$2));
+      } else {
+        results.add((bounds: pdfBounds, piece: null, confidence: hit?.$2 ?? 0.0));
+      }
+    }
+
+    results.sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
+    return results;
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Public API
