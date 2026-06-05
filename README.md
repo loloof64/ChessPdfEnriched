@@ -105,7 +105,14 @@ copy C:\tmp\tflite_out\Release\tensorflowlite_c.dll ^
 >
 > Add this to `windows/CMakeLists.txt` if you need release builds to bundle it.
 
-### Figurine/text mapping model
+### Figurine mapping model
 
-1. Import the **train_figurine_classifier.ipynb** and **train_text_classifier.ipynb** into your Google Colab, and execute all cells (don't forget adapt the pdf book)
-2. Download the produced models in folder **assets**
+1. Run the **extract_chess_glyphs.ipynb** into your Google Colab, several times if needed with the same produced zip file, and save the produced zip file, and upload it on your Google Drive for step 2.
+2. Import the **train_figurine_move_classifier.ipynb** into your Google Colab, and execute all cells (don't forget adapt the pdf book) : don't forget to set `ZIP_ON_DRIVE` to the zip you've just uploaded in step 1.
+3. Download the produced models in folder **assets/models**
+
+### NotAFigurine mapping model
+
+1. Run the **generate_synthetic_writing_elements.ipynb** into your Google colab (run several times with the produced zip and custom parameters each times if needed), and save the zip fileon your hard drive.
+
+2. Run the **train_notafigurine_classifier.ipynb** into your Google colab (run several times if needed) and save the model under folder **assets/models** : don't forget to upload the zip file from step 1 when requested.
