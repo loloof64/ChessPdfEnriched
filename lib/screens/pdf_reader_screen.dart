@@ -43,6 +43,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   final Map<int, List<BlobResult>> _blobResultsCache = {};
   // Per-page parsed elements from element-by-element analysis (debug).
   final Map<int, List<ParsedElement>> _parsedElementsCache = {};
+  // Per-page element bounding boxes for debug overlay (FAN mode only).
+  final Map<int, List<MoveBounds>> _elementBoxesCache = {};
   // Learnt character→piece mapping for the current document's chess font.
   // Shared across all pages so every fuzzy match discovery benefits later pages.
   final Map<String, String> _fontMap = {};
@@ -79,12 +81,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   List<MoveBounds>? _detectedMoveBoxes;
   // Debug: all blobs tested by the figurine classifier on the current page.
   List<BlobResult>? _detectedBlobResults;
+  // Debug: element boxes (individual characters/glyphs within word blocks).
+  List<MoveBounds>? _detectedElementBoxes;
   // Debug: whether to show word-blob rectangles in red.
   bool _showWordBoxOverlay = false;
   // Debug: whether to show move-box rectangles in blue.
   bool _showMoveBoxOverlay = false;
   // Debug: whether to show all classifier-tested blobs.
   bool _showBlobOverlay = false;
+  // Debug: whether to show element boxes (individual elements within word blocks).
+  bool _showElementOverlay = false;
 
   @override
   void initState() {
@@ -376,10 +382,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           _moveBoxesCache[pageNumber]    = result.moveBoxes;
           _blobResultsCache[pageNumber]  = result.blobs;
           _parsedElementsCache[pageNumber] = result.parsedElements;
+          // Extract element bounding boxes from parsed elements
+          final elementBoxes = result.parsedElements.map((e) => e.bounds).toList();
+          _elementBoxesCache[pageNumber] = elementBoxes;
           if (mounted) {
             setState(() {
               _detectedMoveBoxes   = result.moveBoxes;
               _detectedBlobResults = result.blobs;
+              _detectedElementBoxes = elementBoxes;
             });
           }
         }
@@ -878,6 +888,23 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          if (kDebugMode && _detectedElementBoxes != null)
+            IconButton(
+              icon: Text(
+                'E',
+                style: TextStyle(
+                  color: _showElementOverlay ? Colors.purple : null,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  decoration: _showElementOverlay ? TextDecoration.lineThrough : null,
+                  decorationColor: Colors.purple,
+                  decorationThickness: 2.5,
+                ),
+              ),
+              tooltip: 'Toggle element overlay (individual chars/glyphs within word blocks)',
+              onPressed: () =>
+                  setState(() => _showElementOverlay = !_showElementOverlay),
+            ),
           if (kDebugMode && _detectedBlobResults != null)
             IconButton(
               icon: Text(
@@ -1033,6 +1060,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                       pageWidth: page.width,
                       pageHeight: page.height,
                       widgetSize: constraints.biggest,
+                    ),
+                  if (kDebugMode &&
+                      _showElementOverlay &&
+                      _detectedElementBoxes != null)
+                    _ElementOverlay(
+                      elements: _detectedElementBoxes!,
+                      pageWidth: page.width,
+                      pageHeight: page.height,
+                      widgetSize: constraints.biggest,
+                      parsedElements: _parsedElementsCache[_currentPage] ?? [],
                     ),
                   if (_analysing)
                     Positioned(
@@ -1427,6 +1464,89 @@ class _BlobOverlay extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Shows parsed elements (individual characters/glyphs within word blocks).
+/// Green = classified as a figurine (chess piece).
+/// Purple = classified as text (regular character).
+/// The element text and confidence are shown as small text inside each box.
+class _ElementOverlay extends StatelessWidget {
+  const _ElementOverlay({
+    required this.elements,
+    required this.pageWidth,
+    required this.pageHeight,
+    required this.widgetSize,
+    required this.parsedElements,
+  });
+
+  final List<MoveBounds> elements;
+  final List<ParsedElement> parsedElements;
+  final double pageWidth;
+  final double pageHeight;
+  final Size widgetSize;
+
+  @override
+  Widget build(BuildContext context) {
+    if (elements.isEmpty) return const SizedBox.shrink();
+    final W = widgetSize.width;
+    final H = widgetSize.height;
+    if (W == 0 || H == 0) return const SizedBox.shrink();
+
+    final scale = min(W / pageWidth, H / pageHeight);
+    final xOffset = (W - pageWidth * scale) / 2;
+    final yOffset = (H - pageHeight * scale) / 2;
+
+    return Stack(
+      children: [
+        for (int i = 0; i < elements.length && i < parsedElements.length; i++)
+          _buildElementBox(
+            elements[i],
+            parsedElements[i],
+            scale,
+            xOffset,
+            yOffset,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildElementBox(
+    MoveBounds bounds,
+    ParsedElement parsed,
+    double scale,
+    double xOffset,
+    double yOffset,
+  ) {
+    final isFigurine = parsed.type == 'figurine';
+    final color = isFigurine ? Colors.green : Colors.deepPurple;
+    final textColor = isFigurine ? Colors.green : Colors.deepPurple;
+
+    return Positioned(
+      left: xOffset + bounds.left * scale,
+      top: yOffset + (pageHeight - bounds.top) * scale,
+      width: ((bounds.right - bounds.left) * scale).clamp(2.0, double.infinity),
+      height: ((bounds.top - bounds.bottom) * scale).clamp(2.0, double.infinity),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border.all(color: color, width: 1),
+        ),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: Text(
+            '${parsed.text}${(parsed.confidence * 100).round()}',
+            style: TextStyle(
+              color: textColor,
+              fontSize: 7,
+              fontWeight: FontWeight.bold,
+              height: 1,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
