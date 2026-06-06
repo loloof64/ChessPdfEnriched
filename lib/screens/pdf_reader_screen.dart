@@ -7,11 +7,13 @@ import 'package:pdfrx/pdfrx.dart';
 import '../chess/analysis_cache.dart';
 import '../chess/board_detector.dart';
 import '../chess/chess_piece_classifier.dart';
+import '../chess/element_parser.dart';
 import '../chess/figurine_classifier.dart';
 import '../chess/figurine_detector.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
+import '../chess/notafigurine_classifier.dart';
 import '../l10n/app_localizations.dart';
 
 class PdfReaderScreen extends StatefulWidget {
@@ -39,6 +41,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   final Map<int, List<MoveBounds>> _moveBoxesCache = {};
   // Per-page ALL blobs tested by the figurine classifier (debug).
   final Map<int, List<BlobResult>> _blobResultsCache = {};
+  // Per-page parsed elements from element-by-element analysis (debug).
+  final Map<int, List<ParsedElement>> _parsedElementsCache = {};
   // Learnt character→piece mapping for the current document's chess font.
   // Shared across all pages so every fuzzy match discovery benefits later pages.
   final Map<String, String> _fontMap = {};
@@ -55,8 +59,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   ({int current, int total})? _analysingProgress;
   // Figurine glyph classifier — loaded once per document session.
   FigurineClassifier? _figurineClassifier;
+  // Text vs figurine classifier — loaded once per document session.
+  NotAFigurineClassifier? _notAFigurineClassifier;
   // Figurine detector — wraps the classifier for per-page glyph detection.
   FigurineDetector? _figurineDetector;
+  // Element parser — parses word blocks element-by-element.
+  ElementParser? _elementParser;
   // Notation mode selected by the user in the options dialog.
   NotationMode _notationMode = NotationMode.textSan;
   // Render scale used for figurine detection (forwarded from options dialog;
@@ -87,7 +95,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   Future<void> _loadDocument() async {
     try {
       _figurineClassifier = await FigurineClassifier.load();
+      _notAFigurineClassifier = await NotAFigurineClassifier.fromAsset();
       _figurineDetector = FigurineDetector(classifier: _figurineClassifier!);
+      _elementParser = ElementParser(
+        figurineClassifier: _figurineClassifier!,
+        notAFigurineClassifier: _notAFigurineClassifier!,
+      );
 
       final doc = await PdfDocument.openFile(widget.filePath);
       final cached = await AnalysisCache.load(widget.filePath);
@@ -111,6 +124,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   void dispose() {
     _document?.dispose();
     _figurineClassifier?.dispose();
+    _notAFigurineClassifier?.dispose();
     super.dispose();
   }
 
@@ -356,10 +370,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           final result = _computeMoveBoxesCv(
             wb, rawText.charRects, rawText.fullText,
             rendered, page.height, _renderScale, _figurineDetector!,
+            _elementParser!,
           );
           detectedFigurines = result.figurines;
           _moveBoxesCache[pageNumber]    = result.moveBoxes;
           _blobResultsCache[pageNumber]  = result.blobs;
+          _parsedElementsCache[pageNumber] = result.parsedElements;
           if (mounted) {
             setState(() {
               _detectedMoveBoxes   = result.moveBoxes;
@@ -579,7 +595,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   ///   • No figurine in block → OCR the whole block text.
   ///   • Figurine(s) found    → OCR left part + piece letter + OCR right part.
   ///   Then strip move number / annotations and test against the SAN regex.
-  static ({List<MoveBounds> moveBoxes, List<DetectedFigurine> figurines, List<BlobResult> blobs})
+  static ({
+    List<MoveBounds> moveBoxes,
+    List<DetectedFigurine> figurines,
+    List<BlobResult> blobs,
+    List<ParsedElement> parsedElements,
+  })
       _computeMoveBoxesCv(
     List<MoveBounds> wordBlocks,
     List<PdfRect> charRects,
@@ -588,10 +609,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     double pageHeight,
     double renderScale,
     FigurineDetector detector,
+    ElementParser elementParser,
   ) {
-    final moveBoxes    = <MoveBounds>[];
-    final allFigurines = <DetectedFigurine>[];
-    final allBlobs     = <BlobResult>[];
+    final moveBoxes      = <MoveBounds>[];
+    final allFigurines   = <DetectedFigurine>[];
+    final allBlobs       = <BlobResult>[];
+    final allParsedElements = <ParsedElement>[];
 
     for (int i = 0; i < wordBlocks.length; i++) {
       final blockBounds = wordBlocks[i];
@@ -601,6 +624,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           rendered, blockBounds, pageHeight, renderScale);
       allBlobs.addAll(blobs);
       final figurines = blobs.where((b) => b.piece != null).toList();
+
+      // Parse elements element-by-element using the new pipeline
+      final parsedElements = elementParser.parseWordBlock(
+          rendered, blockBounds, pageHeight, renderScale);
+      allParsedElements.addAll(parsedElements);
 
       String assembled;
 
@@ -668,7 +696,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
     debugPrint('[MoveBoxesCv] → ${moveBoxes.length} move(s)'
         ', ${allFigurines.length} figurine(s), ${allBlobs.length} blob(s) tested');
-    return (moveBoxes: moveBoxes, figurines: allFigurines, blobs: allBlobs);
+    return (
+      moveBoxes: moveBoxes,
+      figurines: allFigurines,
+      blobs: allBlobs,
+      parsedElements: allParsedElements,
+    );
   }
 
   /// Returns the concatenation of all PDF text chars whose rect centre falls
