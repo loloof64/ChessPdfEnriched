@@ -198,6 +198,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _detectedFigurines  = _figurinesCache[page];
       _detectedWordBoxes  = _wordBoxesCache[page];
       _detectedMoveBoxes  = _moveBoxesCache[page];
+      _detectedElementBoxes = _elementBoxesCache[page];
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
     });
@@ -621,16 +622,22 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     for (int i = 0; i < wordBlocks.length; i++) {
       final blockBounds = wordBlocks[i];
 
+      debugPrint('[ComputeMoveBoxesCv] Processing word block[$i] at left=${blockBounds.left.toStringAsFixed(1)}');
+
       // Detect figurines (if any) inside this block.
       final blobs = detector.analyseWordBlock(
           rendered, blockBounds, pageHeight, renderScale);
       allBlobs.addAll(blobs);
       final figurines = blobs.where((b) => b.piece != null).toList();
 
+      debugPrint('[ComputeMoveBoxesCv]   → ${blobs.length} blob(s), ${figurines.length} figurine(s)');
+
       // Parse elements element-by-element using the new pipeline
       final parsedElements = elementParser.parseWordBlock(
           rendered, blockBounds, pageHeight, renderScale);
       allParsedElements.addAll(parsedElements);
+
+      debugPrint('[ComputeMoveBoxesCv]   → ${parsedElements.length} parsed element(s)');
 
       String assembled;
 
@@ -881,22 +888,23 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           if (kDebugMode && _detectedElementBoxes != null)
-            IconButton(
-              icon: Text(
-                'E',
-                style: TextStyle(
-                  color: _showElementOverlay ? Colors.purple : null,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                  decoration: _showElementOverlay ? TextDecoration.lineThrough : null,
-                  decorationColor: Colors.purple,
-                  decorationThickness: 2.5,
+            if (kDebugMode)
+              IconButton(
+                icon: Text(
+                  'E',
+                  style: TextStyle(
+                    color: _showElementOverlay ? Colors.purple : null,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                    decoration: _showElementOverlay ? TextDecoration.lineThrough : null,
+                    decorationColor: Colors.purple,
+                    decorationThickness: 2.5,
+                  ),
                 ),
+                tooltip: 'Toggle element overlay (individual chars/glyphs within word blocks)',
+                onPressed: () =>
+                    setState(() => _showElementOverlay = !_showElementOverlay),
               ),
-              tooltip: 'Toggle element overlay (individual chars/glyphs within word blocks)',
-              onPressed: () =>
-                  setState(() => _showElementOverlay = !_showElementOverlay),
-            ),
           if (kDebugMode && _detectedMoveBoxes != null)
             IconButton(
               icon: Text(

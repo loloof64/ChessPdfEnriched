@@ -69,6 +69,36 @@ class FigurineDetector {
   /// Segments all character blobs within [blockBounds] and classifies each
   /// with the figurine classifier.  Returns one [BlobResult] per blob,
   /// sorted left-to-right.  Non-figurine blobs have [BlobResult.piece] == null.
+  /// Find character boundaries using horizontal projection profile.
+  /// Scans for vertical gaps in ink to split wide blobs into individual characters.
+  static List<int> _findCharacterBoundaries(
+    Uint8List binary,
+    int imgW,
+    int x0,
+    int y0,
+    int w,
+    int h,
+  ) {
+    // Count ink pixels per column within the blob
+    final colSums = List<int>.filled(w, 0);
+    for (int dy = 0; dy < h; dy++) {
+      for (int dx = 0; dx < w; dx++) {
+        final idx = (y0 + dy) * imgW + (x0 + dx);
+        if (binary[idx] != 0) colSums[dx]++;
+      }
+    }
+
+    // Find gaps (columns with few/no ink pixels)
+    final gaps = <int>[];
+    final gapThreshold = (h * 0.1).round(); // Less than 10% ink = gap (more sensitive)
+    for (int dx = 1; dx < w; dx++) {
+      if (colSums[dx] < gapThreshold && colSums[dx - 1] >= gapThreshold) {
+        gaps.add(x0 + dx);
+      }
+    }
+    return gaps;
+  }
+
   List<BlobResult> analyseWordBlock(
     RenderedPage rendered,
     MoveBounds blockBounds,
@@ -92,33 +122,56 @@ class FigurineDetector {
     if (allBlobs.isEmpty) return [];
 
     final minSizePx = (minGlyphSizePt * renderScale).round();
-    // Use a tight merge gap (max 3 px) so glyph fragments fuse but adjacent
-    // characters — especially figurines next to letters — stay separate.
-    final mergeGap  = (minGlyphSizePt * renderScale * 0.15).round().clamp(1, 3);
+    // Use light merge gap to separate most adjacent characters
+    final mergeGap  = 1;
     final merged    = _mergeNearbyBlobs(allBlobs, mergeGap);
 
-    // Use a tighter aspect ratio (1.5) so blobs wider than 1.5× their height
-    // are split — figurines are roughly square, so this separates them from
-    // any remaining multi-char runs more aggressively.
-    const splitAspect = 1.5;
+    // Split wide blobs using horizontal projection profile to find actual character gaps
     final candidates = <({int x0, int y0, int x1, int y1})>[];
     for (final cb in merged) {
       final cw = cb.x1 - cb.x0 + 1;
       final ch = cb.y1 - cb.y0 + 1;
-      if (cw > ch * splitAspect) {
-        candidates.addAll(_splitBlobVertically(rendered.binary, iW, cb, splitAspect));
+
+      // If blob is wider than tall, find character boundaries and split there
+      if (cw > ch * 1.2) {
+        final gaps = _findCharacterBoundaries(
+          rendered.binary, iW,
+          cb.x0, cb.y0, cw, ch,
+        );
+
+        if (gaps.isNotEmpty) {
+          // Split at gap boundaries
+          var prevX = cb.x0;
+          for (final gap in gaps) {
+            if (gap > prevX + minSizePx) {
+              candidates.add((x0: prevX, y0: cb.y0, x1: gap - 1, y1: cb.y1));
+              prevX = gap;
+            }
+          }
+          // Add remaining segment
+          if (prevX < cb.x1) {
+            candidates.add((x0: prevX, y0: cb.y0, x1: cb.x1, y1: cb.y1));
+          }
+        } else {
+          // No gaps found, use simple vertical split
+          candidates.addAll(_splitBlobVertically(rendered.binary, iW, cb, 1.2));
+        }
       } else {
         candidates.add(cb);
       }
     }
 
     final results = <BlobResult>[];
+    // Use 50% of minSizePx for small characters (punctuation, diacritics)
+    final minSmallSize = (minSizePx * 0.5).round().clamp(1, minSizePx);
     for (final cb in candidates) {
       final cw = cb.x1 - cb.x0 + 1;
       final ch = cb.y1 - cb.y0 + 1;
-      if (cw < minSizePx || ch < minSizePx) continue;
+      // At least one dimension must meet minimum size
+      if ((cw < minSmallSize || ch < minSmallSize) && (cw < minSizePx && ch < minSizePx)) continue;
       final ar = cw / ch;
-      if (ar < 1.0 / maxAspectRatio || ar > maxAspectRatio) continue;
+      // Allow wider aspect ratios for small characters
+      if (ar < 0.2 || ar > 5.0) continue;
 
       final pdfBounds = MoveBounds(
         left:   cb.x0        / renderScale,
