@@ -73,8 +73,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // placeholder for a future zoom feature — currently always 2.0).
   // ignore: prefer_final_fields
   double _renderScale = 2.0;
-  // Figurines detected on the current page (FAN mode only).
-  List<DetectedFigurine>? _detectedFigurines;
   // Debug: word blobs detected on the current page.
   List<MoveBounds>? _detectedWordBoxes;
   // Debug: move boxes detected by the CV pipeline on the current page.
@@ -195,7 +193,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() {
       _currentPage = page;
       _pageGames = _cache[page];
-      _detectedFigurines  = _figurinesCache[page];
       _detectedWordBoxes  = _wordBoxesCache[page];
       _detectedMoveBoxes  = _moveBoxesCache[page];
       _detectedElementBoxes = _elementBoxesCache[page];
@@ -271,7 +268,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _wordBoxesCache.clear();
       _moveBoxesCache.clear();
       _blobResultsCache.clear();
-      _detectedFigurines   = null;
       _detectedWordBoxes   = null;
       _detectedMoveBoxes   = null;
       _pageGames = null;
@@ -314,7 +310,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         _cache.containsKey(pageNumber)) {
       setState(() {
         _pageGames           = _cache[pageNumber];
-        _detectedFigurines   = _figurinesCache[pageNumber];
         _detectedWordBoxes   = _wordBoxesCache[pageNumber];
         _detectedMoveBoxes   = _moveBoxesCache[pageNumber];
         _selectedGameIndex = 0;
@@ -387,7 +382,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           }
         }
         _figurinesCache[pageNumber] = detectedFigurines ?? [];
-        if (mounted) { setState(() => _detectedFigurines = detectedFigurines); }
       }
 
       // Use auto-detected FENs if available (user override takes precedence).
@@ -887,25 +881,28 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          if (kDebugMode && _detectedElementBoxes != null)
-            if (kDebugMode)
-              IconButton(
-                icon: Text(
-                  'E',
-                  style: TextStyle(
-                    color: _showElementOverlay ? Colors.purple : null,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 18,
-                    decoration: _showElementOverlay ? TextDecoration.lineThrough : null,
-                    decorationColor: Colors.purple,
-                    decorationThickness: 2.5,
-                  ),
+          if (kDebugMode && !_analysing && _elementBoxesCache.containsKey(_currentPage))
+            IconButton(
+              icon: Text(
+                'E',
+                style: TextStyle(
+                  color: _showElementOverlay ? Colors.purple : null,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  decoration: _showElementOverlay ? TextDecoration.lineThrough : null,
+                  decorationColor: Colors.purple,
+                  decorationThickness: 2.5,
                 ),
-                tooltip: 'Toggle element overlay (individual chars/glyphs within word blocks)',
-                onPressed: () =>
-                    setState(() => _showElementOverlay = !_showElementOverlay),
               ),
-          if (kDebugMode && _detectedMoveBoxes != null)
+              tooltip: 'Toggle element overlay (individual chars/glyphs within word blocks)',
+              onPressed: () {
+                setState(() {
+                  _detectedElementBoxes = _elementBoxesCache[_currentPage];
+                  _showElementOverlay = !_showElementOverlay;
+                });
+              },
+            ),
+          if (kDebugMode && !_analysing && _moveBoxesCache.containsKey(_currentPage))
             IconButton(
               icon: Text(
                 '♛',
@@ -918,10 +915,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                 ),
               ),
               tooltip: 'Toggle move-box overlay',
-              onPressed: () =>
-                  setState(() => _showMoveBoxOverlay = !_showMoveBoxOverlay),
+              onPressed: () {
+                setState(() {
+                  _detectedMoveBoxes = _moveBoxesCache[_currentPage];
+                  _showMoveBoxOverlay = !_showMoveBoxOverlay;
+                });
+              },
             ),
-          if (kDebugMode && _detectedFigurines != null)
+          if (kDebugMode && !_analysing && _wordBoxesCache.containsKey(_currentPage))
             IconButton(
               icon: Text(
                 'W',
@@ -935,8 +936,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                 ),
               ),
               tooltip: 'Toggle word-blob overlay',
-              onPressed: () =>
-                  setState(() => _showWordBoxOverlay = !_showWordBoxOverlay),
+              onPressed: () {
+                setState(() {
+                  _detectedWordBoxes = _wordBoxesCache[_currentPage];
+                  _showWordBoxOverlay = !_showWordBoxOverlay;
+                });
+              },
             ),
           IconButton(
             icon: const Icon(Icons.refresh),
