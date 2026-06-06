@@ -626,11 +626,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       debugPrint('[ComputeMoveBoxesCv]   → ${blobs.length} blob(s), ${figurines.length} figurine(s)');
 
-      // Parse elements element-by-element using the new pipeline (blob detection)
-      // Run on ALL blocks to get detailed element classification
-      final parsedElements = await elementParser.parseWordBlock(
-          rendered, blockBounds, pageHeight, renderScale);
-      allParsedElements.addAll(parsedElements);
+      // Parse elements element-by-element using gap detection
+      // Only on blocks with figurines
+      List<ParsedElement> parsedElements = [];
+      if (figurines.isNotEmpty) {
+        parsedElements = await elementParser.parseWordBlock(
+            rendered, blockBounds, pageHeight, renderScale);
+        allParsedElements.addAll(parsedElements);
+      }
 
       debugPrint('[ComputeMoveBoxesCv]   → ${parsedElements.length} parsed element(s)');
 

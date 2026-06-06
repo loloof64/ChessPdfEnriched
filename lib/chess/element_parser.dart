@@ -48,15 +48,16 @@ class ElementParser {
   final FigurineClassifier figurineClassifier;
   final NotAFigurineClassifier notAFigurineClassifier;
 
-  /// Parse all elements within a word block using blob detection.
+  /// Parse all elements within a word block using gap detection for segmentation.
   ///
   /// Pipeline:
-  /// 1. Detect all blobs (glyphs) within word block using existing blob detector
-  /// 2. For each blob:
-  ///    a. Try FigurineClassifier first (figurines are prioritized)
-  ///    b. If figurine found → use piece classification
-  ///    c. Else, try NotAFigurineClassifier to confirm it's text
-  ///    d. If text confirmed → OCR it to get character
+  /// 1. Segment word block into individual elements by detecting vertical gaps
+  /// 2. For each element:
+  ///    a. Extract HOG features
+  ///    b. Try FigurineClassifier first (figurines are prioritized)
+  ///    c. If figurine found → use piece classification
+  ///    d. Else, try NotAFigurineClassifier to confirm it's text
+  ///    e. If text confirmed → OCR it to get character
   /// 3. Return parsed elements sorted left-to-right
   Future<List<ParsedElement>> parseWordBlock(
     RenderedPage rendered,
@@ -65,37 +66,33 @@ class ElementParser {
     double renderScale, {
     double minTextConfidence = 0.50,
   }) async {
-    // Step 1: Detect all blobs within the word block
-    // Use aggressive parameters to find all glyphs (both figurines and text)
-    final blobs = FigurineDetector(classifier: figurineClassifier)
-        .analyseWordBlock(
-          rendered,
-          blockBounds,
-          pageHeight,
-          renderScale,
-          minConfidence: 0.0,      // Accept all candidates for classification
-          minGlyphSizePt: 4.0,     // Smaller than default (8.0) to catch small text
-          maxAspectRatio: 3.0,     // Wider aspect ratio for elongated chars like 'i', 'l'
-        );
+    // Step 1: Segment word block into individual elements by gap detection
+    final elementBounds = _segmentElementsByGaps(
+      rendered.gray,
+      rendered.width,
+      rendered.height,
+      blockBounds,
+      pageHeight,
+      renderScale,
+    );
 
     debugPrint(
       '[ElementParser] block at left=${blockBounds.left.toStringAsFixed(1)} '
-      '→ ${blobs.length} blob(s) detected',
+      '→ ${elementBounds.length} element(s) segmented',
     );
 
-    if (blobs.isEmpty) return [];
+    if (elementBounds.isEmpty) return [];
 
-    // Step 2: For each blob, classify as figurine or text
+    // Step 2: For each element, classify as figurine or text
     final parsed = <ParsedElement>[];
-    for (int i = 0; i < blobs.length; i++) {
-      final blob = blobs[i];
-      final elemBounds = blob.bounds;
+    for (int i = 0; i < elementBounds.length; i++) {
+      final elemBounds = elementBounds[i];
 
       debugPrint(
-        '[ElementParser]   blob[$i] @ ${elemBounds.left.toStringAsFixed(1)}: ',
+        '[ElementParser]   elem[$i] @ ${elemBounds.left.toStringAsFixed(1)}: ',
       );
 
-      // Extract HOG features from blob bounds
+      // Extract HOG features from element bounds
       final pixels = _cropAndResizeBlob(
         rendered.gray,
         rendered.width,
@@ -108,8 +105,8 @@ class ElementParser {
 
       // Try FigurineClassifier first (figurines are higher priority in chess notation)
       final figResult = figurineClassifier.classifyWithConfidence(features);
-      if (figResult != null && figResult.$2 > 0.7) {
-        // High figurine confidence (>0.7) → use it (strict threshold to avoid false positives)
+      if (figResult != null && figResult.$2 > 0.9) {
+        // High figurine confidence (>0.9) → use it (very strict threshold to avoid false positives)
         final (piece, conf) = figResult;
         parsed.add(
           ParsedElement(
@@ -162,10 +159,92 @@ class ElementParser {
     }
 
     debugPrint(
-      '[ElementParser] block → ${parsed.length}/${blobs.length} element(s) classified',
+      '[ElementParser] block → ${parsed.length}/${elementBounds.length} element(s) classified',
     );
 
     return parsed;
+  }
+
+  /// Segment a word block into individual elements by detecting gaps in the rendered pixels.
+  /// Returns a list of bounding boxes for each detected element, sorted left-to-right.
+  static List<MoveBounds> _segmentElementsByGaps(
+    Float32List gray,
+    int imgW,
+    int imgH,
+    MoveBounds blockBounds,
+    double pageHeight,
+    double scale, {
+    double pixelThreshold = 0.8,   // Pixels > 0.8 are "white" (background)
+    double gapThreshold = 0.05,    // Columns with >5% white pixels are gaps (extremely lenient)
+    double minElementWidthPt = 1.0, // Minimum element width (1pt minimum)
+  }) {
+    // Convert word block from PDF coords to pixel coords
+    final px0 = (blockBounds.left * scale).round().clamp(0, imgW - 1);
+    final px1 = (blockBounds.right * scale).round().clamp(px0 + 1, imgW);
+    final py0 = ((pageHeight - blockBounds.top) * scale).round().clamp(0, imgH - 1);
+    final py1 = ((pageHeight - blockBounds.bottom) * scale).round().clamp(py0 + 1, imgH);
+
+    final colWidth = px1 - px0;
+    final colHeight = py1 - py0;
+    if (colWidth <= 0 || colHeight <= 0) return [];
+
+    // Compute column-wise ink density (dark pixels = ink)
+    final colInkFraction = List<double>.filled(colWidth, 0.0);
+    for (int x = px0; x < px1; x++) {
+      int inkCount = 0;
+      for (int y = py0; y < py1; y++) {
+        final idx = y * imgW + x;
+        if (idx < gray.length && gray[idx] < pixelThreshold) {  // Inverted: dark = ink
+          inkCount++;
+        }
+      }
+      colInkFraction[x - px0] = inkCount / colHeight;
+    }
+
+    debugPrint(
+      '[SegmentElements] ink density: min=${colInkFraction.reduce((a, b) => a < b ? a : b).toStringAsFixed(3)}, '
+      'max=${colInkFraction.reduce((a, b) => a > b ? a : b).toStringAsFixed(3)}',
+    );
+
+    // Identify gap columns (very little ink)
+    final isGap = List<bool>.filled(colWidth, false);
+    for (int i = 0; i < colInkFraction.length; i++) {
+      if (colInkFraction[i] < gapThreshold) {  // Inverted logic
+        isGap[i] = true;
+      }
+    }
+
+    // Find contiguous segments of non-gap columns (individual elements)
+    final elements = <MoveBounds>[];
+    int? segStart;
+    for (int i = 0; i <= isGap.length; i++) {
+      final isCurrentGap = (i < isGap.length) ? isGap[i] : true;
+
+      if (!isCurrentGap) {
+        if (segStart == null) segStart = i;
+      } else {
+        if (segStart != null) {
+          // Found a gap after a segment
+          final segEnd = i;
+          final elemWidth = (segEnd - segStart) / scale;
+
+          if (elemWidth >= minElementWidthPt) {
+            elements.add(MoveBounds(
+              left: (px0 + segStart) / scale,
+              right: (px0 + segEnd) / scale,
+              top: blockBounds.top,
+              bottom: blockBounds.bottom,
+            ));
+          }
+          segStart = null;
+        }
+      }
+    }
+
+    debugPrint(
+      '[SegmentElements] block → ${elements.length} element(s) from gaps',
+    );
+    return elements;
   }
 
   /// OCR a single element to extract its character.
