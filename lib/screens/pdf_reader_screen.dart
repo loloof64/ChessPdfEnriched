@@ -362,7 +362,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         final rendered = await FigurineDetector.renderPage(page,
             scale: _renderScale);
         if (rendered != null) {
-          final result = _computeMoveBoxesCv(
+          final result = await _computeMoveBoxesCv(
             wb, rawText.charRects, rawText.fullText,
             rendered, page.height, _renderScale, _figurineDetector!,
             _elementParser!,
@@ -592,12 +592,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   ///   • No figurine in block → OCR the whole block text.
   ///   • Figurine(s) found    → OCR left part + piece letter + OCR right part.
   ///   Then strip move number / annotations and test against the SAN regex.
-  static ({
+  static Future<({
     List<MoveBounds> moveBoxes,
     List<DetectedFigurine> figurines,
     List<BlobResult> blobs,
     List<ParsedElement> parsedElements,
-  })
+  })>
       _computeMoveBoxesCv(
     List<MoveBounds> wordBlocks,
     List<PdfRect> charRects,
@@ -607,7 +607,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     double renderScale,
     FigurineDetector detector,
     ElementParser elementParser,
-  ) {
+  ) async {
     final moveBoxes      = <MoveBounds>[];
     final allFigurines   = <DetectedFigurine>[];
     final allBlobs       = <BlobResult>[];
@@ -626,8 +626,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       debugPrint('[ComputeMoveBoxesCv]   → ${blobs.length} blob(s), ${figurines.length} figurine(s)');
 
-      // Parse elements element-by-element using the new pipeline
-      final parsedElements = elementParser.parseWordBlock(
+      // Parse elements element-by-element using the new pipeline (blob detection)
+      // Run on ALL blocks to get detailed element classification
+      final parsedElements = await elementParser.parseWordBlock(
           rendered, blockBounds, pageHeight, renderScale);
       allParsedElements.addAll(parsedElements);
 
@@ -635,47 +636,61 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       String assembled;
 
-      if (figurines.isEmpty) {
-        // No figurine → OCR the whole block.
-        assembled = _ocrRegion(blockBounds, charRects, fullText);
-        if (kDebugMode && assembled.isNotEmpty) {
-          debugPrint('[BlockAnalysis] block[$i] no figurine → ocr "$assembled"');
-        }
-      } else {
-        // Has figurine(s): collect them for the overlay and build the string.
-        for (final f in figurines) {
-          allFigurines.add(DetectedFigurine(
-              bounds: f.bounds, piece: f.piece!, confidence: f.confidence));
+      // Build move string from parsed elements (both figurines and text)
+      if (parsedElements.isNotEmpty) {
+        final buf = StringBuffer();
+        for (final elem in parsedElements) {
+          buf.write(elem.text);
           if (kDebugMode) {
             debugPrint('[BlockAnalysis] block[$i] '
-                'figurine@${f.bounds.left.toStringAsFixed(1)}'
-                ' → ${f.piece}(conf=${f.confidence.toStringAsFixed(2)})');
+                'elem@${elem.bounds.left.toStringAsFixed(1)} '
+                '${elem.type}="${elem.text}"');
           }
         }
-
-        // Sort figurines left→right, then interleave OCR segments.
-        figurines.sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
-        final buf = StringBuffer();
-        double segLeft = blockBounds.left;
-        for (final f in figurines) {
-          // OCR text to the left of this figurine.
-          final leftRegion = MoveBounds(
-            left: segLeft, right: f.bounds.left,
-            top: blockBounds.top, bottom: blockBounds.bottom,
-          );
-          buf.write(_ocrRegion(leftRegion, charRects, fullText));
-          buf.write(f.piece);
-          segLeft = f.bounds.right;
-        }
-        // OCR text to the right of the last figurine.
-        final rightRegion = MoveBounds(
-          left: segLeft, right: blockBounds.right,
-          top: blockBounds.top, bottom: blockBounds.bottom,
-        );
-        buf.write(_ocrRegion(rightRegion, charRects, fullText));
         assembled = buf.toString();
         if (kDebugMode) {
-          debugPrint('[BlockAnalysis] block[$i] assembled → "$assembled"');
+          debugPrint('[BlockAnalysis] block[$i] assembled (from elements) → "$assembled"');
+        }
+
+        // Also collect figurines for overlay
+        for (final elem in parsedElements.where((e) => e.type == 'figurine')) {
+          allFigurines.add(DetectedFigurine(
+              bounds: elem.bounds, piece: elem.text, confidence: elem.confidence));
+        }
+      } else {
+        // Fallback: if no elements found, try old blob-based assembly
+        if (figurines.isNotEmpty) {
+          for (final f in figurines) {
+            allFigurines.add(DetectedFigurine(
+                bounds: f.bounds, piece: f.piece!, confidence: f.confidence));
+          }
+          figurines.sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
+          final buf = StringBuffer();
+          double segLeft = blockBounds.left;
+          for (final f in figurines) {
+            final leftRegion = MoveBounds(
+              left: segLeft, right: f.bounds.left,
+              top: blockBounds.top, bottom: blockBounds.bottom,
+            );
+            buf.write(_ocrRegion(leftRegion, charRects, fullText));
+            buf.write(f.piece);
+            segLeft = f.bounds.right;
+          }
+          final rightRegion = MoveBounds(
+            left: segLeft, right: blockBounds.right,
+            top: blockBounds.top, bottom: blockBounds.bottom,
+          );
+          buf.write(_ocrRegion(rightRegion, charRects, fullText));
+          assembled = buf.toString();
+          if (kDebugMode) {
+            debugPrint('[BlockAnalysis] block[$i] assembled (fallback) → "$assembled"');
+          }
+        } else {
+          // No elements or figurines: OCR whole block
+          assembled = _ocrRegion(blockBounds, charRects, fullText);
+          if (kDebugMode && assembled.isNotEmpty) {
+            debugPrint('[BlockAnalysis] block[$i] no figurine → ocr "$assembled"');
+          }
         }
       }
 

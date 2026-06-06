@@ -4,6 +4,13 @@ Read your chess pdf files with moves interactivity.
 
 ## For developers
 
+### Tesseract
+
+You should install tesseract ocr on your computer
+(
+If you're on Ubuntu linux : `sudo apt install tesseract-ocr`
+)
+
 ### TfLite model
 
 1. Upload the Google Colab notebook (`train_chess_classifier.ipynb`) to your account
