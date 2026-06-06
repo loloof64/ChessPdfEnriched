@@ -105,8 +105,8 @@ class ElementParser {
 
       // Try FigurineClassifier first (figurines are higher priority in chess notation)
       final figResult = figurineClassifier.classifyWithConfidence(features);
-      if (figResult != null && figResult.$2 > 0.9) {
-        // High figurine confidence (>0.9) → use it (very strict threshold to avoid false positives)
+      if (figResult != null && figResult.$2 > 0.95) {
+        // High figurine confidence (>0.95) → use it (extremely strict threshold)
         final (piece, conf) = figResult;
         parsed.add(
           ParsedElement(
@@ -174,42 +174,50 @@ class ElementParser {
     MoveBounds blockBounds,
     double pageHeight,
     double scale, {
-    double pixelThreshold = 0.8,   // Pixels > 0.8 are "white" (background)
-    double gapThreshold = 0.05,    // Columns with >5% white pixels are gaps (extremely lenient)
-    double minElementWidthPt = 1.0, // Minimum element width (1pt minimum)
+    double pixelThreshold = 0.75, // Pixels > 0.75 are "white" (background)
+    double gapThreshold =
+        0.25, // Columns with >25% white pixels are gaps (balanced)
+    double minElementWidthPt = 2.0, // Minimum element width
   }) {
     // Convert word block from PDF coords to pixel coords
     final px0 = (blockBounds.left * scale).round().clamp(0, imgW - 1);
     final px1 = (blockBounds.right * scale).round().clamp(px0 + 1, imgW);
-    final py0 = ((pageHeight - blockBounds.top) * scale).round().clamp(0, imgH - 1);
-    final py1 = ((pageHeight - blockBounds.bottom) * scale).round().clamp(py0 + 1, imgH);
+    final py0 = ((pageHeight - blockBounds.top) * scale).round().clamp(
+      0,
+      imgH - 1,
+    );
+    final py1 = ((pageHeight - blockBounds.bottom) * scale).round().clamp(
+      py0 + 1,
+      imgH,
+    );
 
     final colWidth = px1 - px0;
     final colHeight = py1 - py0;
     if (colWidth <= 0 || colHeight <= 0) return [];
 
-    // Compute column-wise ink density (dark pixels = ink)
-    final colInkFraction = List<double>.filled(colWidth, 0.0);
+    // Compute column-wise white pixel fraction (gap detection)
+    final colGapFraction = List<double>.filled(colWidth, 0.0);
     for (int x = px0; x < px1; x++) {
-      int inkCount = 0;
+      int whiteCount = 0;
       for (int y = py0; y < py1; y++) {
         final idx = y * imgW + x;
-        if (idx < gray.length && gray[idx] < pixelThreshold) {  // Inverted: dark = ink
-          inkCount++;
+        if (idx < gray.length && gray[idx] > pixelThreshold) {
+          whiteCount++;
         }
       }
-      colInkFraction[x - px0] = inkCount / colHeight;
+      colGapFraction[x - px0] = whiteCount / colHeight;
     }
 
     debugPrint(
-      '[SegmentElements] ink density: min=${colInkFraction.reduce((a, b) => a < b ? a : b).toStringAsFixed(3)}, '
-      'max=${colInkFraction.reduce((a, b) => a > b ? a : b).toStringAsFixed(3)}',
+      '[SegmentElements] gap fraction: min=${colGapFraction.reduce((a, b) => a < b ? a : b).toStringAsFixed(3)}, '
+      'max=${colGapFraction.reduce((a, b) => a > b ? a : b).toStringAsFixed(3)}, '
+      'threshold=$gapThreshold',
     );
 
-    // Identify gap columns (very little ink)
+    // Identify gap columns (mostly white)
     final isGap = List<bool>.filled(colWidth, false);
-    for (int i = 0; i < colInkFraction.length; i++) {
-      if (colInkFraction[i] < gapThreshold) {  // Inverted logic
+    for (int i = 0; i < colGapFraction.length; i++) {
+      if (colGapFraction[i] > gapThreshold) {
         isGap[i] = true;
       }
     }
@@ -221,7 +229,7 @@ class ElementParser {
       final isCurrentGap = (i < isGap.length) ? isGap[i] : true;
 
       if (!isCurrentGap) {
-        if (segStart == null) segStart = i;
+        segStart ??= i;
       } else {
         if (segStart != null) {
           // Found a gap after a segment
@@ -229,12 +237,14 @@ class ElementParser {
           final elemWidth = (segEnd - segStart) / scale;
 
           if (elemWidth >= minElementWidthPt) {
-            elements.add(MoveBounds(
-              left: (px0 + segStart) / scale,
-              right: (px0 + segEnd) / scale,
-              top: blockBounds.top,
-              bottom: blockBounds.bottom,
-            ));
+            elements.add(
+              MoveBounds(
+                left: (px0 + segStart) / scale,
+                right: (px0 + segEnd) / scale,
+                top: blockBounds.top,
+                bottom: blockBounds.bottom,
+              ),
+            );
           }
           segStart = null;
         }
