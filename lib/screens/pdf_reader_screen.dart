@@ -79,16 +79,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   List<MoveBounds>? _detectedWordBoxes;
   // Debug: move boxes detected by the CV pipeline on the current page.
   List<MoveBounds>? _detectedMoveBoxes;
-  // Debug: all blobs tested by the figurine classifier on the current page.
-  List<BlobResult>? _detectedBlobResults;
   // Debug: element boxes (individual characters/glyphs within word blocks).
   List<MoveBounds>? _detectedElementBoxes;
   // Debug: whether to show word-blob rectangles in red.
   bool _showWordBoxOverlay = false;
   // Debug: whether to show move-box rectangles in blue.
   bool _showMoveBoxOverlay = false;
-  // Debug: whether to show all classifier-tested blobs.
-  bool _showBlobOverlay = false;
   // Debug: whether to show element boxes (individual elements within word blocks).
   bool _showElementOverlay = false;
 
@@ -202,7 +198,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _detectedFigurines  = _figurinesCache[page];
       _detectedWordBoxes  = _wordBoxesCache[page];
       _detectedMoveBoxes  = _moveBoxesCache[page];
-      _detectedBlobResults = _blobResultsCache[page];
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
     });
@@ -278,7 +273,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _detectedFigurines   = null;
       _detectedWordBoxes   = null;
       _detectedMoveBoxes   = null;
-      _detectedBlobResults = null;
       _pageGames = null;
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
@@ -322,7 +316,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         _detectedFigurines   = _figurinesCache[pageNumber];
         _detectedWordBoxes   = _wordBoxesCache[pageNumber];
         _detectedMoveBoxes   = _moveBoxesCache[pageNumber];
-        _detectedBlobResults = _blobResultsCache[pageNumber];
         _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       });
@@ -388,7 +381,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           if (mounted) {
             setState(() {
               _detectedMoveBoxes   = result.moveBoxes;
-              _detectedBlobResults = result.blobs;
               _detectedElementBoxes = elementBoxes;
             });
           }
@@ -905,23 +897,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
               onPressed: () =>
                   setState(() => _showElementOverlay = !_showElementOverlay),
             ),
-          if (kDebugMode && _detectedBlobResults != null)
-            IconButton(
-              icon: Text(
-                'B',
-                style: TextStyle(
-                  color: _showBlobOverlay ? Colors.orange : null,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                  decoration: _showBlobOverlay ? TextDecoration.lineThrough : null,
-                  decorationColor: Colors.orange,
-                  decorationThickness: 2.5,
-                ),
-              ),
-              tooltip: 'Toggle classifier blob overlay',
-              onPressed: () =>
-                  setState(() => _showBlobOverlay = !_showBlobOverlay),
-            ),
           if (kDebugMode && _detectedMoveBoxes != null)
             IconButton(
               icon: Text(
@@ -1051,15 +1026,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                       pageHeight: page.height,
                       widgetSize: constraints.biggest,
                       color: Colors.blue,
-                    ),
-                  if (kDebugMode &&
-                      _showBlobOverlay &&
-                      _detectedBlobResults != null)
-                    _BlobOverlay(
-                      blobs: _detectedBlobResults!,
-                      pageWidth: page.width,
-                      pageHeight: page.height,
-                      widgetSize: constraints.biggest,
                     ),
                   if (kDebugMode &&
                       _showElementOverlay &&
@@ -1396,74 +1362,6 @@ class _AnalysingBadge extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-
-/// Shows every blob tested by the figurine classifier.
-/// Green = classified as a piece (figurine hit).
-/// Red   = rejected (NotAFigurine).
-/// The piece letter and confidence are shown as small text inside each box.
-class _BlobOverlay extends StatelessWidget {
-  const _BlobOverlay({
-    required this.blobs,
-    required this.pageWidth,
-    required this.pageHeight,
-    required this.widgetSize,
-  });
-
-  final List<BlobResult> blobs;
-  final double pageWidth;
-  final double pageHeight;
-  final Size widgetSize;
-
-  @override
-  Widget build(BuildContext context) {
-    if (blobs.isEmpty) return const SizedBox.shrink();
-    final W = widgetSize.width;
-    final H = widgetSize.height;
-    if (W == 0 || H == 0) return const SizedBox.shrink();
-
-    final scale   = min(W / pageWidth, H / pageHeight);
-    final xOffset = (W - pageWidth  * scale) / 2;
-    final yOffset = (H - pageHeight * scale) / 2;
-
-    return Stack(
-      children: [
-        for (final blob in blobs)
-          Positioned(
-            left:   xOffset + blob.bounds.left * scale,
-            top:    yOffset + (pageHeight - blob.bounds.top) * scale,
-            width:  ((blob.bounds.right - blob.bounds.left) * scale)
-                .clamp(2.0, double.infinity),
-            height: ((blob.bounds.top - blob.bounds.bottom) * scale)
-                .clamp(2.0, double.infinity),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                border: Border.all(
-                  color: blob.piece != null ? Colors.green : Colors.red,
-                  width: 1,
-                ),
-              ),
-              child: blob.piece != null
-                  ? Align(
-                      alignment: Alignment.topLeft,
-                      child: Text(
-                        '${blob.piece}${(blob.confidence * 100).round()}',
-                        style: const TextStyle(
-                          color: Colors.green,
-                          fontSize: 7,
-                          fontWeight: FontWeight.bold,
-                          height: 1,
-                        ),
-                      ),
-                    )
-                  : null,
-            ),
-          ),
-      ],
     );
   }
 }
