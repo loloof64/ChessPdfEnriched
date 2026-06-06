@@ -518,11 +518,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     void flushGroup() {
       if (gLeft == null || gRight == null || gTop == null || gBottom == null) return;
       final lineH = gTop! - gBottom!;
-      final ext = lineH * 0.35;
+      final extHor = lineH * 0.75; // Increased right margin to capture final letters
       raw.add(MoveBounds(
         left:   gLeft!   - lineH * 0.05,
         top:    gTop!    + lineH * 0.10,
-        right:  gRight!  + ext,
+        right:  gRight!  + extHor,
         bottom: gBottom! - lineH * 0.30,
       ));
       gTop = gBottom = gLeft = gRight = prevRight = null;
