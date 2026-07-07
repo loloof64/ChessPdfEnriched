@@ -626,16 +626,23 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       debugPrint('[ComputeMoveBoxesCv]   → ${blobs.length} blob(s), ${figurines.length} figurine(s)');
 
-      // Parse elements element-by-element using gap detection
-      // Only on blocks with figurines
+      // Parse elements only for blocks with figurines (needed for correct move assembly).
+      // Pass CCL blob bounds so segmentation uses robust connected-components
+      // instead of column-projection (which fails on complex/inverted glyphs).
       List<ParsedElement> parsedElements = [];
       if (figurines.isNotEmpty) {
         parsedElements = await elementParser.parseWordBlock(
-            rendered, blockBounds, pageHeight, renderScale);
+            rendered, blockBounds, pageHeight, renderScale,
+            blobBounds: blobs.map((b) => b.bounds).toList());
         allParsedElements.addAll(parsedElements);
+
+        final figElemCount = parsedElements.where((e) => e.type == 'figurine').length;
+        final textElemCount = parsedElements.where((e) => e.type == 'text').length;
+        debugPrint('[ComputeMoveBoxesCv]   → ${parsedElements.length} element(s): '
+            '$figElemCount figurine(s) [green], $textElemCount notAFigurine(s) [purple]');
       }
 
-      debugPrint('[ComputeMoveBoxesCv]   → ${parsedElements.length} parsed element(s)');
+      debugPrint('[ComputeMoveBoxesCv]   → ${parsedElements.length} element(s) used for move assembly');
 
       String assembled;
 

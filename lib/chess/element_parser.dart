@@ -1,8 +1,4 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'figurine_classifier.dart';
 import 'figurine_detector.dart';
@@ -65,21 +61,33 @@ class ElementParser {
     double pageHeight,
     double renderScale, {
     double minTextConfidence = 0.50,
+    /// Pre-computed CCL blob bounds from FigurineDetector.analyseWordBlock.
+    /// When provided these are used directly, skipping column-projection
+    /// segmentation (which fails for complex/inverted glyphs).
+    List<MoveBounds>? blobBounds,
   }) async {
-    // Step 1: Segment word block into individual elements by gap detection
-    final elementBounds = _segmentElementsByGaps(
-      rendered.gray,
-      rendered.width,
-      rendered.height,
-      blockBounds,
-      pageHeight,
-      renderScale,
-    );
-
-    debugPrint(
-      '[ElementParser] block at left=${blockBounds.left.toStringAsFixed(1)} '
-      '→ ${elementBounds.length} element(s) segmented',
-    );
+    // Step 1: Prefer CCL blob bounds; fall back to column-projection.
+    List<MoveBounds> elementBounds;
+    if (blobBounds != null && blobBounds.isNotEmpty) {
+      elementBounds = blobBounds;
+      debugPrint(
+        '[ElementParser] block at left=${blockBounds.left.toStringAsFixed(1)} '
+        '→ ${elementBounds.length} element(s) from blob bounds',
+      );
+    } else {
+      elementBounds = _segmentElementsByGaps(
+        rendered.binary,
+        rendered.width,
+        rendered.height,
+        blockBounds,
+        pageHeight,
+        renderScale,
+      );
+      debugPrint(
+        '[ElementParser] block at left=${blockBounds.left.toStringAsFixed(1)} '
+        '→ ${elementBounds.length} element(s) from gap projection',
+      );
+    }
 
     if (elementBounds.isEmpty) return [];
 
@@ -103,10 +111,20 @@ class ElementParser {
       );
       final features = HogExtractor.extract(pixels, 32, 32);
 
-      // Try FigurineClassifier first (figurines are higher priority in chess notation)
+      // Run both classifiers and log scores for debugging.
       final figResult = figurineClassifier.classifyWithConfidence(features);
+      final textConf =
+          notAFigurineClassifier.classifyAsNotFigurine(features) ?? 0.0;
+
+      debugPrint(
+        '[ElementParser]   elem[$i] @ ${elemBounds.left.toStringAsFixed(1)}: '
+        'fig=${figResult != null ? "${figResult.$2.toStringAsFixed(2)} (${figResult.$1})" : "null"}, '
+        'notAFig=${textConf.toStringAsFixed(2)}',
+      );
+
       if (figResult != null && figResult.$2 > 0.95) {
-        // High figurine confidence (>0.95) → use it (extremely strict threshold)
+        // Strong figurine signal — classify as figurine regardless of notAFig score.
+        // (notAFig also fires for real figurines on some PDFs, so figurine wins.)
         final (piece, conf) = figResult;
         parsed.add(
           ParsedElement(
@@ -117,44 +135,23 @@ class ElementParser {
           ),
         );
         debugPrint(
-          '[ElementParser]     → FIGURINE: $piece (conf=${conf.toStringAsFixed(2)})',
+          '[ElementParser]     → FIGURINE: $piece (fig=${conf.toStringAsFixed(2)}, notAFig=${textConf.toStringAsFixed(2)})',
         );
+      } else if (textConf >= minTextConfidence) {
+        // No strong figurine, but notAFigurine fires → treat as text.
+        // Skip OCR: move assembly uses the PDF text layer, not OCR'd text.
+        // Just use a placeholder for the debug overlay.
+        parsed.add(
+          ParsedElement(
+            text: '·',
+            bounds: elemBounds,
+            type: 'text',
+            confidence: textConf,
+          ),
+        );
+        debugPrint('[ElementParser]     → TEXT (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})');
       } else {
-        // No good figurine match → try NotAFigurineClassifier to confirm text
-        final textConf =
-            notAFigurineClassifier.classifyAsNotFigurine(features) ?? 0.0;
-
-        debugPrint(
-          '[ElementParser]     textConfidence=${textConf.toStringAsFixed(2)}',
-        );
-
-        if (textConf >= minTextConfidence) {
-          // High text confidence → OCR it
-          final ocrChar = await _ocrElement(
-            rendered.gray,
-            elemBounds,
-            rendered.width,
-            rendered.height,
-            pageHeight,
-            renderScale,
-          );
-
-          if (ocrChar.isNotEmpty) {
-            parsed.add(
-              ParsedElement(
-                text: ocrChar,
-                bounds: elemBounds,
-                type: 'text',
-                confidence: textConf,
-              ),
-            );
-            debugPrint('[ElementParser]     → TEXT (OCR): "$ocrChar"');
-          } else {
-            debugPrint('[ElementParser]     → TEXT (OCR failed)');
-          }
-        } else {
-          debugPrint('[ElementParser]     → SKIPPED (ambiguous)');
-        }
+        debugPrint('[ElementParser]     → SKIPPED (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})');
       }
     }
 
@@ -167,16 +164,20 @@ class ElementParser {
 
   /// Segment a word block into individual elements by detecting gaps in the rendered pixels.
   /// Returns a list of bounding boxes for each detected element, sorted left-to-right.
+  ///
+  /// Uses the binary image (1=ink, 0=background) so the threshold is exact.
+  /// gapThreshold=0.75: a column needs >75% background pixels to be a gap.
+  /// This accounts for ascender/descender whitespace: even the densest ink column
+  /// only fills ~50% of the block height, so we need the bar high enough to
+  /// distinguish ink columns (~50% bg) from true gaps (~100% bg).
   static List<MoveBounds> _segmentElementsByGaps(
-    Float32List gray,
+    Uint8List binary,
     int imgW,
     int imgH,
     MoveBounds blockBounds,
     double pageHeight,
     double scale, {
-    double pixelThreshold = 0.75, // Pixels > 0.75 are "white" (background)
-    double gapThreshold =
-        0.25, // Columns with >25% white pixels are gaps (balanced)
+    double gapThreshold = 0.75, // Columns with >75% background pixels are gaps
     double minElementWidthPt = 2.0, // Minimum element width
   }) {
     // Convert word block from PDF coords to pixel coords
@@ -195,23 +196,24 @@ class ElementParser {
     final colHeight = py1 - py0;
     if (colWidth <= 0 || colHeight <= 0) return [];
 
-    // Compute column-wise white pixel fraction (gap detection)
+    // Compute column-wise background-pixel fraction.
+    // binary[idx]==0 means background (white), binary[idx]==1 means ink (dark).
     final colGapFraction = List<double>.filled(colWidth, 0.0);
     for (int x = px0; x < px1; x++) {
-      int whiteCount = 0;
+      int bgCount = 0;
       for (int y = py0; y < py1; y++) {
         final idx = y * imgW + x;
-        if (idx < gray.length && gray[idx] > pixelThreshold) {
-          whiteCount++;
+        if (idx < binary.length && binary[idx] == 0) {
+          bgCount++;
         }
       }
-      colGapFraction[x - px0] = whiteCount / colHeight;
+      colGapFraction[x - px0] = bgCount / colHeight;
     }
 
     debugPrint(
-      '[SegmentElements] gap fraction: min=${colGapFraction.reduce((a, b) => a < b ? a : b).toStringAsFixed(3)}, '
+      '[SegmentElements] bg fraction: min=${colGapFraction.reduce((a, b) => a < b ? a : b).toStringAsFixed(3)}, '
       'max=${colGapFraction.reduce((a, b) => a > b ? a : b).toStringAsFixed(3)}, '
-      'threshold=$gapThreshold',
+      'gapThreshold=$gapThreshold',
     );
 
     // Identify gap columns (mostly white)
@@ -255,95 +257,6 @@ class ElementParser {
       '[SegmentElements] block → ${elements.length} element(s) from gaps',
     );
     return elements;
-  }
-
-  /// OCR a single element to extract its character.
-  /// Returns the recognized text, or empty string if OCR fails.
-  static Future<String> _ocrElement(
-    Float32List gray,
-    MoveBounds elemBounds,
-    int imgW,
-    int imgH,
-    double pageHeight,
-    double scale,
-  ) async {
-    try {
-      // Crop element region from image
-      final px0 = (elemBounds.left * scale).round().clamp(0, imgW - 1);
-      final px1 = (elemBounds.right * scale).round().clamp(px0 + 1, imgW);
-      final py0 = ((pageHeight - elemBounds.top) * scale).round().clamp(
-        0,
-        imgH - 1,
-      );
-      final py1 = ((pageHeight - elemBounds.bottom) * scale).round().clamp(
-        py0 + 1,
-        imgH,
-      );
-
-      final width = px1 - px0;
-      final height = py1 - py0;
-      if (width <= 0 || height <= 0) return '';
-
-      // Extract grayscale pixels and convert to 8-bit format for tesseract
-      final imageBytes = Uint8List(width * height);
-      for (int y = py0; y < py1; y++) {
-        for (int x = px0; x < px1; x++) {
-          final idx = y * imgW + x;
-          if (idx < gray.length) {
-            imageBytes[(y - py0) * width + (x - px0)] = (gray[idx] * 255)
-                .round()
-                .clamp(0, 255)
-                .toUnsigned(8);
-          }
-        }
-      }
-
-      // Save to temporary file in PBM format
-      final tmpDir = await getTemporaryDirectory();
-      final tmpFile = File(
-        '${tmpDir.path}/ocr_${DateTime.now().millisecondsSinceEpoch}.pbm',
-      );
-
-      // PBM format header: P5\nwidth height\n255\n then raw bytes
-      final pbmHeader = 'P5\n$width $height\n255\n'.codeUnits;
-      final pbmData = Uint8List(pbmHeader.length + imageBytes.length);
-      pbmData.setRange(0, pbmHeader.length, pbmHeader);
-      pbmData.setRange(
-        pbmHeader.length,
-        pbmHeader.length + imageBytes.length,
-        imageBytes,
-      );
-      tmpFile.writeAsBytesSync(pbmData);
-
-      // Run tesseract OCR
-      final result = await Process.run('tesseract', [
-        tmpFile.path,
-        'stdout',
-        '-l', 'eng',
-        '--psm', '10', // Single character mode
-      ]);
-
-      // Clean up temp file
-      try {
-        tmpFile.deleteSync();
-      } catch (_) {}
-
-      if (result.exitCode != 0) {
-        debugPrint(
-          '[OcrElement] tesseract exit ${result.exitCode}: ${result.stderr}',
-        );
-        return '';
-      }
-
-      // Extract first character from OCR output
-      final text = (result.stdout as String).trim();
-      return text.isNotEmpty
-          ? text.split('\n').first.trim().characters.first.toString()
-          : '';
-    } catch (e) {
-      debugPrint('[OcrElement] OCR failed: $e');
-      return '';
-    }
   }
 
   /// Build a move string from parsed elements, using PDF text layer for text elements.
