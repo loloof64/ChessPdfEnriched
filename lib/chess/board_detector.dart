@@ -56,7 +56,7 @@ class BoardDetector {
   // Public entry point
 
   static Future<({List<int> splitIndices, bool topOfPageBoardDetected, List<String?> detectedFens, List<PdfRect> boardRects})>
-  detectBoards(PdfPage page, List<PdfRect> charRects) async {
+  detectBoards(PdfPage page, List<PdfRect> charRects, {String? debugLogFile}) async {
     final iW = (page.width * _scale).round();
     final iH = (page.height * _scale).round();
 
@@ -99,7 +99,9 @@ class BoardDetector {
       final hLines = _linePositions(hRun, iH);
       final vLines = _linePositions(vRun, iW);
 
-      final classifier = await ChessPieceClassifier.load();
+      final classifier = await ChessPieceClassifier.load(
+        debugLogFile: debugLogFile,
+      );
 
       final boards = <({int x, int y, int s, String fen})>[];
 

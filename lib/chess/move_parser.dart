@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:dartchess/dartchess.dart' as dc;
@@ -393,6 +394,10 @@ class MoveParser {
     Map<String, String>? fontMap,
     NotationMode notationMode = NotationMode.textSan,
     List<DetectedFigurine>? detectedFigurines,
+    /// When set, diagnostic lines are appended straight to this file instead
+    /// of going through debugPrint — terminal/logcat output gets truncated
+    /// or drops lines under heavy volume, a file never does.
+    String? debugLogFile,
   }) {
     final fullText = rawText.fullText;
     final charRects = rawText.charRects;
@@ -444,6 +449,7 @@ class MoveParser {
         forceSuspectedDiagram: topOfPageBoardDetected,
         notationMode: notationMode,
         detectedFigurines: detectedFigurines,
+        debugLogFile: debugLogFile,
       );
       return [maybeMarkIntermediate(a, 0)];
     }
@@ -469,6 +475,7 @@ class MoveParser {
             forceSuspectedDiagram: i == 0 ? topOfPageBoardDetected : true,
             notationMode: notationMode,
             detectedFigurines: detectedFigurines,
+            debugLogFile: debugLogFile,
           ),
           i,
         ),
@@ -498,6 +505,21 @@ class MoveParser {
     return segments;
   }
 
+  /// Appends [message] to [logFile] if set, otherwise falls back to
+  /// [debugPrint]. Terminal/logcat output gets truncated or drops lines
+  /// under heavy volume — writing straight to a file never does.
+  static void _log(String? logFile, String message) {
+    if (logFile == null) {
+      debugPrint(message);
+      return;
+    }
+    try {
+      File(logFile).writeAsStringSync('$message\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('[MoveParser] failed to write log: $e');
+    }
+  }
+
   static List<PdfRect> _sliceRects(List<PdfRect> rects, int start, int end) {
     if (start >= rects.length) return const [];
     return rects.sublist(start, end.clamp(0, rects.length));
@@ -517,6 +539,7 @@ class MoveParser {
     bool forceSuspectedDiagram = false,
     NotationMode notationMode = NotationMode.textSan,
     List<DetectedFigurine>? detectedFigurines,
+    String? debugLogFile,
   }) {
     // ------------------------------------------------------------------
     // 1. Determine starting position.
@@ -703,7 +726,8 @@ class MoveParser {
             currentMoveNum = num;
             expectBlack = targetIsBlack;
             move = _resolveMove(normalised, position, fontMap);
-            debugPrint(
+            _log(
+              debugLogFile,
               '[MoveParser] backtrack to move $num ${targetIsBlack ? "b" : "w"} for "$raw": ${move != null ? "ok" : "still failed"}',
             );
           }
@@ -719,7 +743,7 @@ class MoveParser {
           move = _resolveMove(pieceNorm, position, fontMap);
           if (move != null) {
             isPlausible = true; // use current currentMoveNum/expectBlack
-            debugPrint('[MoveParser] dotted-piece "$raw" → "$pieceNorm"');
+            _log(debugLogFile, '[MoveParser] dotted-piece "$raw" → "$pieceNorm"');
           }
         }
         // Split-token lookahead: figurine glyph in one font run, rest in next.
@@ -736,7 +760,7 @@ class MoveParser {
             if (joinedMove != null) {
               move = joinedMove;
               ti++; // consume the next token too
-              debugPrint('[MoveParser] split-token "$raw"+"${tokens[ti].text}" → "$joinedNorm"');
+              _log(debugLogFile, '[MoveParser] split-token "$raw"+"${tokens[ti].text}" → "$joinedNorm"');
             }
           }
         }
@@ -816,7 +840,8 @@ class MoveParser {
       if (!expectBlack) currentMoveNum++;
     }
 
-    debugPrint(
+    _log(
+      debugLogFile,
       '[MoveParser] fenSource=$fenSource  ${moves.length} move(s) parsed'
       '${skippedTokens > 0 ? "  ($skippedTokens token(s) skipped)" : ""}'
       '${figurines.isNotEmpty ? "  figurines=${figurines.length}" : ""}',

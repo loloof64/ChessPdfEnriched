@@ -1,8 +1,10 @@
+import 'dart:io' show File, FileMode;
 import 'dart:math' show min;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../chess/analysis_cache.dart';
 import '../chess/board_detector.dart';
@@ -193,8 +195,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     setState(() {
       _currentPage = page;
       _pageGames = _cache[page];
-      _detectedWordBoxes  = _wordBoxesCache[page];
-      _detectedMoveBoxes  = _moveBoxesCache[page];
+      _detectedWordBoxes = _wordBoxesCache[page];
+      _detectedMoveBoxes = _moveBoxesCache[page];
       _detectedElementBoxes = _elementBoxesCache[page];
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
@@ -262,14 +264,19 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   Future<void> _reanalyse() async {
     await AnalysisCache.clear(widget.filePath);
+    if (kDebugMode) {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final logFile = File('${docsDir.path}/figurine_debug.log');
+      if (logFile.existsSync()) logFile.deleteSync();
+    }
     setState(() {
       _cache.clear();
       _figurinesCache.clear();
       _wordBoxesCache.clear();
       _moveBoxesCache.clear();
       _blobResultsCache.clear();
-      _detectedWordBoxes   = null;
-      _detectedMoveBoxes   = null;
+      _detectedWordBoxes = null;
+      _detectedMoveBoxes = null;
       _pageGames = null;
       _selectedGameIndex = 0;
       _selectedMoveIndex = -1;
@@ -280,7 +287,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       for (int page = 1; page <= totalPages; page++) {
         if (!mounted) break;
         if (mounted) {
-          setState(() => _analysingProgress = (current: page, total: totalPages));
+          setState(
+            () => _analysingProgress = (current: page, total: totalPages),
+          );
         }
         await _loadPageAnalysis(page);
         if (mounted) setState(() => _analysing = true);
@@ -309,9 +318,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         forcedNotADiagrams == null &&
         _cache.containsKey(pageNumber)) {
       setState(() {
-        _pageGames           = _cache[pageNumber];
-        _detectedWordBoxes   = _wordBoxesCache[pageNumber];
-        _detectedMoveBoxes   = _moveBoxesCache[pageNumber];
+        _pageGames = _cache[pageNumber];
+        _detectedWordBoxes = _wordBoxesCache[pageNumber];
+        _detectedMoveBoxes = _moveBoxesCache[pageNumber];
         _selectedGameIndex = 0;
         _selectedMoveIndex = -1;
       });
@@ -338,45 +347,77 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       final inheritedFen = _inheritedFenForPage(pageNumber, rawText.fullText);
 
+      // Diagnostic logs written straight to a file — terminal/logcat output
+      // gets truncated or drops lines under heavy volume, a file never does.
+      String? debugLogFile;
+      if (kDebugMode) {
+        final docsDir = await getApplicationDocumentsDirectory();
+        debugLogFile = '${docsDir.path}/figurine_debug.log';
+      }
+
       final boardResult = await BoardDetector.detectBoards(
         page,
         rawText.charRects,
+        debugLogFile: debugLogFile,
+      );
+
+      _log(
+        debugLogFile,
+        '[WordBoxes] page $pageNumber page size: '
+        '${page.width.toStringAsFixed(2)} × ${page.height.toStringAsFixed(2)} pt',
       );
 
       // Compute word-level bounding boxes from the PDF text layer.
       // Always needed (FAN mode uses them for per-block figurine detection).
-      if (kDebugMode) {
-        debugPrint('[WordBoxes] page $pageNumber page size: '
-            '${page.width.toStringAsFixed(2)} × ${page.height.toStringAsFixed(2)} pt');
-      }
-      final wb = _computeWordBoxes(rawText, pageNumber,
-          boardRects: boardResult.boardRects);
-      _wordBoxesCache[pageNumber] = wb;
-      if (mounted) setState(() => _detectedWordBoxes = wb);
+      final wb = _computeWordBoxes(
+        rawText,
+        pageNumber,
+        boardRects: boardResult.boardRects,
+        debugLogFile: debugLogFile,
+      );
+      _wordBoxesCache[pageNumber] = wb.words;
+      if (mounted) setState(() => _detectedWordBoxes = wb.words);
 
       // In FAN mode, run the CV pipeline: segment blobs per word block,
       // classify figurines, OCR non-figurines, test SAN.
       List<DetectedFigurine>? detectedFigurines;
       if (effectiveMode == NotationMode.figurineFan &&
           _figurineDetector != null) {
-        final rendered = await FigurineDetector.renderPage(page,
-            scale: _renderScale);
+        final rendered = await FigurineDetector.renderPage(
+          page,
+          scale: _renderScale,
+        );
         if (rendered != null) {
+          String? debugCropDir;
+          if (kDebugMode) {
+            final docsDir = await getApplicationDocumentsDirectory();
+            debugCropDir = '${docsDir.path}/figurine_crops/page$pageNumber';
+          }
           final result = await _computeMoveBoxesCv(
-            wb, rawText.charRects, rawText.fullText,
-            rendered, page.height, _renderScale, _figurineDetector!,
+            wb.words,
+            wb.chars,
+            rawText.charRects,
+            rawText.fullText,
+            rendered,
+            page.height,
+            _renderScale,
+            _figurineDetector!,
             _elementParser!,
+            debugCropDir: debugCropDir,
+            debugLogFile: debugLogFile,
           );
           detectedFigurines = result.figurines;
-          _moveBoxesCache[pageNumber]    = result.moveBoxes;
-          _blobResultsCache[pageNumber]  = result.blobs;
+          _moveBoxesCache[pageNumber] = result.moveBoxes;
+          _blobResultsCache[pageNumber] = result.blobs;
           _parsedElementsCache[pageNumber] = result.parsedElements;
           // Extract element bounding boxes from parsed elements
-          final elementBoxes = result.parsedElements.map((e) => e.bounds).toList();
+          final elementBoxes = result.parsedElements
+              .map((e) => e.bounds)
+              .toList();
           _elementBoxesCache[pageNumber] = elementBoxes;
           if (mounted) {
             setState(() {
-              _detectedMoveBoxes   = result.moveBoxes;
+              _detectedMoveBoxes = result.moveBoxes;
               _detectedElementBoxes = elementBoxes;
             });
           }
@@ -405,10 +446,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         fontMap: _fontMap,
         notationMode: effectiveMode,
         detectedFigurines: detectedFigurines,
+        debugLogFile: debugLogFile,
       );
 
       final totalMoves = games.fold(0, (s, g) => s + g.moves.length);
-      debugPrint(
+      _log(
+        debugLogFile,
         '[ChessPdf] page $pageNumber ($effectiveMode) → '
         '${games.length} game(s), $totalMoves move(s)'
         '${detectedFigurines != null && detectedFigurines.isNotEmpty ? ", ${detectedFigurines.length} figurine(s)" : ""}',
@@ -479,19 +522,29 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // gaps by at least this margin.  Using p25 (not median) keeps the baseline
   // anchored to the intra-char spacing even when many short words appear and
   // word-space gaps start to outnumber intra-char gaps in the window.
-  static const double _kWordSpaceMargin  = 0.5;
-  static const int    _kWindowSize       = 6;
+  static const double _kWordSpaceMargin = 0.5;
+  static const int _kWindowSize = 6;
 
-  static List<MoveBounds> _computeWordBoxes(
+  static ({List<MoveBounds> words, List<List<MoveBounds>> chars})
+  _computeWordBoxes(
     PdfPageRawText rawText,
     int pageNumber, {
     List<PdfRect> boardRects = const [],
     double minWidthPt = 8.0,
     double minHeightPt = 7.0,
     double boardMarginFactor = 0.15,
+    String? debugLogFile,
   }) {
     final rects = rawText.charRects;
     final raw = <MoveBounds>[];
+    // Per-word list of the individual PDF character rects (converted 1:1 to
+    // MoveBounds) that compose it — kept so the figurine pipeline can crop
+    // exactly what the PDF says each character's cell is, instead of trying
+    // to re-derive character boundaries from rendered pixels (which fails
+    // whenever two glyphs visually touch, e.g. a figurine glued to the next
+    // letter with zero background between them).
+    final rawChars = <List<MoveBounds>>[];
+    var curChars = <MoveBounds>[];
 
     // Rolling window of ALL recent gaps (positive AND negative), so that
     // even fonts whose intra-char gaps are slightly negative establish the
@@ -510,26 +563,43 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     double? prevRight;
 
     void flushGroup() {
-      if (gLeft == null || gRight == null || gTop == null || gBottom == null) return;
+      if (gLeft == null || gRight == null || gTop == null || gBottom == null) {
+        curChars = [];
+        return;
+      }
       final lineH = gTop! - gBottom!;
-      final extHor = lineH * 0.75; // Increased right margin to capture final letters
-      raw.add(MoveBounds(
-        left:   gLeft!   - lineH * 0.05,
-        top:    gTop!    + lineH * 0.10,
-        right:  gRight!  + extHor,
-        bottom: gBottom! - lineH * 0.30,
-      ));
+      final extHor =
+          lineH * 0.75; // Increased right margin to capture final letters
+      raw.add(
+        MoveBounds(
+          left: gLeft! - lineH * 0.05,
+          top: gTop! + lineH * 0.10,
+          right: gRight! + extHor,
+          bottom: gBottom! - lineH * 0.30,
+        ),
+      );
+      rawChars.add(curChars);
+      curChars = [];
       gTop = gBottom = gLeft = gRight = prevRight = null;
     }
 
-    final fullText = rawText.fullText;
+    // charRects has exactly one entry per Unicode codepoint (pdfium's own
+    // "char" unit); fullText is a UTF-16 Dart string where a codepoint
+    // outside the BMP (plausible for figurine glyphs mapped into a
+    // supplementary Private Use Area) takes two code units. Indexing
+    // fullText by raw position would silently desync from charRects past
+    // the first such character — `runes` decodes back to one entry per
+    // codepoint, matching charRects 1:1 regardless of plane.
+    final runes = rawText.fullText.runes.toList();
 
     for (int i = 0; i < rects.length; i++) {
       final r = rects[i];
       if (r.isEmpty) continue;
       // Skip whitespace characters — in some PDFs they carry non-empty rects
       // that split the inter-word gap into two small sub-gaps, defeating detection.
-      if (i < fullText.length && fullText[i].trim().isEmpty) continue;
+      if (i < runes.length && String.fromCharCode(runes[i]).trim().isEmpty) {
+        continue;
+      }
 
       if (prevRight != null) {
         final gap = r.left - prevRight!;
@@ -548,38 +618,62 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         }
       }
 
-      gLeft   ??= r.left;
-      gRight  = r.right;
-      gBottom = gBottom == null ? r.bottom : (r.bottom < gBottom! ? r.bottom : gBottom);
-      gTop    = gTop    == null ? r.top    : (r.top    > gTop!    ? r.top    : gTop);
+      gLeft ??= r.left;
+      gRight = r.right;
+      gBottom = gBottom == null
+          ? r.bottom
+          : (r.bottom < gBottom! ? r.bottom : gBottom);
+      gTop = gTop == null ? r.top : (r.top > gTop! ? r.top : gTop);
       prevRight = r.right;
+      curChars.add(
+        MoveBounds(left: r.left, top: r.top, right: r.right, bottom: r.bottom),
+      );
     }
     flushGroup();
 
     // Filter: drop noise boxes and boxes inside (or near) board diagrams.
-    final words = raw.where((b) {
-      if (b.right - b.left < minWidthPt) return false;
-      if (b.top - b.bottom < minHeightPt) return false;
+    // Kept in lockstep with rawChars via index rather than a predicate
+    // closure, since we need to filter both lists identically.
+    final words = <MoveBounds>[];
+    final wordsChars = <List<MoveBounds>>[];
+    for (int i = 0; i < raw.length; i++) {
+      final b = raw[i];
+      if (b.right - b.left < minWidthPt) continue;
+      if (b.top - b.bottom < minHeightPt) continue;
       final cx = (b.left + b.right) / 2;
-      final cy = (b.top  + b.bottom) / 2;
+      final cy = (b.top + b.bottom) / 2;
+      var insideBoard = false;
       for (final br in boardRects) {
         final mw = (br.right - br.left) * boardMarginFactor;
         final mh = (br.top - br.bottom) * boardMarginFactor;
-        if (cx >= br.left - mw && cx <= br.right + mw &&
-            cy >= br.bottom - mh && cy <= br.top + mh) { return false; }
+        if (cx >= br.left - mw &&
+            cx <= br.right + mw &&
+            cy >= br.bottom - mh &&
+            cy <= br.top + mh) {
+          insideBoard = true;
+          break;
+        }
       }
-      return true;
-    }).toList();
+      if (insideBoard) continue;
+      words.add(b);
+      wordsChars.add(rawChars[i]);
+    }
 
-    debugPrint('[WordBoxes] page $pageNumber → ${words.length} chunk(s)'
-        ' (${raw.length - words.length} filtered)');
+    _log(
+      debugLogFile,
+      '[WordBoxes] page $pageNumber → ${words.length} chunk(s)'
+      ' (${raw.length - words.length} filtered)',
+    );
     for (int wi = 0; wi < words.length && wi < 6; wi++) {
       final b = words[wi];
-      debugPrint('[WordBoxes]   [$wi] '
-          'left=${b.left.toStringAsFixed(1)} right=${b.right.toStringAsFixed(1)} '
-          'width=${(b.right - b.left).toStringAsFixed(1)}pt');
+      _log(
+        debugLogFile,
+        '[WordBoxes]   [$wi] '
+        'left=${b.left.toStringAsFixed(1)} right=${b.right.toStringAsFixed(1)} '
+        'width=${(b.right - b.left).toStringAsFixed(1)}pt',
+      );
     }
-    return words;
+    return (words: words, chars: wordsChars);
   }
 
   // SAN move pattern (English piece letters only).
@@ -587,62 +681,104 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     r'^(O-O-O|O-O|[KQRBN]([a-h]|[1-8]|[a-h][1-8])?x?[a-h][1-8]|[a-h](x[a-h])?[1-8])(=[QRBN])?[+#]?$',
   );
 
-
   /// Per-block CV pipeline:
   ///   • No figurine in block → OCR the whole block text.
   ///   • Figurine(s) found    → OCR left part + piece letter + OCR right part.
   ///   Then strip move number / annotations and test against the SAN regex.
-  static Future<({
-    List<MoveBounds> moveBoxes,
-    List<DetectedFigurine> figurines,
-    List<BlobResult> blobs,
-    List<ParsedElement> parsedElements,
-  })>
-      _computeMoveBoxesCv(
+  static Future<
+    ({
+      List<MoveBounds> moveBoxes,
+      List<DetectedFigurine> figurines,
+      List<BlobResult> blobs,
+      List<ParsedElement> parsedElements,
+    })
+  >
+  _computeMoveBoxesCv(
     List<MoveBounds> wordBlocks,
+    List<List<MoveBounds>> wordCharBounds,
     List<PdfRect> charRects,
     String fullText,
     RenderedPage rendered,
     double pageHeight,
     double renderScale,
     FigurineDetector detector,
-    ElementParser elementParser,
-  ) async {
-    final moveBoxes      = <MoveBounds>[];
-    final allFigurines   = <DetectedFigurine>[];
-    final allBlobs       = <BlobResult>[];
+    ElementParser elementParser, {
+    String? debugCropDir,
+    String? debugLogFile,
+  }) async {
+    final moveBoxes = <MoveBounds>[];
+    final allFigurines = <DetectedFigurine>[];
+    final allBlobs = <BlobResult>[];
     final allParsedElements = <ParsedElement>[];
 
     for (int i = 0; i < wordBlocks.length; i++) {
       final blockBounds = wordBlocks[i];
 
-      debugPrint('[ComputeMoveBoxesCv] Processing word block[$i] at left=${blockBounds.left.toStringAsFixed(1)}');
+      _log(
+        debugLogFile,
+        '[ComputeMoveBoxesCv] Processing word block[$i] at left=${blockBounds.left.toStringAsFixed(1)}',
+      );
 
       // Detect figurines (if any) inside this block.
       final blobs = detector.analyseWordBlock(
-          rendered, blockBounds, pageHeight, renderScale);
+        rendered,
+        blockBounds,
+        pageHeight,
+        renderScale,
+        minConfidence: 0.95,
+        debugCropDir: debugCropDir == null ? null : '$debugCropDir/block$i',
+        debugLogFile: debugLogFile,
+      );
       allBlobs.addAll(blobs);
       final figurines = blobs.where((b) => b.piece != null).toList();
 
-      debugPrint('[ComputeMoveBoxesCv]   → ${blobs.length} blob(s), ${figurines.length} figurine(s)');
+      _log(
+        debugLogFile,
+        '[ComputeMoveBoxesCv]   → ${blobs.length} blob(s), ${figurines.length} figurine(s)',
+      );
 
       // Parse elements only for blocks with figurines (needed for correct move assembly).
-      // Pass CCL blob bounds so segmentation uses robust connected-components
-      // instead of column-projection (which fails on complex/inverted glyphs).
+      // Pass the PDF's own per-character rects rather than CCL blob bounds:
+      // the PDF text layer already knows exactly where each character's
+      // cell is, so this sidesteps the whole "glyphs touch with zero pixel
+      // gap" problem (e.g. a figurine glued to the next letter) that no
+      // amount of pixel-based segmentation can solve when there truly is no
+      // background between two glyphs.
       List<ParsedElement> parsedElements = [];
       if (figurines.isNotEmpty) {
+        final charBounds = wordCharBounds[i];
         parsedElements = await elementParser.parseWordBlock(
-            rendered, blockBounds, pageHeight, renderScale,
-            blobBounds: blobs.map((b) => b.bounds).toList());
+          rendered,
+          blockBounds,
+          pageHeight,
+          renderScale,
+          blobBounds: charBounds.isNotEmpty
+              ? charBounds
+              : blobs.map((b) => b.bounds).toList(),
+          debugCropDir: debugCropDir == null
+              ? null
+              : '$debugCropDir/block${i}_elements',
+          debugLogFile: debugLogFile,
+        );
         allParsedElements.addAll(parsedElements);
 
-        final figElemCount = parsedElements.where((e) => e.type == 'figurine').length;
-        final textElemCount = parsedElements.where((e) => e.type == 'text').length;
-        debugPrint('[ComputeMoveBoxesCv]   → ${parsedElements.length} element(s): '
-            '$figElemCount figurine(s) [green], $textElemCount notAFigurine(s) [purple]');
+        final figElemCount = parsedElements
+            .where((e) => e.type == 'figurine')
+            .length;
+        final textElemCount = parsedElements
+            .where((e) => e.type == 'text')
+            .length;
+        _log(
+          debugLogFile,
+          '[ComputeMoveBoxesCv]   → ${parsedElements.length} element(s): '
+          '$figElemCount figurine(s) [green], $textElemCount notAFigurine(s) [purple]',
+        );
       }
 
-      debugPrint('[ComputeMoveBoxesCv]   → ${parsedElements.length} element(s) used for move assembly');
+      _log(
+        debugLogFile,
+        '[ComputeMoveBoxesCv]   → ${parsedElements.length} element(s) used for move assembly',
+      );
 
       String assembled;
 
@@ -651,60 +787,80 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         final buf = StringBuffer();
         for (final elem in parsedElements) {
           buf.write(elem.text);
-          if (kDebugMode) {
-            debugPrint('[BlockAnalysis] block[$i] '
-                'elem@${elem.bounds.left.toStringAsFixed(1)} '
-                '${elem.type}="${elem.text}"');
-          }
+          _log(
+            debugLogFile,
+            '[BlockAnalysis] block[$i] '
+            'elem@${elem.bounds.left.toStringAsFixed(1)} '
+            '${elem.type}="${elem.text}"',
+          );
         }
         assembled = buf.toString();
-        if (kDebugMode) {
-          debugPrint('[BlockAnalysis] block[$i] assembled (from elements) → "$assembled"');
-        }
+        _log(
+          debugLogFile,
+          '[BlockAnalysis] block[$i] assembled (from elements) → "$assembled"',
+        );
 
         // Also collect figurines for overlay
         for (final elem in parsedElements.where((e) => e.type == 'figurine')) {
-          allFigurines.add(DetectedFigurine(
-              bounds: elem.bounds, piece: elem.text, confidence: elem.confidence));
+          allFigurines.add(
+            DetectedFigurine(
+              bounds: elem.bounds,
+              piece: elem.text,
+              confidence: elem.confidence,
+            ),
+          );
         }
       } else {
         // Fallback: if no elements found, try old blob-based assembly
         if (figurines.isNotEmpty) {
           for (final f in figurines) {
-            allFigurines.add(DetectedFigurine(
-                bounds: f.bounds, piece: f.piece!, confidence: f.confidence));
+            allFigurines.add(
+              DetectedFigurine(
+                bounds: f.bounds,
+                piece: f.piece!,
+                confidence: f.confidence,
+              ),
+            );
           }
           figurines.sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
           final buf = StringBuffer();
           double segLeft = blockBounds.left;
           for (final f in figurines) {
             final leftRegion = MoveBounds(
-              left: segLeft, right: f.bounds.left,
-              top: blockBounds.top, bottom: blockBounds.bottom,
+              left: segLeft,
+              right: f.bounds.left,
+              top: blockBounds.top,
+              bottom: blockBounds.bottom,
             );
             buf.write(_ocrRegion(leftRegion, charRects, fullText));
             buf.write(f.piece);
             segLeft = f.bounds.right;
           }
           final rightRegion = MoveBounds(
-            left: segLeft, right: blockBounds.right,
-            top: blockBounds.top, bottom: blockBounds.bottom,
+            left: segLeft,
+            right: blockBounds.right,
+            top: blockBounds.top,
+            bottom: blockBounds.bottom,
           );
           buf.write(_ocrRegion(rightRegion, charRects, fullText));
           assembled = buf.toString();
-          if (kDebugMode) {
-            debugPrint('[BlockAnalysis] block[$i] assembled (fallback) → "$assembled"');
-          }
+          _log(
+            debugLogFile,
+            '[BlockAnalysis] block[$i] assembled (fallback) → "$assembled"',
+          );
         } else {
           // No elements or figurines: OCR whole block
           assembled = _ocrRegion(blockBounds, charRects, fullText);
-          if (kDebugMode && assembled.isNotEmpty) {
-            debugPrint('[BlockAnalysis] block[$i] no figurine → ocr "$assembled"');
+          if (assembled.isNotEmpty) {
+            _log(
+              debugLogFile,
+              '[BlockAnalysis] block[$i] no figurine → ocr "$assembled"',
+            );
           }
         }
       }
 
-      if (kDebugMode) debugPrint('[BlockString] block[$i] → "$assembled"');
+      _log(debugLogFile, '[BlockString] block[$i] → "$assembled"');
       if (assembled.isEmpty) continue;
 
       // Strip move-number prefix and trailing annotations, then test SAN.
@@ -713,23 +869,41 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       text = text.replaceFirst(RegExp(r'[!?]+$'), '');
 
       if (text.isNotEmpty && _sanMoveRegex.hasMatch(text)) {
-        if (kDebugMode) debugPrint('[MoveCheck] block[$i] "$text" → MATCH');
+        _log(debugLogFile, '[MoveCheck] block[$i] "$text" → MATCH');
         moveBoxes.add(blockBounds);
       } else {
-        if (kDebugMode && text.isNotEmpty) {
-          debugPrint('[MoveCheck] block[$i] "$text" → no match');
+        if (text.isNotEmpty) {
+          _log(debugLogFile, '[MoveCheck] block[$i] "$text" → no match');
         }
       }
     }
 
-    debugPrint('[MoveBoxesCv] → ${moveBoxes.length} move(s)'
-        ', ${allFigurines.length} figurine(s), ${allBlobs.length} blob(s) tested');
+    _log(
+      debugLogFile,
+      '[MoveBoxesCv] → ${moveBoxes.length} move(s)'
+      ', ${allFigurines.length} figurine(s), ${allBlobs.length} blob(s) tested',
+    );
     return (
       moveBoxes: moveBoxes,
       figurines: allFigurines,
       blobs: allBlobs,
       parsedElements: allParsedElements,
     );
+  }
+
+  /// Appends [message] to [logFile] if set, otherwise falls back to
+  /// [debugPrint]. Terminal/logcat output gets truncated or drops lines
+  /// under heavy volume — writing straight to a file never does.
+  static void _log(String? logFile, String message) {
+    if (logFile == null) {
+      debugPrint(message);
+      return;
+    }
+    try {
+      File(logFile).writeAsStringSync('$message\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('[PdfReaderScreen] failed to write log: $e');
+    }
   }
 
   /// Returns the concatenation of all PDF text chars whose rect centre falls
@@ -739,16 +913,26 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     List<PdfRect> charRects,
     String fullText,
   ) {
+    // charRects has exactly one entry per Unicode codepoint (pdfium's own
+    // "char" unit), but fullText is a UTF-16 Dart string where any codepoint
+    // outside the BMP (e.g. a figurine glyph mapped into a supplementary
+    // Private Use Area) takes two code units. Indexing fullText by raw
+    // position would silently desync from charRects after the first such
+    // character. `runes` decodes surrogate pairs back into one entry per
+    // codepoint, matching charRects 1:1 regardless of plane.
+    final runes = fullText.runes.toList();
     final chars = <(double x, String ch)>[];
     for (int i = 0; i < charRects.length; i++) {
       final r = charRects[i];
       if (r.isEmpty) continue;
       final cx = (r.left + r.right) / 2;
-      final cy = (r.top  + r.bottom) / 2;
-      if (cx >= region.left  && cx <= region.right &&
-          cy >= region.bottom && cy <= region.top) {
-        if (i < fullText.length) {
-          final ch = fullText[i];
+      final cy = (r.top + r.bottom) / 2;
+      if (cx >= region.left &&
+          cx <= region.right &&
+          cy >= region.bottom &&
+          cy <= region.top) {
+        if (i < runes.length) {
+          final ch = String.fromCharCode(runes[i]);
           if (ch.trim().isNotEmpty) chars.add((cx, ch));
         }
       }
@@ -790,7 +974,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
     return fenToInherit;
   }
-
 
   /// Collects user overrides already persisted in the page cache so they
   /// survive a re-parse triggered by a new user action.
@@ -906,7 +1089,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         title: Text(_fileName, overflow: TextOverflow.ellipsis),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          if (kDebugMode && !_analysing && _elementBoxesCache.containsKey(_currentPage))
+          if (kDebugMode &&
+              !_analysing &&
+              _elementBoxesCache.containsKey(_currentPage))
             IconButton(
               icon: Text(
                 'E',
@@ -914,12 +1099,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                   color: _showElementOverlay ? Colors.purple : null,
                   fontWeight: FontWeight.bold,
                   fontSize: 18,
-                  decoration: _showElementOverlay ? TextDecoration.lineThrough : null,
+                  decoration: _showElementOverlay
+                      ? TextDecoration.lineThrough
+                      : null,
                   decorationColor: Colors.purple,
                   decorationThickness: 2.5,
                 ),
               ),
-              tooltip: 'Toggle element overlay (individual chars/glyphs within word blocks)',
+              tooltip:
+                  'Toggle element overlay (individual chars/glyphs within word blocks)',
               onPressed: () {
                 setState(() {
                   _detectedElementBoxes = _elementBoxesCache[_currentPage];
@@ -927,14 +1115,18 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                 });
               },
             ),
-          if (kDebugMode && !_analysing && _moveBoxesCache.containsKey(_currentPage))
+          if (kDebugMode &&
+              !_analysing &&
+              _moveBoxesCache.containsKey(_currentPage))
             IconButton(
               icon: Text(
                 '♛',
                 style: TextStyle(
                   color: _showMoveBoxOverlay ? Colors.blue : null,
                   fontSize: 20,
-                  decoration: _showMoveBoxOverlay ? TextDecoration.lineThrough : null,
+                  decoration: _showMoveBoxOverlay
+                      ? TextDecoration.lineThrough
+                      : null,
                   decorationColor: Colors.blue,
                   decorationThickness: 2.5,
                 ),
@@ -947,7 +1139,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                 });
               },
             ),
-          if (kDebugMode && !_analysing && _wordBoxesCache.containsKey(_currentPage))
+          if (kDebugMode &&
+              !_analysing &&
+              _wordBoxesCache.containsKey(_currentPage))
             IconButton(
               icon: Text(
                 'W',
@@ -955,7 +1149,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                   color: _showWordBoxOverlay ? Colors.red : null,
                   fontWeight: FontWeight.bold,
                   fontSize: 18,
-                  decoration: _showWordBoxOverlay ? TextDecoration.lineThrough : null,
+                  decoration: _showWordBoxOverlay
+                      ? TextDecoration.lineThrough
+                      : null,
                   decorationColor: Colors.red,
                   decorationThickness: 2.5,
                 ),
@@ -1323,30 +1519,34 @@ class _WordBoxOverlay extends StatelessWidget {
     final H = widgetSize.height;
     if (W == 0 || H == 0) return const SizedBox.shrink();
 
-    final scale   = min(W / pageWidth, H / pageHeight);
-    final xOffset = (W - pageWidth  * scale) / 2;
+    final scale = min(W / pageWidth, H / pageHeight);
+    final xOffset = (W - pageWidth * scale) / 2;
     final yOffset = (H - pageHeight * scale) / 2;
 
     // One-shot diagnostic on first build.
-    debugPrint('[WordBoxOverlay] widgetSize=${W.toStringAsFixed(1)}×${H.toStringAsFixed(1)} '
-        'page=${pageWidth.toStringAsFixed(1)}×${pageHeight.toStringAsFixed(1)} '
-        'scale=${scale.toStringAsFixed(4)} xOff=${xOffset.toStringAsFixed(1)} yOff=${yOffset.toStringAsFixed(1)}');
+    debugPrint(
+      '[WordBoxOverlay] widgetSize=${W.toStringAsFixed(1)}×${H.toStringAsFixed(1)} '
+      'page=${pageWidth.toStringAsFixed(1)}×${pageHeight.toStringAsFixed(1)} '
+      'scale=${scale.toStringAsFixed(4)} xOff=${xOffset.toStringAsFixed(1)} yOff=${yOffset.toStringAsFixed(1)}',
+    );
     if (wordBoxes.isNotEmpty) {
       final b = wordBoxes.first;
       final px = xOffset + b.left * scale;
       final pw = (b.right - b.left) * scale;
-      debugPrint('[WordBoxOverlay]   first box px: left=${px.toStringAsFixed(1)} '
-          'width=${pw.toStringAsFixed(1)} '
-          '(pdf left=${b.left.toStringAsFixed(2)} right=${b.right.toStringAsFixed(2)})');
+      debugPrint(
+        '[WordBoxOverlay]   first box px: left=${px.toStringAsFixed(1)} '
+        'width=${pw.toStringAsFixed(1)} '
+        '(pdf left=${b.left.toStringAsFixed(2)} right=${b.right.toStringAsFixed(2)})',
+      );
     }
 
     return Stack(
       children: [
         for (final b in wordBoxes)
           Positioned(
-            left:   xOffset + b.left * scale,
-            top:    yOffset + (pageHeight - b.top) * scale,
-            width:  ((b.right - b.left) * scale).clamp(1.0, double.infinity),
+            left: xOffset + b.left * scale,
+            top: yOffset + (pageHeight - b.top) * scale,
+            width: ((b.right - b.left) * scale).clamp(1.0, double.infinity),
             height: ((b.top - b.bottom) * scale).clamp(1.0, double.infinity),
             child: DecoratedBox(
               decoration: BoxDecoration(
@@ -1465,11 +1665,12 @@ class _ElementOverlay extends StatelessWidget {
       left: xOffset + bounds.left * scale,
       top: yOffset + (pageHeight - bounds.top) * scale,
       width: ((bounds.right - bounds.left) * scale).clamp(2.0, double.infinity),
-      height: ((bounds.top - bounds.bottom) * scale).clamp(2.0, double.infinity),
+      height: ((bounds.top - bounds.bottom) * scale).clamp(
+        2.0,
+        double.infinity,
+      ),
       child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border.all(color: color, width: 1),
-        ),
+        decoration: BoxDecoration(border: Border.all(color: color, width: 1)),
         child: Align(
           alignment: Alignment.topLeft,
           child: Text(

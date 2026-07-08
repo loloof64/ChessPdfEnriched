@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 
@@ -40,12 +42,12 @@ class ChessPieceClassifier {
 
   /// Load the TFLite model from assets.
   /// Throws a [ChessPieceClassifierException] if the model cannot be loaded.
-  static Future<ChessPieceClassifier> load() async {
+  static Future<ChessPieceClassifier> load({String? debugLogFile}) async {
     final classifier = ChessPieceClassifier._();
     try {
       classifier._interpreter = await Interpreter.fromAsset(_modelAsset);
       classifier._isLoaded = true;
-      debugPrint('[ChessPieceClassifier] model loaded successfully');
+      _log(debugLogFile, '[ChessPieceClassifier] model loaded successfully');
       return classifier;
     } catch (e) {
       throw ChessPieceClassifierException(
@@ -58,6 +60,21 @@ class ChessPieceClassifier {
   }
 
   ChessPieceClassifier._();
+
+  /// Appends [message] to [logFile] if set, otherwise falls back to
+  /// [debugPrint]. Terminal/logcat output gets truncated or drops lines
+  /// under heavy volume — writing straight to a file never does.
+  static void _log(String? logFile, String message) {
+    if (logFile == null) {
+      debugPrint(message);
+      return;
+    }
+    try {
+      File(logFile).writeAsStringSync('$message\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('[ChessPieceClassifier] failed to write log: $e');
+    }
+  }
 
   /// Classify 64 square images and return full score vectors (64 × 13).
   ///

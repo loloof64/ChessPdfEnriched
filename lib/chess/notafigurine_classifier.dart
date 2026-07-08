@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
 
@@ -18,7 +20,13 @@ class NotAFigurineClassifier {
   ///
   /// Returns null if classification fails; otherwise returns a confidence
   /// score (0.0–1.0) for the "NotAFigurine" (text) class.
-  double? classifyAsNotFigurine(List<double> features) {
+  double? classifyAsNotFigurine(
+    List<double> features, {
+    /// When set, diagnostic lines are appended straight to this file instead
+    /// of going through debugPrint — terminal/logcat output gets truncated
+    /// or drops lines under heavy volume, a file never does.
+    String? debugLogFile,
+  }) {
     if (features.length != 1767) return null;
 
     try {
@@ -44,14 +52,33 @@ class NotAFigurineClassifier {
           ? _expFast(-mseError)
           : 0.0;
 
-      debugPrint(
+      _log(
+        debugLogFile,
         '[NotAFigurineClassifier] MSE=$mseError confidence=$confidence',
       );
 
       return confidence.clamp(0.0, 1.0);
     } catch (e) {
-      debugPrint('[NotAFigurineClassifier] Error during classification: $e');
+      _log(
+        debugLogFile,
+        '[NotAFigurineClassifier] Error during classification: $e',
+      );
       return null;
+    }
+  }
+
+  /// Appends [message] to [logFile] if set, otherwise falls back to
+  /// [debugPrint]. Terminal/logcat output gets truncated or drops lines
+  /// under heavy volume — writing straight to a file never does.
+  static void _log(String? logFile, String message) {
+    if (logFile == null) {
+      debugPrint(message);
+      return;
+    }
+    try {
+      File(logFile).writeAsStringSync('$message\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('[NotAFigurineClassifier] failed to write log: $e');
     }
   }
 

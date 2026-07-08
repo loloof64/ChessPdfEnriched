@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 
 import 'figurine_classifier.dart';
@@ -65,12 +67,22 @@ class ElementParser {
     /// When provided these are used directly, skipping column-projection
     /// segmentation (which fails for complex/inverted glyphs).
     List<MoveBounds>? blobBounds,
+    /// When set, every 32×32 crop actually classified here is dumped as a
+    /// .pgm file — lets us visually verify whether the elements this
+    /// function receives (e.g. PDF-char-rect-derived bounds) are cleanly
+    /// separated, independently from FigurineDetector's own debug crops.
+    String? debugCropDir,
+    /// When set, diagnostic lines are appended straight to this file instead
+    /// of going through debugPrint — terminal/logcat output gets truncated
+    /// or drops lines under heavy volume, a file never does.
+    String? debugLogFile,
   }) async {
     // Step 1: Prefer CCL blob bounds; fall back to column-projection.
     List<MoveBounds> elementBounds;
     if (blobBounds != null && blobBounds.isNotEmpty) {
       elementBounds = blobBounds;
-      debugPrint(
+      _log(
+        debugLogFile,
         '[ElementParser] block at left=${blockBounds.left.toStringAsFixed(1)} '
         '→ ${elementBounds.length} element(s) from blob bounds',
       );
@@ -83,7 +95,8 @@ class ElementParser {
         pageHeight,
         renderScale,
       );
-      debugPrint(
+      _log(
+        debugLogFile,
         '[ElementParser] block at left=${blockBounds.left.toStringAsFixed(1)} '
         '→ ${elementBounds.length} element(s) from gap projection',
       );
@@ -95,10 +108,6 @@ class ElementParser {
     final parsed = <ParsedElement>[];
     for (int i = 0; i < elementBounds.length; i++) {
       final elemBounds = elementBounds[i];
-
-      debugPrint(
-        '[ElementParser]   elem[$i] @ ${elemBounds.left.toStringAsFixed(1)}: ',
-      );
 
       // Extract HOG features from element bounds
       final pixels = _cropAndResizeBlob(
@@ -114,9 +123,21 @@ class ElementParser {
       // Run both classifiers and log scores for debugging.
       final figResult = figurineClassifier.classifyWithConfidence(features);
       final textConf =
-          notAFigurineClassifier.classifyAsNotFigurine(features) ?? 0.0;
+          notAFigurineClassifier.classifyAsNotFigurine(
+            features,
+            debugLogFile: debugLogFile,
+          ) ??
+          0.0;
 
-      debugPrint(
+      if (debugCropDir != null) {
+        final label = figResult != null
+            ? '${figResult.$1}_${(figResult.$2 * 100).round()}pct'
+            : 'notafig_${(textConf * 100).round()}pct';
+        _dumpCropPgm(debugCropDir, pixels, 'elem${i}_$label.pgm');
+      }
+
+      _log(
+        debugLogFile,
         '[ElementParser]   elem[$i] @ ${elemBounds.left.toStringAsFixed(1)}: '
         'fig=${figResult != null ? "${figResult.$2.toStringAsFixed(2)} (${figResult.$1})" : "null"}, '
         'notAFig=${textConf.toStringAsFixed(2)}',
@@ -134,7 +155,8 @@ class ElementParser {
             confidence: conf,
           ),
         );
-        debugPrint(
+        _log(
+          debugLogFile,
           '[ElementParser]     → FIGURINE: $piece (fig=${conf.toStringAsFixed(2)}, notAFig=${textConf.toStringAsFixed(2)})',
         );
       } else if (textConf >= minTextConfidence) {
@@ -149,17 +171,58 @@ class ElementParser {
             confidence: textConf,
           ),
         );
-        debugPrint('[ElementParser]     → TEXT (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})');
+        _log(
+          debugLogFile,
+          '[ElementParser]     → TEXT (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})',
+        );
       } else {
-        debugPrint('[ElementParser]     → SKIPPED (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})');
+        _log(
+          debugLogFile,
+          '[ElementParser]     → SKIPPED (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})',
+        );
       }
     }
 
-    debugPrint(
+    _log(
+      debugLogFile,
       '[ElementParser] block → ${parsed.length}/${elementBounds.length} element(s) classified',
     );
 
     return parsed;
+  }
+
+  /// Appends [message] to [logFile] if set, otherwise falls back to
+  /// [debugPrint]. Terminal/logcat output gets truncated or drops lines
+  /// under heavy volume — writing straight to a file never does.
+  static void _log(String? logFile, String message) {
+    if (logFile == null) {
+      debugPrint(message);
+      return;
+    }
+    try {
+      File(logFile).writeAsStringSync('$message\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('[ElementParser] failed to write log: $e');
+    }
+  }
+
+  /// Writes a 32×32 grayscale [pixels] buffer (values 0.0–1.0) as a binary
+  /// PGM (P5) file — viewable with most image tools (e.g. GIMP, `convert
+  /// crop.pgm crop.png`) without extra dependencies.
+  static void _dumpCropPgm(String dir, Float32List pixels, String filename) {
+    const size = HogExtractor.imageSize; // 32
+    try {
+      Directory(dir).createSync(recursive: true);
+      final bytes = Uint8List(size * size);
+      for (int i = 0; i < pixels.length; i++) {
+        bytes[i] = (pixels[i].clamp(0.0, 1.0) * 255).round();
+      }
+      final header = 'P5\n$size $size\n255\n';
+      final file = File('$dir/$filename');
+      file.writeAsBytesSync([...header.codeUnits, ...bytes]);
+    } catch (e) {
+      debugPrint('[ElementParser] failed to dump crop $filename: $e');
+    }
   }
 
   /// Segment a word block into individual elements by detecting gaps in the rendered pixels.
