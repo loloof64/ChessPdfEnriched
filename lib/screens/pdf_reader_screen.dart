@@ -1,5 +1,5 @@
 import 'dart:io' show File, FileMode;
-import 'dart:math' show min;
+import 'dart:math' show max, min;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
@@ -680,6 +680,67 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     r'^(O-O-O|O-O|[KQRBN]([a-h]|[1-8]|[a-h][1-8])?x?[a-h][1-8]|[a-h](x[a-h])?[1-8])(=[QRBN])?[+#]?$',
   );
 
+  /// Merges detector-confirmed figurines into the parsed-element list used
+  /// for move assembly.
+  ///
+  /// The detector classifies clean CCL blob crops, while the elements come
+  /// from OCR char rects — on scanned books those rects routinely cut a piece
+  /// glyph in half or bleed into neighbours, so the element classifier
+  /// (rightly) rejects the garbage crops and the piece identity found by the
+  /// detector was thrown away (e.g. "♗e3+" assembling to "&e3+" because the
+  /// OCR text layer maps the bishop to "&"). Here every element whose x-span
+  /// lies mostly inside a confirmed figurine's bounds is replaced by a single
+  /// figurine element carrying the detector's piece letter.
+  static List<ParsedElement> _mergeFigurinesIntoElements(
+    List<ParsedElement> elements,
+    List<BlobResult> figurines,
+  ) {
+    if (figurines.isEmpty) return elements;
+
+    double xOverlapFraction(MoveBounds elem, MoveBounds fig) {
+      final overlap = min(elem.right, fig.right) - max(elem.left, fig.left);
+      final width = elem.right - elem.left;
+      return width <= 0 ? 0 : (overlap / width).clamp(0.0, 1.0);
+    }
+
+    final merged = <ParsedElement>[];
+    final consumed = <BlobResult>{};
+    for (final elem in elements) {
+      BlobResult? hit;
+      for (final f in figurines) {
+        if (xOverlapFraction(elem.bounds, f.bounds) > 0.5) {
+          hit = f;
+          break;
+        }
+      }
+      if (hit == null) {
+        merged.add(elem);
+      } else if (consumed.add(hit)) {
+        merged.add(ParsedElement(
+          text: hit.piece!,
+          bounds: hit.bounds,
+          type: 'figurine',
+          confidence: hit.confidence,
+        ));
+      }
+      // Further fragments of an already-consumed figurine are dropped.
+    }
+    // Figurines that overlapped no element at all still carry a piece letter
+    // the assembly would otherwise miss — insert them at their x-position.
+    for (final f in figurines) {
+      if (!consumed.contains(f)) {
+        merged.add(ParsedElement(
+          text: f.piece!,
+          bounds: f.bounds,
+          type: 'figurine',
+          confidence: f.confidence,
+        ));
+      }
+    }
+    merged.sort((a, b) => a.bounds.left.compareTo(b.bounds.left));
+    return merged;
+  }
+
   /// Per-block CV pipeline:
   ///   • No figurine in block → OCR the whole block text.
   ///   • Figurine(s) found    → OCR left part + piece letter + OCR right part.
@@ -737,7 +798,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         blockBounds,
         pageHeight,
         renderScale,
-        minConfidence: 0.95,
+        minConfidence: 0.60,
         debugCropDir: debugCropDir == null ? null : '$debugCropDir/block$i',
         debugLogFile: debugLogFile,
       );
@@ -749,31 +810,42 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         '[ComputeMoveBoxesCv]   → ${blobs.length} blob(s), ${figurines.length} figurine(s)',
       );
 
-      // Parse elements only for blocks with figurines (needed for correct move assembly).
-      // Pass the PDF's own per-character rects rather than CCL blob bounds:
-      // the PDF text layer already knows exactly where each character's
-      // cell is, so this sidesteps the whole "glyphs touch with zero pixel
-      // gap" problem (e.g. a figurine glued to the next letter) that no
-      // amount of pixel-based segmentation can solve when there truly is no
-      // background between two glyphs.
-      List<ParsedElement> parsedElements = [];
+      // Parse elements for all blocks to catch moves with figurines that may have
+      // been missed by the figurine detector (low confidence, segmentation issues, etc).
+      // Using the PDF's own per-character rects (when available) rather than CCL blob
+      // bounds sidesteps the "glyphs touch with zero pixel gap" problem that pixel-based
+      // segmentation can't solve.
+      final charBounds = wordCharBounds[i];
+      var parsedElements = await elementParser.parseWordBlock(
+        rendered,
+        blockBounds,
+        pageHeight,
+        renderScale,
+        blobBounds: charBounds.isNotEmpty
+            ? charBounds
+            : blobs.map((b) => b.bounds).toList(),
+        debugCropDir: debugCropDir == null
+            ? null
+            : '$debugCropDir/block${i}_elements',
+        debugLogFile: debugLogFile,
+      );
+      // Re-inject the piece identities found on clean CCL blob crops: the
+      // char-rect-derived element crops above are unreliable on scanned books
+      // and their classification alone loses every figurine (see helper doc).
       if (figurines.isNotEmpty) {
-        final charBounds = wordCharBounds[i];
-        parsedElements = await elementParser.parseWordBlock(
-          rendered,
-          blockBounds,
-          pageHeight,
-          renderScale,
-          blobBounds: charBounds.isNotEmpty
-              ? charBounds
-              : blobs.map((b) => b.bounds).toList(),
-          debugCropDir: debugCropDir == null
-              ? null
-              : '$debugCropDir/block${i}_elements',
-          debugLogFile: debugLogFile,
-        );
-        allParsedElements.addAll(parsedElements);
+        final before = parsedElements.where((e) => e.type == 'figurine').length;
+        parsedElements = _mergeFigurinesIntoElements(parsedElements, figurines);
+        final after = parsedElements.where((e) => e.type == 'figurine').length;
+        if (after != before) {
+          _log(
+            debugLogFile,
+            '[ComputeMoveBoxesCv]   → merged ${after - before} detector figurine(s) into elements',
+          );
+        }
+      }
+      allParsedElements.addAll(parsedElements);
 
+      if (parsedElements.isNotEmpty) {
         final figElemCount = parsedElements
             .where((e) => e.type == 'figurine')
             .length;
@@ -796,46 +868,63 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       // Build move string from parsed elements (both figurines and text)
       if (parsedElements.isNotEmpty) {
-        // Convert PDF charRects to ({MoveBounds bounds, String char}) for buildMoveString
-        final pdfCharRects = <({MoveBounds bounds, String char})>[];
         final runes = fullText.runes.toList();
+
+        // Convert block's PDF charRects to searchable format
+        final pdfCharRects = <({MoveBounds bounds, String char, int index})>[];
+        int charIndex = 0;
         for (int j = 0; j < charRects.length && j < runes.length; j++) {
           final r = charRects[j];
-          if (r.isNotEmpty) {
+          if (r.isEmpty) continue;
+          final ch = String.fromCharCode(runes[j]);
+          if (ch.trim().isEmpty) continue; // Skip whitespace
+
+          // Check if this PDF char is within the block bounds
+          if (r.left >= blockBounds.left - 1 && r.right <= blockBounds.right + 1 &&
+              r.top >= blockBounds.bottom - 1 && r.bottom <= blockBounds.top + 1) {
             pdfCharRects.add((
-              bounds: MoveBounds(
-                left: r.left,
-                top: r.top,
-                right: r.right,
-                bottom: r.bottom,
-              ),
-              char: String.fromCharCode(runes[j]),
+              bounds: MoveBounds(left: r.left, top: r.top, right: r.right, bottom: r.bottom),
+              char: ch,
+              index: charIndex,
             ));
+            charIndex++;
           }
         }
 
-        // Use ElementParser.buildMoveString to properly resolve text elements
-        assembled = ElementParser.buildMoveString(parsedElements, pdfCharRects);
+        // Resolve text elements: for each text element, find closest PDF char by position
+        final buf = StringBuffer();
+        for (int elemIdx = 0; elemIdx < parsedElements.length; elemIdx++) {
+          final elem = parsedElements[elemIdx];
+          if (elem.type == 'figurine') {
+            buf.write(elem.text);
+            _log(debugLogFile, '[BlockAnalysis] block[$i] elem[$elemIdx] fig="${elem.text}"');
+          } else {
+            // Find PDF character closest to this element by left position
+            var bestMatch = pdfCharRects.firstOrNull;
+            var bestDist = double.infinity;
+            for (final pdfChar in pdfCharRects) {
+              final dist = (elem.bounds.left - pdfChar.bounds.left).abs();
+              if (dist < bestDist) {
+                bestDist = dist;
+                bestMatch = pdfChar;
+              }
+            }
+
+            if (bestMatch != null && bestDist < 5.0) { // Tolerance: 5 pt
+              buf.write(bestMatch.char);
+              _log(debugLogFile, '[BlockAnalysis] block[$i] elem[$elemIdx] text="${bestMatch.char}" (dist=${bestDist.toStringAsFixed(1)})');
+              // Remove matched char so we don't reuse it
+              pdfCharRects.removeWhere((p) => p.index == bestMatch!.index);
+            } else {
+              _log(debugLogFile, '[BlockAnalysis] block[$i] elem[$elemIdx] text=? (no match, bestDist=${bestDist.toStringAsFixed(1)})');
+            }
+          }
+        }
+        assembled = buf.toString();
         _log(
           debugLogFile,
           '[BlockAnalysis] block[$i] assembled (from elements) → "$assembled"',
         );
-
-        for (int j = 0; j < parsedElements.length; j++) {
-          final elem = parsedElements[j];
-          final displayText = elem.type == 'text'
-              ? (pdfCharRects.firstWhere(
-                  (ch) => ElementParser.boundsOverlap(elem.bounds, ch.bounds),
-                  orElse: () => (bounds: elem.bounds, char: '?'),
-                ).char)
-              : elem.text;
-          _log(
-            debugLogFile,
-            '[BlockAnalysis] block[$i] '
-            'elem@${elem.bounds.left.toStringAsFixed(1)} '
-            '${elem.type}="$displayText"',
-          );
-        }
 
         // Also collect figurines for overlay
         for (final elem in parsedElements.where((e) => e.type == 'figurine')) {

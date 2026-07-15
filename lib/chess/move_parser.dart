@@ -171,6 +171,11 @@ class MoveParser {
       }
     }
 
+    // 4. Legality-constrained matching: generate all legal moves and try to
+    // match the token against them when strict SAN parsing fails.
+    final legalMove = _matchTokenToLegalMove(remapped, pos);
+    if (legalMove != null) return legalMove;
+
     return null;
   }
 
@@ -1057,6 +1062,65 @@ class MoveParser {
   static bool _isDigit(String c) {
     final code = c.codeUnitAt(0);
     return code >= 48 && code <= 57;
+  }
+
+  /// Legality-constrained move matching: when strict SAN parsing fails, try to
+  /// match the token against all legal moves by extracting destination squares.
+  ///
+  /// Strategy: extract all square references (e.g. "e4", "f7") from the token,
+  /// then for each destination square, try to construct valid SAN patterns that
+  /// would reach it. This handles malformed tokens where strict parsing fails.
+  static dc.Move? _matchTokenToLegalMove(String token, dc.Position pos) {
+    if (token.isEmpty) return null;
+
+    // Extract all square references (e.g. "e4", "f7") from token.
+    final squarePattern = RegExp(r'[a-h][1-8]');
+    final tokenSquares = squarePattern.allMatches(token)
+        .map((m) => m.group(0)!)
+        .toList();
+
+    if (tokenSquares.isEmpty) return null;
+
+    try {
+      // For each destination square found in token, try all piece + destination
+      // combinations that could be legal moves.
+      for (final destSquare in tokenSquares) {
+        // Try: piece + dest, capture + dest, just dest, etc.
+        final patterns = [
+          destSquare,
+          'K$destSquare',
+          'Q$destSquare',
+          'R$destSquare',
+          'B$destSquare',
+          'N$destSquare',
+          'x$destSquare',
+          'Kx$destSquare',
+          'Qx$destSquare',
+          'Rx$destSquare',
+          'Bx$destSquare',
+          'Nx$destSquare',
+        ];
+
+        for (final pattern in patterns) {
+          final move = _parseSan(pos, pattern);
+          if (move != null) {
+            // Extra validation: if token has a piece letter, verify it matches.
+            final moveSan = pos.makeSan(move).$2;
+            final tokenPiece = RegExp(r'([KQRBN])').firstMatch(token)?.group(1);
+            final sanPiece = RegExp(r'([KQRBN])').firstMatch(moveSan)?.group(1);
+
+            if (tokenPiece != null && sanPiece != null && tokenPiece != sanPiece) {
+              continue;
+            }
+            return move;
+          }
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
   }
 
   static MoveBounds? _computeBounds(
