@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -6,7 +7,6 @@ import 'figurine_classifier.dart';
 import 'figurine_detector.dart';
 import 'hog_extractor.dart';
 import 'models.dart';
-import 'notafigurine_classifier.dart';
 
 /// Result of parsing a single element within a word block.
 class ParsedElement {
@@ -33,18 +33,15 @@ class ParsedElement {
 /// Parses elements within a word block using element-by-element classification.
 ///
 /// For each detected element (glyph) within a word block:
-/// 1. Classify using notafigurine_classifier (is it text or figurine?)
-/// 2. If figurine (high confidence): use figurine_classifier to identify piece
-/// 3. If text (high confidence): return placeholder (text handling via PDF layer)
-/// 4. Build a move string from the parsed elements
+/// 1. Classify with the 6-class figurine classifier {K,Q,R,B,N,NotAFigurine}.
+/// 2. Piece class → record the piece letter.
+/// 3. NotAFigurine (reject) class → treat as text; identity comes from the
+///    PDF text layer during move assembly, not OCR here.
+/// 4. Build a move string from the parsed elements.
 class ElementParser {
-  ElementParser({
-    required this.figurineClassifier,
-    required this.notAFigurineClassifier,
-  });
+  ElementParser({required this.figurineClassifier});
 
   final FigurineClassifier figurineClassifier;
-  final NotAFigurineClassifier notAFigurineClassifier;
 
   /// Parse all elements within a word block using gap detection for segmentation.
   ///
@@ -52,17 +49,15 @@ class ElementParser {
   /// 1. Segment word block into individual elements by detecting vertical gaps
   /// 2. For each element:
   ///    a. Extract HOG features
-  ///    b. Try FigurineClassifier first (figurines are prioritized)
-  ///    c. If figurine found → use piece classification
-  ///    d. Else, try NotAFigurineClassifier to confirm it's text
-  ///    e. If text confirmed → OCR it to get character
+  ///    b. Run the 6-class figurine classifier
+  ///    c. Piece class → record the piece letter
+  ///    d. NotAFigurine (reject) class → mark as text
   /// 3. Return parsed elements sorted left-to-right
   Future<List<ParsedElement>> parseWordBlock(
     RenderedPage rendered,
     MoveBounds blockBounds,
     double pageHeight,
     double renderScale, {
-    double minTextConfidence = 0.50,
     /// Pre-computed CCL blob bounds from FigurineDetector.analyseWordBlock.
     /// When provided these are used directly, skipping column-projection
     /// segmentation (which fails for complex/inverted glyphs).
@@ -110,7 +105,7 @@ class ElementParser {
       final elemBounds = elementBounds[i];
 
       // Extract HOG features from element bounds
-      final pixels = _cropAndResizeBlob(
+      final crop = _cropAndResizeBlob(
         rendered.gray,
         rendered.width,
         rendered.height,
@@ -118,34 +113,32 @@ class ElementParser {
         pageHeight,
         renderScale,
       );
-      final features = HogExtractor.extract(pixels, 32, 32);
+      final pixels = crop.pixels;
+      final features = HogExtractor.extract(pixels, crop.pw, crop.ph);
 
-      // Run both classifiers and log scores for debugging.
+      // Single 6-class classifier {K,Q,R,B,N,NotAFigurine}: classifyWithConfidence
+      // returns (piece, confidence) when the argmax is a piece, or null when it
+      // is the NotAFigurine reject class. The reject class makes a separate
+      // text/figurine gate (the old NotAFigurine autoencoder + confidence-margin
+      // heuristic) unnecessary — a non-piece is simply where the model's own
+      // argmax lands on NotAFigurine.
       final figResult = figurineClassifier.classifyWithConfidence(features);
-      final textConf =
-          notAFigurineClassifier.classifyAsNotFigurine(
-            features,
-            debugLogFile: debugLogFile,
-          ) ??
-          0.0;
 
       if (debugCropDir != null) {
         final label = figResult != null
             ? '${figResult.$1}_${(figResult.$2 * 100).round()}pct'
-            : 'notafig_${(textConf * 100).round()}pct';
+            : 'notafig';
         _dumpCropPgm(debugCropDir, pixels, 'elem${i}_$label.pgm');
       }
 
       _log(
         debugLogFile,
         '[ElementParser]   elem[$i] @ ${elemBounds.left.toStringAsFixed(1)}: '
-        'fig=${figResult != null ? "${figResult.$2.toStringAsFixed(2)} (${figResult.$1})" : "null"}, '
-        'notAFig=${textConf.toStringAsFixed(2)}',
+        'fig=${figResult != null ? "${figResult.$2.toStringAsFixed(2)} (${figResult.$1})" : "NotAFigurine"}',
       );
 
-      if (figResult != null && figResult.$2 > 0.95) {
-        // Strong figurine signal — classify as figurine regardless of notAFig score.
-        // (notAFig also fires for real figurines on some PDFs, so figurine wins.)
+      if (figResult != null) {
+        // Argmax is a piece class.
         final (piece, conf) = figResult;
         parsed.add(
           ParsedElement(
@@ -157,29 +150,20 @@ class ElementParser {
         );
         _log(
           debugLogFile,
-          '[ElementParser]     → FIGURINE: $piece (fig=${conf.toStringAsFixed(2)}, notAFig=${textConf.toStringAsFixed(2)})',
+          '[ElementParser]     → FIGURINE: $piece (${conf.toStringAsFixed(2)})',
         );
-      } else if (textConf >= minTextConfidence) {
-        // No strong figurine, but notAFigurine fires → treat as text.
-        // Skip OCR: move assembly uses the PDF text layer, not OCR'd text.
-        // Just use a placeholder for the debug overlay.
+      } else {
+        // Reject class → text. Identity resolved from the PDF text layer at
+        // move-assembly time; a placeholder marks the element for the overlay.
         parsed.add(
           ParsedElement(
             text: '·',
             bounds: elemBounds,
             type: 'text',
-            confidence: textConf,
+            confidence: 0.0,
           ),
         );
-        _log(
-          debugLogFile,
-          '[ElementParser]     → TEXT (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})',
-        );
-      } else {
-        _log(
-          debugLogFile,
-          '[ElementParser]     → SKIPPED (fig=${figResult?.$2.toStringAsFixed(2) ?? "null"}, notAFig=${textConf.toStringAsFixed(2)})',
-        );
+        _log(debugLogFile, '[ElementParser]     → TEXT (NotAFigurine)');
       }
     }
 
@@ -194,13 +178,37 @@ class ElementParser {
   /// Appends [message] to [logFile] if set, otherwise falls back to
   /// [debugPrint]. Terminal/logcat output gets truncated or drops lines
   /// under heavy volume — writing straight to a file never does.
+  // Per-file line buffers, flushed asynchronously in a batch rather than
+  // opening/appending/closing the log file on every single call. Debug
+  // logging happens hundreds/thousands of times per page (once per glyph),
+  // and doing that with *synchronous* file I/O blocks the UI isolate's
+  // event loop with no frames in between — which is what made the app look
+  // "hung" rather than just slow, especially once the target directory had
+  // to be recreated (e.g. after the user deleted it mid-run).
+  static final Map<String, StringBuffer> _logBuffers = {};
+  static final Set<String> _logFlushPending = {};
+
   static void _log(String? logFile, String message) {
     if (logFile == null) {
       debugPrint(message);
       return;
     }
+    _logBuffers.putIfAbsent(logFile, () => StringBuffer()).writeln(message);
+    if (_logFlushPending.add(logFile)) {
+      unawaited(_flushLog(logFile));
+    }
+  }
+
+  static Future<void> _flushLog(String logFile) async {
+    // Yield first so same-tick _log() calls accumulate into one write.
+    await Future<void>.delayed(Duration.zero);
+    _logFlushPending.remove(logFile);
+    final buffer = _logBuffers.remove(logFile);
+    if (buffer == null || buffer.isEmpty) return;
     try {
-      File(logFile).writeAsStringSync('$message\n', mode: FileMode.append);
+      final file = File(logFile);
+      await file.parent.create(recursive: true);
+      await file.writeAsString(buffer.toString(), mode: FileMode.append);
     } catch (e) {
       debugPrint('[ElementParser] failed to write log: $e');
     }
@@ -209,18 +217,43 @@ class ElementParser {
   /// Writes a 32×32 grayscale [pixels] buffer (values 0.0–1.0) as a binary
   /// PGM (P5) file — viewable with most image tools (e.g. GIMP, `convert
   /// crop.pgm crop.png`) without extra dependencies.
+  //
+  // Fire-and-forget async I/O for the same reason as `_log` above: dumps
+  // happen once per glyph in a tight synchronous loop, so blocking sync
+  // file calls here stall the UI isolate. Directories we've already
+  // confirmed exist are cached so repeated dumps into the same block don't
+  // each re-run a recursive mkdir; a failed write evicts the cache entry so
+  // the next dump retries directory creation instead of failing forever.
+  static final Set<String> _knownDirs = {};
+
   static void _dumpCropPgm(String dir, Float32List pixels, String filename) {
     const size = HogExtractor.imageSize; // 32
+    unawaited(_writeCropPgm(dir, pixels, filename, size));
+  }
+
+  static Future<void> _writeCropPgm(
+    String dir,
+    Float32List pixels,
+    String filename,
+    int size,
+  ) async {
     try {
-      Directory(dir).createSync(recursive: true);
+      if (!_knownDirs.contains(dir)) {
+        await Directory(dir).create(recursive: true);
+        _knownDirs.add(dir);
+      }
       final bytes = Uint8List(size * size);
       for (int i = 0; i < pixels.length; i++) {
         bytes[i] = (pixels[i].clamp(0.0, 1.0) * 255).round();
       }
       final header = 'P5\n$size $size\n255\n';
       final file = File('$dir/$filename');
-      file.writeAsBytesSync([...header.codeUnits, ...bytes]);
+      await file.writeAsBytes([...header.codeUnits, ...bytes]);
     } catch (e) {
+      // The dir may have been deleted after we last confirmed it (e.g. the
+      // user cleared the debug folder mid-run) — drop it from the cache so
+      // the next dump into this path recreates it instead of failing forever.
+      _knownDirs.remove(dir);
       debugPrint('[ElementParser] failed to dump crop $filename: $e');
     }
   }
@@ -338,7 +371,7 @@ class ElementParser {
       } else if (elem.type == 'text') {
         // Find the PDF character that overlaps this element
         final matching = pdfCharRects.where(
-          (ch) => _boundsOverlap(elem.bounds, ch.bounds),
+          (ch) => boundsOverlap(elem.bounds, ch.bounds),
         );
         if (matching.isNotEmpty) {
           result.write(matching.first.char);
@@ -349,15 +382,17 @@ class ElementParser {
     return result.toString();
   }
 
-  static bool _boundsOverlap(MoveBounds a, MoveBounds b) {
+  static bool boundsOverlap(MoveBounds a, MoveBounds b) {
     return a.left < b.right &&
         a.right > b.left &&
         a.bottom < b.top &&
         a.top > b.bottom;
   }
 
-  /// Crop and resize a blob to 32×32 for HOG extraction.
-  static Float32List _cropAndResizeBlob(
+  /// Crop and resize a blob to 32×32 for HOG extraction. Also returns the
+  /// true pre-resize crop width/height in pixels — needed as-is (not 32×32)
+  /// for the aspect-ratio feature HogExtractor appends after the HOG vector.
+  static ({Float32List pixels, int pw, int ph}) _cropAndResizeBlob(
     Float32List gray,
     int imgW,
     int imgH,
@@ -386,6 +421,6 @@ class ElementParser {
         out[dy * size + dx] = gray[sy * imgW + sx];
       }
     }
-    return out;
+    return (pixels: out, pw: pw, ph: ph);
   }
 }

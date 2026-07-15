@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
@@ -309,7 +310,16 @@ class FigurineDetector {
             );
             for (final piece in densitySplit) {
               candidates.addAll(
-                _forceSplitByWidth(rendered.binary, iW, piece, ch, debugLogFile),
+                _forceSplitByWidth(
+                  rendered.binary,
+                  rendered.gray,
+                  iW,
+                  iH,
+                  piece,
+                  ch,
+                  classifier,
+                  debugLogFile,
+                ),
               );
             }
           }
@@ -392,6 +402,77 @@ class FigurineDetector {
     }
   }
 
+  /// Scans candidate vertical cut positions within [blob] (25%-75% of its
+  /// width) and asks [classifier] to score the piece that each cut would
+  /// produce on the left, resizing that sub-crop to 32×32 exactly like the
+  /// real classification path does. Returns the cut position with the
+  /// highest-confidence figurine hit on either side, or null if nothing
+  /// scores above a usable threshold — used when a blob has zero true ink
+  /// gap (physically touching glyphs) so no gap/seam method can locate the
+  /// boundary, but the classifier itself can recognise where the piece ends.
+  static (int, double)? _findBoundaryByClassifier(
+    Float32List gray,
+    int imgW,
+    int imgH,
+    ({int x0, int y0, int x1, int y1}) blob,
+    int bw,
+    int bh,
+    FigurineClassifier classifier, {
+    double minConfidence = 0.90,
+  }) {
+    if (bw < 4) return null; // too narrow for a meaningful two-way split
+    final minX = (bw * 0.25).round().clamp(1, bw - 1);
+    final maxXUpper = bw - 1;
+    if (minX + 1 > maxXUpper) return null;
+    final maxX = (bw * 0.75).round().clamp(minX + 1, maxXUpper);
+    if (minX >= maxX) return null;
+    final step = ((maxX - minX) / 20).round().clamp(1, bw);
+
+    int? bestX;
+    double bestConf = 0.0;
+    for (int x = minX; x <= maxX; x += step) {
+      final rightW = bw - x;
+      if (x < 1 || rightW < 1) continue;
+
+      final leftPixels = _cropAndResize32(
+        gray,
+        imgW,
+        imgH,
+        blob.x0,
+        blob.y0,
+        x,
+        bh,
+      );
+      final leftHit = classifier.classifyWithConfidence(
+        HogExtractor.extract(leftPixels, x, bh),
+      );
+      if (leftHit != null && leftHit.$2 > bestConf) {
+        bestConf = leftHit.$2;
+        bestX = x;
+      }
+
+      final rightPixels = _cropAndResize32(
+        gray,
+        imgW,
+        imgH,
+        blob.x0 + x,
+        blob.y0,
+        rightW,
+        bh,
+      );
+      final rightHit = classifier.classifyWithConfidence(
+        HogExtractor.extract(rightPixels, rightW, bh),
+      );
+      if (rightHit != null && rightHit.$2 > bestConf) {
+        bestConf = rightHit.$2;
+        bestX = x;
+      }
+    }
+
+    if (bestX == null || bestConf < minConfidence) return null;
+    return (bestX, bestConf);
+  }
+
   /// Last-resort fallback when no ink-density or seam-based boundary passes
   /// the strict relative-dip threshold (glyphs that physically touch, with
   /// near-zero background separating them). Rather than slicing at blind
@@ -402,9 +483,12 @@ class FigurineDetector {
   /// respects whatever faint boundary actually exists in the ink.
   static List<({int x0, int y0, int x1, int y1})> _forceSplitByWidth(
     Uint8List binary,
+    Float32List gray,
     int imgW,
+    int imgH,
     ({int x0, int y0, int x1, int y1}) blob,
     int ch,
+    FigurineClassifier classifier,
     String? debugLogFile,
   ) {
     final bw = blob.x1 - blob.x0 + 1;
@@ -413,6 +497,38 @@ class FigurineDetector {
     if (bw <= expectedCharW * 1.5) return [blob]; // already close to one char
 
     final count = (bw / expectedCharW).round().clamp(2, 100);
+
+    // Physically-touching glyphs have zero true ink gap, so no column-based
+    // or seam-based method has anything to detect. When exactly two glyphs
+    // are involved (the common case — a figurine piece touching an adjacent
+    // rank digit), let the classifier itself find the boundary: scan
+    // candidate cut positions and keep the one where either side is
+    // recognised as a figurine with the highest confidence. This directly
+    // uses the trained model instead of guessing from an expected width,
+    // which can slice straight through the piece glyph itself.
+    if (count == 2) {
+      final classifierCut = _findBoundaryByClassifier(
+        gray,
+        imgW,
+        imgH,
+        blob,
+        bw,
+        bh,
+        classifier,
+      );
+      if (classifierCut != null) {
+        _log(
+          debugLogFile,
+          '[FigurineDetector] classifier-guided split blob[${blob.x0},${blob.y0}] '
+          '${bw}x$bh cut=$classifierCut (conf=${classifierCut.$2.toStringAsFixed(2)})',
+        );
+        final cutX = classifierCut.$1;
+        return [
+          (x0: blob.x0, y0: blob.y0, x1: blob.x0 + cutX - 1, y1: blob.y1),
+          (x0: blob.x0 + cutX, y0: blob.y0, x1: blob.x1, y1: blob.y1),
+        ];
+      }
+    }
     final seamCost = _seamCostProfile(binary, imgW, blob.x0, blob.y0, bw, bh);
     final searchRadius = (expectedCharW * 0.4).round().clamp(1, expectedCharW);
 
@@ -913,13 +1029,37 @@ class FigurineDetector {
   /// Appends [message] to [logFile] if set, otherwise falls back to
   /// [debugPrint]. Terminal/logcat output gets truncated or drops lines
   /// under heavy volume — writing straight to a file never does.
+  // Per-file line buffers, flushed asynchronously in a batch rather than
+  // opening/appending/closing the log file on every single call. Debug
+  // logging happens hundreds/thousands of times per page (once per glyph),
+  // and doing that with *synchronous* file I/O blocks the UI isolate's
+  // event loop with no frames in between — which is what made the app look
+  // "hung" rather than just slow, especially once the target directory had
+  // to be recreated (e.g. after the user deleted it mid-run).
+  static final Map<String, StringBuffer> _logBuffers = {};
+  static final Set<String> _logFlushPending = {};
+
   static void _log(String? logFile, String message) {
     if (logFile == null) {
       debugPrint(message);
       return;
     }
+    _logBuffers.putIfAbsent(logFile, () => StringBuffer()).writeln(message);
+    if (_logFlushPending.add(logFile)) {
+      unawaited(_flushLog(logFile));
+    }
+  }
+
+  static Future<void> _flushLog(String logFile) async {
+    // Yield first so same-tick _log() calls accumulate into one write.
+    await Future<void>.delayed(Duration.zero);
+    _logFlushPending.remove(logFile);
+    final buffer = _logBuffers.remove(logFile);
+    if (buffer == null || buffer.isEmpty) return;
     try {
-      File(logFile).writeAsStringSync('$message\n', mode: FileMode.append);
+      final file = File(logFile);
+      await file.parent.create(recursive: true);
+      await file.writeAsString(buffer.toString(), mode: FileMode.append);
     } catch (e) {
       debugPrint('[FigurineDetector] failed to write log: $e');
     }
@@ -929,18 +1069,43 @@ class FigurineDetector {
   /// PGM (P5) file — a trivial uncompressed format viewable with most image
   /// tools (e.g. GIMP, `convert crop.pgm crop.png`) without extra
   /// dependencies. Used to visually inspect what the classifier receives.
+  //
+  // Fire-and-forget async I/O for the same reason as `_log` above: dumps
+  // happen once per glyph in a tight synchronous loop, so blocking sync
+  // file calls here stall the UI isolate. Directories we've already
+  // confirmed exist are cached so repeated dumps into the same block don't
+  // each re-run a recursive mkdir; a failed write evicts the cache entry so
+  // the next dump retries directory creation instead of failing forever.
+  static final Set<String> _knownDirs = {};
+
   static void _dumpCropPgm(String dir, Float32List pixels, String filename) {
     const size = HogExtractor.imageSize; // 32
+    unawaited(_writeCropPgm(dir, pixels, filename, size));
+  }
+
+  static Future<void> _writeCropPgm(
+    String dir,
+    Float32List pixels,
+    String filename,
+    int size,
+  ) async {
     try {
-      Directory(dir).createSync(recursive: true);
+      if (!_knownDirs.contains(dir)) {
+        await Directory(dir).create(recursive: true);
+        _knownDirs.add(dir);
+      }
       final bytes = Uint8List(size * size);
       for (int i = 0; i < pixels.length; i++) {
         bytes[i] = (pixels[i].clamp(0.0, 1.0) * 255).round();
       }
       final header = 'P5\n$size $size\n255\n';
       final file = File('$dir/$filename');
-      file.writeAsBytesSync([...header.codeUnits, ...bytes]);
+      await file.writeAsBytes([...header.codeUnits, ...bytes]);
     } catch (e) {
+      // The dir may have been deleted after we last confirmed it (e.g. the
+      // user cleared the debug folder mid-run) — drop it from the cache so
+      // the next dump into this path recreates it instead of failing forever.
+      _knownDirs.remove(dir);
       debugPrint('[FigurineDetector] failed to dump crop $filename: $e');
     }
   }

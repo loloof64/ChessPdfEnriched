@@ -15,7 +15,6 @@ import '../chess/figurine_detector.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
-import '../chess/notafigurine_classifier.dart';
 import '../l10n/app_localizations.dart';
 
 class PdfReaderScreen extends StatefulWidget {
@@ -61,10 +60,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // Progress during a full-document reanalysis: (current page, total pages).
   // Null when analysing a single page or not analysing.
   ({int current, int total})? _analysingProgress;
-  // Figurine glyph classifier — loaded once per document session.
+  // Figurine glyph classifier (6-class {K,Q,R,B,N,NotAFigurine}) — loaded
+  // once per document session; its own reject class replaces the former
+  // separate NotAFigurine autoencoder.
   FigurineClassifier? _figurineClassifier;
-  // Text vs figurine classifier — loaded once per document session.
-  NotAFigurineClassifier? _notAFigurineClassifier;
   // Figurine detector — wraps the classifier for per-page glyph detection.
   FigurineDetector? _figurineDetector;
   // Element parser — parses word blocks element-by-element.
@@ -72,9 +71,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // Notation mode selected by the user in the options dialog.
   NotationMode _notationMode = NotationMode.textSan;
   // Render scale used for figurine detection (forwarded from options dialog;
-  // placeholder for a future zoom feature — currently always 2.0).
+  // placeholder for a future zoom feature — currently always 3.0).
+  // Raised from 2.0: at 2.0px/pt, antialiasing blurs tight kerning gaps
+  // between touching glyphs (e.g. a figurine piece against an adjacent rank
+  // digit) into gray pixels with no real whitespace channel, so the CCL
+  // segmentation merges them and the width-based split fallback then cuts
+  // through the glyph itself instead of at the true boundary.
   // ignore: prefer_final_fields
-  double _renderScale = 2.0;
+  double _renderScale = 3.0;
   // Debug: word blobs detected on the current page.
   List<MoveBounds>? _detectedWordBoxes;
   // Debug: move boxes detected by the CV pipeline on the current page.
@@ -97,12 +101,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   Future<void> _loadDocument() async {
     try {
       _figurineClassifier = await FigurineClassifier.load();
-      _notAFigurineClassifier = await NotAFigurineClassifier.fromAsset();
       _figurineDetector = FigurineDetector(classifier: _figurineClassifier!);
-      _elementParser = ElementParser(
-        figurineClassifier: _figurineClassifier!,
-        notAFigurineClassifier: _notAFigurineClassifier!,
-      );
+      _elementParser = ElementParser(figurineClassifier: _figurineClassifier!);
 
       final doc = await PdfDocument.openFile(widget.filePath);
       final cached = await AnalysisCache.load(widget.filePath);
@@ -126,7 +126,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   void dispose() {
     _document?.dispose();
     _figurineClassifier?.dispose();
-    _notAFigurineClassifier?.dispose();
     super.dispose();
   }
 
@@ -714,6 +713,19 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     for (int i = 0; i < wordBlocks.length; i++) {
       final blockBounds = wordBlocks[i];
 
+      // NOTE: word blocks used to be pre-filtered here to skip the CV
+      // pipeline on anything that "looked like plain prose" (decoded as
+      // ordinary letters/digits/punctuation). That worked for PDFs with a
+      // genuine custom figurine font (unmapped/private-use codepoints), but
+      // this app also targets SCANNED books whose "text layer" is Tesseract
+      // OCR output — piece icons there get OCR'd as ordinary ASCII letters
+      // (e.g. a knight read as "4)", a queen as "W"), so real move blocks
+      // like "23.4)xf7!" also "look like plain prose" and were being skipped
+      // — silently discarding every move on the page. Now that the figurine
+      // classifier is a properly calibrated 6-class model {K,Q,R,B,N,
+      // NotAFigurine} (see project memory), it reliably rejects real prose
+      // itself, so this pre-filter is no longer needed to avoid false
+      // positives — it was only ever hiding real moves on OCR'd books.
       _log(
         debugLogFile,
         '[ComputeMoveBoxesCv] Processing word block[$i] at left=${blockBounds.left.toStringAsFixed(1)}',
@@ -784,21 +796,46 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
       // Build move string from parsed elements (both figurines and text)
       if (parsedElements.isNotEmpty) {
-        final buf = StringBuffer();
-        for (final elem in parsedElements) {
-          buf.write(elem.text);
-          _log(
-            debugLogFile,
-            '[BlockAnalysis] block[$i] '
-            'elem@${elem.bounds.left.toStringAsFixed(1)} '
-            '${elem.type}="${elem.text}"',
-          );
+        // Convert PDF charRects to ({MoveBounds bounds, String char}) for buildMoveString
+        final pdfCharRects = <({MoveBounds bounds, String char})>[];
+        final runes = fullText.runes.toList();
+        for (int j = 0; j < charRects.length && j < runes.length; j++) {
+          final r = charRects[j];
+          if (r.isNotEmpty) {
+            pdfCharRects.add((
+              bounds: MoveBounds(
+                left: r.left,
+                top: r.top,
+                right: r.right,
+                bottom: r.bottom,
+              ),
+              char: String.fromCharCode(runes[j]),
+            ));
+          }
         }
-        assembled = buf.toString();
+
+        // Use ElementParser.buildMoveString to properly resolve text elements
+        assembled = ElementParser.buildMoveString(parsedElements, pdfCharRects);
         _log(
           debugLogFile,
           '[BlockAnalysis] block[$i] assembled (from elements) → "$assembled"',
         );
+
+        for (int j = 0; j < parsedElements.length; j++) {
+          final elem = parsedElements[j];
+          final displayText = elem.type == 'text'
+              ? (pdfCharRects.firstWhere(
+                  (ch) => ElementParser.boundsOverlap(elem.bounds, ch.bounds),
+                  orElse: () => (bounds: elem.bounds, char: '?'),
+                ).char)
+              : elem.text;
+          _log(
+            debugLogFile,
+            '[BlockAnalysis] block[$i] '
+            'elem@${elem.bounds.left.toStringAsFixed(1)} '
+            '${elem.type}="$displayText"',
+          );
+        }
 
         // Also collect figurines for overlay
         for (final elem in parsedElements.where((e) => e.type == 'figurine')) {
