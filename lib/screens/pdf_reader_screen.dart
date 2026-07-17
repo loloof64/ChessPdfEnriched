@@ -12,6 +12,7 @@ import '../chess/chess_piece_classifier.dart';
 import '../chess/element_parser.dart';
 import '../chess/figurine_classifier.dart';
 import '../chess/figurine_detector.dart';
+import '../chess/glyph_clusterer.dart';
 import '../chess/models.dart';
 import '../chess/move_parser.dart';
 import '../chess/moves_panel.dart';
@@ -49,6 +50,24 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // Learnt character→piece mapping for the current document's chess font.
   // Shared across all pages so every fuzzy match discovery benefits later pages.
   final Map<String, String> _fontMap = {};
+  // Book-level glyph shape clusters + legality-vote labels (FAN mode).
+  // What is constant across a printed book is the glyph *shape*, not its OCR
+  // reading — see GlyphClusterer. Reset on full reanalysis.
+  GlyphClusterer _glyphClusterer = GlyphClusterer();
+  // Per-page CV block assemblies (raw fallback chars + cluster ids), kept so
+  // the second analysis pass can re-parse with learnt cluster labels without
+  // re-rendering and re-segmenting every page.
+  final Map<int, List<CvBlock>> _cvBlocksCache = {};
+  // Per-page board detection results, cached for the same reason.
+  final Map<
+    int,
+    ({
+      List<int> splitIndices,
+      bool topOfPageBoardDetected,
+      List<String?> detectedFens,
+      List<PdfRect> boardRects,
+    })
+  > _boardResultCache = {};
   // Games for the currently displayed page.
   List<PageAnalysis>? _pageGames;
   // Index of the selected game within the current page (for multi-game pages).
@@ -274,6 +293,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _wordBoxesCache.clear();
       _moveBoxesCache.clear();
       _blobResultsCache.clear();
+      _cvBlocksCache.clear();
+      _boardResultCache.clear();
+      _glyphClusterer = GlyphClusterer();
       _detectedWordBoxes = null;
       _detectedMoveBoxes = null;
       _pageGames = null;
@@ -293,6 +315,51 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         await _loadPageAnalysis(page);
         if (mounted) setState(() => _analysing = true);
       }
+
+      // Refinement passes: pass 1 accumulated glyph-cluster legality votes
+      // across the whole document; once clusters are labeled, re-parse every
+      // page with the labels applied (cheap: CV assemblies and board
+      // detection are reused, only MoveParser runs again). Each pass can
+      // unlock more moves → more votes → more labels, so iterate to a
+      // fixpoint: repeat while the label or vote pool still grows (votes are
+      // keyed by page:token, so re-parsing overwrites instead of stacking).
+      const maxRefinePasses = 4;
+      for (int pass = 0; pass < maxRefinePasses; pass++) {
+        if (!mounted ||
+            _notationMode != NotationMode.figurineFan ||
+            _glyphClusterer.labels.isEmpty) {
+          break;
+        }
+        final labelsBefore = _glyphClusterer.labels.length;
+        final votesBefore = _glyphClusterer.voteCount;
+        for (int page = 1; page <= totalPages; page++) {
+          if (!mounted) break;
+          setState(
+            () => _analysingProgress = (current: page, total: totalPages),
+          );
+          // Keep any user-confirmed overrides from pass 1 (board-detected
+          // FENs re-marked userProvided, confirmed diagrams…).
+          final overrides = _collectUserOverrides(page);
+          _cache.remove(page);
+          await _loadPageAnalysis(
+            page,
+            reuseCv: true,
+            forcedFens:
+                overrides.forcedFens.isEmpty ? null : overrides.forcedFens,
+            forcedIntermediates: overrides.forcedIntermediates.isEmpty
+                ? null
+                : overrides.forcedIntermediates,
+            forcedNotADiagrams: overrides.forcedNotADiagrams.isEmpty
+                ? null
+                : overrides.forcedNotADiagrams,
+          );
+          if (mounted) setState(() => _analysing = true);
+        }
+        if (_glyphClusterer.labels.length == labelsBefore &&
+            _glyphClusterer.voteCount == votesBefore) {
+          break; // converged — another pass would parse identically
+        }
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -309,6 +376,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     Set<int>? forcedIntermediates,
     Set<int>? forcedNotADiagrams,
     NotationMode? notationMode,
+    // Second-pass mode: reuse the cached CV assemblies and board detection
+    // from the first pass and only re-run MoveParser — the learnt glyph
+    // cluster labels are applied at token-build time, so no re-render or
+    // re-segmentation is needed.
+    bool reuseCv = false,
   }) async {
     // Use cached result if available (and no override is requested).
     // Still load raw text so the debug button reflects the current page.
@@ -354,11 +426,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         debugLogFile = '${docsDir.path}/figurine_debug.log';
       }
 
-      final boardResult = await BoardDetector.detectBoards(
-        page,
-        rawText.charRects,
-        debugLogFile: debugLogFile,
-      );
+      final boardResult = (reuseCv ? _boardResultCache[pageNumber] : null) ??
+          await BoardDetector.detectBoards(
+            page,
+            rawText.charRects,
+            debugLogFile: debugLogFile,
+          );
+      _boardResultCache[pageNumber] = boardResult;
 
       _log(
         debugLogFile,
@@ -380,48 +454,59 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       // In FAN mode, run the CV pipeline: segment blobs per word block,
       // classify figurines, OCR non-figurines, test SAN.
       List<DetectedFigurine>? detectedFigurines;
+      List<CvBlock>? cvBlocks;
       if (effectiveMode == NotationMode.figurineFan &&
           _figurineDetector != null) {
-        final rendered = await FigurineDetector.renderPage(
-          page,
-          scale: _renderScale,
-        );
-        if (rendered != null) {
-          String? debugCropDir;
-          if (kDebugMode) {
-            final docsDir = await getApplicationDocumentsDirectory();
-            debugCropDir = '${docsDir.path}/figurine_crops/page$pageNumber';
-          }
-          final result = await _computeMoveBoxesCv(
-            wb.words,
-            wb.chars,
-            rawText.charRects,
-            rawText.fullText,
-            rendered,
-            page.height,
-            _renderScale,
-            _figurineDetector!,
-            _elementParser!,
-            debugCropDir: debugCropDir,
-            debugLogFile: debugLogFile,
+        if (reuseCv && _cvBlocksCache.containsKey(pageNumber)) {
+          // Second pass: the CV assemblies (with cluster ids) are already
+          // known — cluster labels are applied inside MoveParser.
+          cvBlocks = _cvBlocksCache[pageNumber];
+          detectedFigurines = _figurinesCache[pageNumber];
+        } else {
+          final rendered = await FigurineDetector.renderPage(
+            page,
+            scale: _renderScale,
           );
-          detectedFigurines = result.figurines;
-          _moveBoxesCache[pageNumber] = result.moveBoxes;
-          _blobResultsCache[pageNumber] = result.blobs;
-          _parsedElementsCache[pageNumber] = result.parsedElements;
-          // Extract element bounding boxes from parsed elements
-          final elementBoxes = result.parsedElements
-              .map((e) => e.bounds)
-              .toList();
-          _elementBoxesCache[pageNumber] = elementBoxes;
-          if (mounted) {
-            setState(() {
-              _detectedMoveBoxes = result.moveBoxes;
-              _detectedElementBoxes = elementBoxes;
-            });
+          if (rendered != null) {
+            String? debugCropDir;
+            if (kDebugMode) {
+              final docsDir = await getApplicationDocumentsDirectory();
+              debugCropDir = '${docsDir.path}/figurine_crops/page$pageNumber';
+            }
+            final result = await _computeMoveBoxesCv(
+              wb.words,
+              wb.chars,
+              rawText.charRects,
+              rawText.fullText,
+              rendered,
+              page.height,
+              _renderScale,
+              _figurineDetector!,
+              _elementParser!,
+              clusterer: _glyphClusterer,
+              debugCropDir: debugCropDir,
+              debugLogFile: debugLogFile,
+            );
+            detectedFigurines = result.figurines;
+            cvBlocks = result.cvBlocks;
+            _cvBlocksCache[pageNumber] = result.cvBlocks;
+            _moveBoxesCache[pageNumber] = result.moveBoxes;
+            _blobResultsCache[pageNumber] = result.blobs;
+            _parsedElementsCache[pageNumber] = result.parsedElements;
+            // Extract element bounding boxes from parsed elements
+            final elementBoxes = result.parsedElements
+                .map((e) => e.bounds)
+                .toList();
+            _elementBoxesCache[pageNumber] = elementBoxes;
+            if (mounted) {
+              setState(() {
+                _detectedMoveBoxes = result.moveBoxes;
+                _detectedElementBoxes = elementBoxes;
+              });
+            }
           }
+          _figurinesCache[pageNumber] = detectedFigurines ?? [];
         }
-        _figurinesCache[pageNumber] = detectedFigurines ?? [];
       }
 
       // Use auto-detected FENs if available (user override takes precedence).
@@ -445,6 +530,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         fontMap: _fontMap,
         notationMode: effectiveMode,
         detectedFigurines: detectedFigurines,
+        cvBlocks: cvBlocks,
+        clusterLabel: _glyphClusterer.labelFor,
+        onPieceVote: (clusterId, piece, tokenIndex) => _glyphClusterer.vote(
+          source: '$pageNumber:$tokenIndex',
+          clusterId: clusterId,
+          piece: piece,
+        ),
         debugLogFile: debugLogFile,
       );
 
@@ -455,6 +547,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         '${games.length} game(s), $totalMoves move(s)'
         '${detectedFigurines != null && detectedFigurines.isNotEmpty ? ", ${detectedFigurines.length} figurine(s)" : ""}',
       );
+      if (effectiveMode == NotationMode.figurineFan) {
+        _log(
+          debugLogFile,
+          '[GlyphClusterer] ${_glyphClusterer.debugSummary()}',
+        );
+      }
 
       _cache[pageNumber] = games;
       await AnalysisCache.save(widget.filePath, _cache);
@@ -721,6 +819,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           bounds: hit.bounds,
           type: 'figurine',
           confidence: hit.confidence,
+          // Keep the replaced element's shape cluster so the detector's
+          // piece identity and the cluster votes stay connected.
+          clusterId: elem.clusterId,
         ));
       }
       // Further fragments of an already-consumed figurine are dropped.
@@ -751,6 +852,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       List<DetectedFigurine> figurines,
       List<BlobResult> blobs,
       List<ParsedElement> parsedElements,
+      List<CvBlock> cvBlocks,
     })
   >
   _computeMoveBoxesCv(
@@ -763,6 +865,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     double renderScale,
     FigurineDetector detector,
     ElementParser elementParser, {
+    GlyphClusterer? clusterer,
     String? debugCropDir,
     String? debugLogFile,
   }) async {
@@ -770,6 +873,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     final allFigurines = <DetectedFigurine>[];
     final allBlobs = <BlobResult>[];
     final allParsedElements = <ParsedElement>[];
+    final cvBlocks = <CvBlock>[];
 
     for (int i = 0; i < wordBlocks.length; i++) {
       final blockBounds = wordBlocks[i];
@@ -828,6 +932,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             ? null
             : '$debugCropDir/block${i}_elements',
         debugLogFile: debugLogFile,
+        clusterer: clusterer,
       );
       // Re-inject the piece identities found on clean CCL blob crops: the
       // char-rect-derived element crops above are unreliable on scanned books
@@ -865,6 +970,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       );
 
       String assembled;
+      // Per-glyph elements aligned with [assembled]: fallback char + shape
+      // cluster id, so MoveParser can override chars with learnt cluster
+      // labels and cast legality votes (empty for the fallback paths below).
+      var blockElems = const <CvElement>[];
 
       // Build move string from parsed elements (both figurines and text)
       if (parsedElements.isNotEmpty) {
@@ -893,10 +1002,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
         // Resolve text elements: for each text element, find closest PDF char by position
         final buf = StringBuffer();
+        final elems = <CvElement>[];
         for (int elemIdx = 0; elemIdx < parsedElements.length; elemIdx++) {
           final elem = parsedElements[elemIdx];
           if (elem.type == 'figurine') {
             buf.write(elem.text);
+            elems.add((char: elem.text, clusterId: elem.clusterId));
             _log(debugLogFile, '[BlockAnalysis] block[$i] elem[$elemIdx] fig="${elem.text}"');
           } else {
             // Find PDF character closest to this element by left position
@@ -912,15 +1023,26 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
             if (bestMatch != null && bestDist < 5.0) { // Tolerance: 5 pt
               buf.write(bestMatch.char);
+              elems.add((char: bestMatch.char, clusterId: elem.clusterId));
               _log(debugLogFile, '[BlockAnalysis] block[$i] elem[$elemIdx] text="${bestMatch.char}" (dist=${bestDist.toStringAsFixed(1)})');
               // Remove matched char so we don't reuse it
               pdfCharRects.removeWhere((p) => p.index == bestMatch!.index);
             } else {
+              // No OCR char matched this glyph. A '?' placeholder keeps the
+              // glyph visible in the token so MoveParser can fuzzy-resolve
+              // it by legality (e.g. "?xf4" → unique Qxf4) and cast a
+              // cluster vote for it; once its shape cluster is labeled the
+              // '?' is replaced by the real piece letter at token-build
+              // time. An empty char hid the glyph entirely: the token
+              // became "xf4", unresolvable and unable to vote.
+              buf.write('?');
+              elems.add((char: '?', clusterId: elem.clusterId));
               _log(debugLogFile, '[BlockAnalysis] block[$i] elem[$elemIdx] text=? (no match, bestDist=${bestDist.toStringAsFixed(1)})');
             }
           }
         }
         assembled = buf.toString();
+        blockElems = elems;
         _log(
           debugLogFile,
           '[BlockAnalysis] block[$i] assembled (from elements) → "$assembled"',
@@ -987,7 +1109,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       }
 
       _log(debugLogFile, '[BlockString] block[$i] → "$assembled"');
-      if (assembled.isEmpty) continue;
+      // Keep empty assemblies when they carry clustered glyphs: a later
+      // cluster label can still recover their text at token-build time.
+      if (assembled.isEmpty && blockElems.every((e) => e.clusterId == null)) {
+        continue;
+      }
+
+      // Every assembled block feeds MoveParser as one pre-built token: move
+      // numbers ("14."), moves ("23.Nxf7!"), results and prose alike — the
+      // parser's own tokenisation of the OCR text layer is bypassed entirely
+      // for scanned books (prose tokens are skipped by the parser as usual).
+      cvBlocks.add((text: assembled, bounds: blockBounds, elements: blockElems));
 
       // Strip move-number prefix and trailing annotations, then test SAN.
       var text = assembled.trim();
@@ -1014,6 +1146,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       figurines: allFigurines,
       blobs: allBlobs,
       parsedElements: allParsedElements,
+      cvBlocks: cvBlocks,
     );
   }
 

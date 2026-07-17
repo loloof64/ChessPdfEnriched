@@ -56,6 +56,20 @@ class DetectedFigurine {
   final double confidence;
 }
 
+/// One element of an assembled CV block: the fallback character (classifier
+/// piece letter or OCR text char; empty when neither resolved anything) and
+/// the book-level shape-cluster id assigned by GlyphClusterer (null when
+/// clustering was not run). A confidently labeled cluster overrides [char]
+/// at token-build time in MoveParser.
+typedef CvElement = ({String char, int? clusterId});
+
+/// One word block assembled by the CV pipeline: the reconstructed text
+/// (figurine piece letters + OCR text chars, e.g. "23.Nxf7!"), the block's
+/// bounds, and the per-glyph elements the text was assembled from. Feeds
+/// MoveParser as the token stream on scanned books, replacing tokenisation
+/// of the raw OCR text layer.
+typedef CvBlock = ({String text, MoveBounds bounds, List<CvElement> elements});
+
 /// Bounding box of a move token in PDF page coordinates.
 /// Origin is bottom-left; y increases upward (PDF convention).
 class MoveBounds {

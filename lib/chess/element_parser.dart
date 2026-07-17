@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'figurine_classifier.dart';
 import 'figurine_detector.dart';
+import 'glyph_clusterer.dart';
 import 'hog_extractor.dart';
 import 'models.dart';
 
@@ -15,6 +16,7 @@ class ParsedElement {
     required this.bounds,
     required this.type, // 'figurine' or 'text'
     required this.confidence,
+    this.clusterId,
   });
 
   /// Parsed character(s) (e.g. 'K', 'f', '3').
@@ -28,6 +30,10 @@ class ParsedElement {
 
   /// Classification confidence (0.0–1.0).
   final double confidence;
+
+  /// Book-level shape-cluster id assigned by [GlyphClusterer], or null when
+  /// clustering was not run for this element.
+  final int? clusterId;
 }
 
 /// Parses elements within a word block using element-by-element classification.
@@ -71,6 +77,10 @@ class ElementParser {
     /// of going through debugPrint — terminal/logcat output gets truncated
     /// or drops lines under heavy volume, a file never does.
     String? debugLogFile,
+    /// Book-level glyph clusterer: when set, every element crop is assigned
+    /// a shape-cluster id (see [GlyphClusterer]) carried in
+    /// [ParsedElement.clusterId].
+    GlyphClusterer? clusterer,
   }) async {
     // Step 1: Prefer CCL blob bounds; fall back to column-projection.
     List<MoveBounds> elementBounds;
@@ -124,6 +134,25 @@ class ElementParser {
       // argmax lands on NotAFigurine.
       final figResult = figurineClassifier.classifyWithConfidence(features);
 
+      int? clusterId;
+      if (clusterer != null) {
+        // Clustering uses its own bilinear supersampled crop: the classifier
+        // crop above is nearest-neighbour sampled, and at ~30 px glyph height
+        // a sub-pixel shift of the source box re-jitters the whole 32×32 grid
+        // — enough to push identical glyphs below the similarity threshold.
+        final smooth = _cropBilinear32(
+          rendered.gray,
+          rendered.width,
+          rendered.height,
+          elemBounds,
+          pageHeight,
+          renderScale,
+        );
+        final cropAspect = crop.ph > 0 ? crop.pw / crop.ph : 1.0;
+        final f = GlyphClusterer.featuresFromCrop32(smooth, cropAspect);
+        clusterId = clusterer.assign(f.features, f.aspect);
+      }
+
       if (debugCropDir != null) {
         final label = figResult != null
             ? '${figResult.$1}_${(figResult.$2 * 100).round()}pct'
@@ -146,6 +175,7 @@ class ElementParser {
             bounds: elemBounds,
             type: 'figurine',
             confidence: conf,
+            clusterId: clusterId,
           ),
         );
         _log(
@@ -161,6 +191,7 @@ class ElementParser {
             bounds: elemBounds,
             type: 'text',
             confidence: 0.0,
+            clusterId: clusterId,
           ),
         );
         _log(debugLogFile, '[ElementParser]     → TEXT (NotAFigurine)');
@@ -422,5 +453,56 @@ class ElementParser {
       }
     }
     return (pixels: out, pw: pw, ph: ph);
+  }
+
+  /// Smooth 32×32 crop of [bounds] for glyph clustering: each output pixel
+  /// averages a 2×2 grid of bilinear samples, so sub-pixel shifts of the
+  /// source box produce nearly identical crops (the nearest-neighbour crop
+  /// of [_cropAndResizeBlob] re-jitters the whole grid on a 1-px shift —
+  /// kept as-is because the TFLite classifier was calibrated on it).
+  static Float32List _cropBilinear32(
+    Float32List gray,
+    int imgW,
+    int imgH,
+    MoveBounds bounds,
+    double pageHeight,
+    double scale,
+  ) {
+    final fx0 = bounds.left * scale;
+    final fy0 = (pageHeight - bounds.top) * scale;
+    final fw = (bounds.right - bounds.left) * scale;
+    final fh = (bounds.top - bounds.bottom) * scale;
+
+    double sample(double sx, double sy) {
+      final xa = sx.floor();
+      final ya = sy.floor();
+      final tx = sx - xa;
+      final ty = sy - ya;
+      final x0 = xa.clamp(0, imgW - 1);
+      final x1 = (xa + 1).clamp(0, imgW - 1);
+      final y0 = ya.clamp(0, imgH - 1);
+      final y1 = (ya + 1).clamp(0, imgH - 1);
+      return (gray[y0 * imgW + x0] * (1 - tx) + gray[y0 * imgW + x1] * tx) *
+              (1 - ty) +
+          (gray[y1 * imgW + x0] * (1 - tx) + gray[y1 * imgW + x1] * tx) * ty;
+    }
+
+    const size = 32;
+    final out = Float32List(size * size);
+    for (int dy = 0; dy < size; dy++) {
+      for (int dx = 0; dx < size; dx++) {
+        double acc = 0;
+        for (int sub = 0; sub < 4; sub++) {
+          final ox = (sub & 1) == 0 ? 0.25 : 0.75;
+          final oy = (sub & 2) == 0 ? 0.25 : 0.75;
+          acc += sample(
+            fx0 + (dx + ox) * fw / size - 0.5,
+            fy0 + (dy + oy) * fh / size - 0.5,
+          );
+        }
+        out[dy * size + dx] = acc / 4;
+      }
+    }
+    return out;
   }
 }

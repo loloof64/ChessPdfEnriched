@@ -125,8 +125,9 @@ class MoveParser {
   static dc.Move? _resolveMove(
     String token,
     dc.Position pos,
-    Map<String, String>? fontMap,
-  ) {
+    Map<String, String>? fontMap, {
+    bool lenientPieceLetters = false,
+  }) {
     if (token.isEmpty) return null;
 
     // 1. Apply learnt font mapping to the leading character.
@@ -141,42 +142,57 @@ class MoveParser {
     final direct = _parseSan(pos, remapped);
     if (direct != null) return direct;
 
-    // 3. Fuzzy piece substitution.
-    if (remapped.isEmpty) return null;
-    final first = remapped[0];
-    final rest = remapped.substring(1);
-
-    // 3a. Non-standard leading character (not already a SAN piece/file/digit).
-    final isStandardStart = RegExp(r'^[KQRBNa-hO0-9x=+#]').hasMatch(first);
-    if (!isStandardStart && _looksLikeSanSuffix(rest)) {
+    // 3. Fuzzy piece substitution on the ORIGINAL leading character — a
+    //    stale fontMap entry must never block re-resolution, because OCR
+    //    reads the same glyph as different chars on different pages, so a
+    //    learnt mapping can be wrong for this occurrence.
+    //
+    //    The substitution is only accepted when it is UNIQUE: exactly one
+    //    of K/Q/R/B/N yields a legal move. Picking the first legal piece
+    //    silently accepts the wrong move, corrupts the replay position for
+    //    the rest of the segment, and poisons the shared fontMap for the
+    //    rest of the document.
+    final first = token[0];
+    final rest = token.substring(1);
+    // Chars that can never be a mangled piece glyph: pawn files, castling
+    // 'O', and pure SAN syntax. In lenient mode (CV/figurine pipeline) even
+    // a standard piece letter is fuzzy-retried — it may be a misclassified
+    // figurine; in text mode piece letters are trusted as printed.
+    final neverAPieceGlyph = lenientPieceLetters
+        ? RegExp(r'^[a-hOx=+#]$').hasMatch(first)
+        : RegExp(r'^[KQRBNa-hOx=+#]$').hasMatch(first);
+    if (!neverAPieceGlyph && _looksLikeSanSuffix(rest)) {
+      dc.Move? unique;
+      String? uniquePiece;
+      bool ambiguous = false;
       for (final piece in const ['K', 'Q', 'R', 'B', 'N']) {
         final move = _parseSan(pos, piece + rest);
-        if (move != null) {
-          fontMap?[token[0]] = piece; // learn for the rest of the document
-          return move;
+        if (move == null) continue;
+        if (unique != null) {
+          ambiguous = true;
+          break;
         }
+        unique = move;
+        uniquePiece = piece;
       }
-    }
-
-    // 3b. Digit-first token: some fonts encode piece glyphs as digits (e.g. 2→N).
-    //     Only attempt when the rest looks like a capture or file+rank, so we
-    //     don't confuse move numbers ("22.") with piece tokens.
-    if (_isDigit(first) && _looksLikeSanSuffix(rest)) {
-      for (final piece in const ['N', 'B', 'R', 'Q', 'K']) {
-        final move = _parseSan(pos, piece + rest);
-        if (move != null) {
-          fontMap?[token[0]] = piece;
-          return move;
+      if (!ambiguous && unique != null) {
+        // Learn the mapping only for non-SAN chars — remapping a genuine
+        // K/Q/R/B/N letter would rewrite correct tokens document-wide.
+        // '?' is excluded too: it is the CV placeholder for ANY glyph that
+        // matched no OCR char, not a stable font character.
+        if (first != '?' && !RegExp(r'^[KQRBN]$').hasMatch(first)) {
+          fontMap?[first] = uniquePiece!;
         }
+        return unique;
       }
+      // Ambiguous: several pieces are legal — do NOT fall through to the
+      // pattern matcher, it would pick an arbitrary reading.
+      if (ambiguous) return null;
     }
 
     // 4. Legality-constrained matching: generate all legal moves and try to
     // match the token against them when strict SAN parsing fails.
-    final legalMove = _matchTokenToLegalMove(remapped, pos);
-    if (legalMove != null) return legalMove;
-
-    return null;
+    return _matchTokenToLegalMove(remapped, pos);
   }
 
   // --------------------------------------------------------------------------
@@ -399,6 +415,22 @@ class MoveParser {
     Map<String, String>? fontMap,
     NotationMode notationMode = NotationMode.textSan,
     List<DetectedFigurine>? detectedFigurines,
+    /// CV-assembled word blocks (piece letters + OCR text, with bounds).
+    /// When provided, each segment's token stream is built from these blocks
+    /// instead of tokenising [rawText] — on scanned books the raw text layer
+    /// is OCR noise (piece glyphs read as "&", "W", "2"…) while the CV
+    /// assembly carries the real piece letters.
+    List<CvBlock>? cvBlocks,
+    /// Book-level glyph-cluster label lookup (clusterId → piece letter, or
+    /// null when the cluster is not confidently labeled). When a CV block
+    /// element belongs to a labeled cluster, the label overrides the
+    /// element's fallback char at token-build time.
+    String? Function(int clusterId)? clusterLabel,
+    /// Legality-vote sink: called for each move resolved in an *anchored*
+    /// segment (exactly known position) whose piece letter is uniquely
+    /// determined by legality, with the shape-cluster id of the glyph that
+    /// acted as the piece. See GlyphClusterer.
+    void Function(int clusterId, String piece, int tokenIndex)? onPieceVote,
     /// When set, diagnostic lines are appended straight to this file instead
     /// of going through debugPrint — terminal/logcat output gets truncated
     /// or drops lines under heavy volume, a file never does.
@@ -454,6 +486,9 @@ class MoveParser {
         forceSuspectedDiagram: topOfPageBoardDetected,
         notationMode: notationMode,
         detectedFigurines: detectedFigurines,
+        cvBlocks: cvBlocks,
+        clusterLabel: clusterLabel,
+        onPieceVote: onPieceVote,
         debugLogFile: debugLogFile,
       );
       return [maybeMarkIntermediate(a, 0)];
@@ -462,6 +497,12 @@ class MoveParser {
     // Multiple board-confirmed segments.
     // splitPoints[0] = 0 (page start), splitPoints.last = fullText.length.
     final splitPoints = [0, ...diagramSplits, fullText.length];
+    final segCvBlocks = _splitCvBlocksByY(
+      cvBlocks,
+      diagramSplits,
+      charRects,
+      segmentCount: splitPoints.length - 1,
+    );
     final segments = [
       for (int i = 0; i < splitPoints.length - 1; i++)
         maybeMarkIntermediate(
@@ -480,6 +521,13 @@ class MoveParser {
             forceSuspectedDiagram: i == 0 ? topOfPageBoardDetected : true,
             notationMode: notationMode,
             detectedFigurines: detectedFigurines,
+            cvBlocks: segCvBlocks?[i],
+            clusterLabel: clusterLabel,
+            // Token indices restart at 0 in every segment; offset them per
+            // segment so vote source ids stay unique within the page.
+            onPieceVote: onPieceVote == null
+                ? null
+                : (c, p, t) => onPieceVote(c, p, (i << 16) | t),
             debugLogFile: debugLogFile,
           ),
           i,
@@ -530,6 +578,49 @@ class MoveParser {
     return rects.sublist(start, end.clamp(0, rects.length));
   }
 
+  /// Splits [cvBlocks] into one list per page segment.
+  ///
+  /// Diagram splits are char indices into the raw text; CV blocks only carry
+  /// bounds. Each split's Y coordinate (the first text char after a board
+  /// diagram) partitions the page vertically: a block whose Y-centre lies at
+  /// or below that line belongs to the following segment. PDF coordinates
+  /// have Y increasing upward, so "below" means a smaller Y value.
+  static List<List<CvBlock>>? _splitCvBlocksByY(
+    List<CvBlock>? cvBlocks,
+    List<int> diagramSplits,
+    List<PdfRect> charRects, {
+    required int segmentCount,
+  }) {
+    if (cvBlocks == null) return null;
+
+    // Y threshold per split = centre of the first non-empty char rect at or
+    // after the split index. A missing rect disables that split boundary.
+    final thresholds = <double>[];
+    for (final split in diagramSplits) {
+      double? y;
+      for (int j = split; j < charRects.length; j++) {
+        final r = charRects[j];
+        if (r.isNotEmpty) {
+          y = (r.top + r.bottom) / 2;
+          break;
+        }
+      }
+      thresholds.add(y ?? double.negativeInfinity);
+    }
+
+    const halfLineTol = 6.0; // pt — first line of the segment counts as inside
+    final result = List.generate(segmentCount, (_) => <CvBlock>[]);
+    for (final block in cvBlocks) {
+      final midY = (block.bounds.top + block.bounds.bottom) / 2;
+      int seg = 0;
+      for (int k = 0; k < thresholds.length; k++) {
+        if (midY < thresholds[k] + halfLineTol) seg = k + 1;
+      }
+      result[seg.clamp(0, segmentCount - 1)].add(block);
+    }
+    return result;
+  }
+
   /// Parse one game segment ([text] + its [charRects] slice) into a [PageAnalysis].
   static PageAnalysis _parseSegment({
     required String text,
@@ -544,6 +635,9 @@ class MoveParser {
     bool forceSuspectedDiagram = false,
     NotationMode notationMode = NotationMode.textSan,
     List<DetectedFigurine>? detectedFigurines,
+    List<CvBlock>? cvBlocks,
+    String? Function(int clusterId)? clusterLabel,
+    void Function(int clusterId, String piece, int tokenIndex)? onPieceVote,
     String? debugLogFile,
   }) {
     // ------------------------------------------------------------------
@@ -606,22 +700,37 @@ class MoveParser {
     final figurines = detectedFigurines ?? const <DetectedFigurine>[];
 
     // ------------------------------------------------------------------
-    // 4. Tokenise, skipping comments and variations.
+    // 4. Build the token stream.
+    //
+    // CV path (scanned books): one token per CV-assembled word block — the
+    // piece letters were resolved on clean blob crops, the text parts from
+    // the OCR layer. The raw text layer is NOT tokenised at all: its piece
+    // chars are OCR noise ("&", "W", "2"…) that poisons resolution.
+    //
+    // Text path: tokenise the raw text, then spatially merge standalone
+    // figurine tokens with adjacent move text ("♘" + "f3" → "Nf3").
 
-    var tokens = _tokenise(text);
-
-    // ------------------------------------------------------------------
-    // 4b. Spatially merge standalone figurine tokens with adjacent move text.
-    //     e.g. "♘" token + "f3" token → "Nf3" token (if spatially adjacent).
-
-    if (figurines.isNotEmpty) {
-      tokens = _mergeFigurineTokens(tokens, charRects, figurines);
+    List<_Token> tokens;
+    if (cvBlocks != null && cvBlocks.isNotEmpty) {
+      tokens = [
+        for (final b in cvBlocks) _buildCvToken(b, clusterLabel),
+      ];
+      _log(
+        debugLogFile,
+        '[MoveParser] token stream from ${tokens.length} CV block(s)',
+      );
+    } else {
+      tokens = _tokenise(text);
+      if (figurines.isNotEmpty) {
+        tokens = _mergeFigurineTokens(tokens, charRects, figurines);
+      }
     }
 
     // ------------------------------------------------------------------
     // 4c. Correct fullmove number AND side to move from the first move-number
     // token. Board detection always emits fullmove=1 and side=white; the dots
     // ("." vs "...") tell us which side actually moves first.
+    int? firstMoveNumberSeen;
     if (startFen.isNotEmpty) {
       final pureNumRxEarly = RegExp(r'^(\d+)(\.+)$');
       final combinedRxEarly = RegExp(r'^(\d+)(\.{1,3})[^.]');
@@ -631,6 +740,7 @@ class MoveParser {
         if (pm != null) {
           final num = int.tryParse(pm.group(1)!);
           if (num != null) {
+            firstMoveNumberSeen = num;
             final dots = pm.group(2) ?? '.';
             final firstMoveIsBlack = dots.length > 1;
             final parts = startFen.split(' ');
@@ -661,6 +771,20 @@ class MoveParser {
 
     // ------------------------------------------------------------------
     // 5. Parse chess moves.
+
+    // A segment is "anchored" when its starting position is exactly known:
+    // user-entered or board-detected FEN, FEN found in the text, or a game
+    // that genuinely starts at move 1 from the standard position. Only
+    // anchored segments cast glyph-cluster legality votes — an inherited or
+    // guessed position would poison the vote pool.
+    final anchoredForVotes = fenSource == FenSource.userProvided ||
+        fenSource == FenSource.detectedInText ||
+        (fenSource == FenSource.standard && firstMoveNumberSeen == 1);
+
+    // CV/figurine pipeline: even a standard piece letter may be a
+    // misclassified figurine, so fuzzy resolution retries all pieces;
+    // in text mode printed piece letters are trusted.
+    final lenient = notationMode == NotationMode.figurineFan;
 
     final moves = <CachedMove>[];
     int skippedTokens = 0;
@@ -711,7 +835,7 @@ class MoveParser {
           expectBlack = targetIsBlack;
         }
         // Try to resolve the move at the current position.
-        var move = _resolveMove(normalised, position, fontMap);
+        var move = _resolveMove(normalised, position, fontMap, lenientPieceLetters: lenient);
         // If implausible and resolution failed, search the checkpoint tree for a
         // saved position that matches this move number and side, then backtrack.
         if (move == null && !isPlausible) {
@@ -730,13 +854,17 @@ class MoveParser {
             checkpoints.removeRange(idx, checkpoints.length);
             currentMoveNum = num;
             expectBlack = targetIsBlack;
-            move = _resolveMove(normalised, position, fontMap);
+            move = _resolveMove(normalised, position, fontMap, lenientPieceLetters: lenient);
             _log(
               debugLogFile,
               '[MoveParser] backtrack to move $num ${targetIsBlack ? "b" : "w"} for "$raw": ${move != null ? "ok" : "still failed"}',
             );
           }
         }
+        // Whether the move was resolved from [normalised] as-is (directly or
+        // after backtracking) — the only cases where the piece glyph sits at
+        // a known char offset, so the only cases eligible for cluster votes.
+        final resolvedViaMovePart = move != null;
         // Dotted-piece fallback: "2.d6?" has num=2 (implausible) but the "2"
         // is actually a figurine piece glyph. Re-try as piece+rest at the
         // current (unchanged) position/moveNum.
@@ -745,7 +873,7 @@ class MoveParser {
           final pieceAndRest = num.toString() + movePart;
           final (pm, wm) = _applyFontMapToFirst(pieceAndRest, fontMap);
           final pieceNorm = _normaliseToken(pm, skipPieceTranslation: wm, notationMode: notationMode);
-          move = _resolveMove(pieceNorm, position, fontMap);
+          move = _resolveMove(pieceNorm, position, fontMap, lenientPieceLetters: lenient);
           if (move != null) {
             isPlausible = true; // use current currentMoveNum/expectBlack
             _log(debugLogFile, '[MoveParser] dotted-piece "$raw" → "$pieceNorm"');
@@ -761,7 +889,7 @@ class MoveParser {
             final joined = movePart + nextText;
             final (jm, jw) = _applyFontMapToFirst(joined, fontMap);
             final joinedNorm = _normaliseToken(jm, skipPieceTranslation: jw, notationMode: notationMode);
-            final joinedMove = _resolveMove(joinedNorm, position, fontMap);
+            final joinedMove = _resolveMove(joinedNorm, position, fontMap, lenientPieceLetters: lenient);
             if (joinedMove != null) {
               move = joinedMove;
               ti++; // consume the next token too
@@ -782,11 +910,25 @@ class MoveParser {
             fen: position.fen,
             moveCount: moves.length,
           ));
+          if (resolvedViaMovePart) {
+            _maybeVote(
+              tok: tok,
+              pieceCharOffset:
+                  combined.group(1)!.length + combined.group(2)!.length,
+              normalisedMove: normalised,
+              move: move,
+              position: position,
+              anchored: anchoredForVotes,
+              tokenIndex: ti,
+              onPieceVote: onPieceVote,
+            );
+          }
           final fenBefore = position.fen;
           final (newPosition, san) = position.makeSan(move);
-          final combinedBoundsStart = _startsWithFigurine(tok.start, charRects, figurines)
-              ? tok.start + 1
-              : tok.start;
+          final combinedBoundsStart =
+              tok.start >= 0 && _startsWithFigurine(tok.start, charRects, figurines)
+                  ? tok.start + 1
+                  : tok.start;
           moves.add(CachedMove(
             moveNumber: moveNum,
             isBlack: expectBlack,
@@ -794,7 +936,8 @@ class MoveParser {
             rawToken: raw,
             fenBefore: fenBefore,
             fenAfter: newPosition.fen,
-            bounds: _computeBounds(charRects, combinedBoundsStart, tok.end),
+            bounds: tok.bounds ??
+                _computeBounds(charRects, combinedBoundsStart, tok.end),
           ));
           position = newPosition;
           expectBlack = !expectBlack;
@@ -809,7 +952,7 @@ class MoveParser {
 
       final (mapped2, wasMapped2) = _applyFontMapToFirst(raw, fontMap);
       final normalised = _normaliseToken(mapped2, skipPieceTranslation: wasMapped2, notationMode: notationMode);
-      final move = _resolveMove(normalised, position, fontMap);
+      final move = _resolveMove(normalised, position, fontMap, lenientPieceLetters: lenient);
       if (move == null) {
         skippedTokens++;
         continue;
@@ -821,13 +964,24 @@ class MoveParser {
         fen: position.fen,
         moveCount: moves.length,
       ));
+      _maybeVote(
+        tok: tok,
+        pieceCharOffset: 0,
+        normalisedMove: normalised,
+        move: move,
+        position: position,
+        anchored: anchoredForVotes,
+        tokenIndex: ti,
+        onPieceVote: onPieceVote,
+      );
       final fenBefore = position.fen;
       final (newPosition, san) = position.makeSan(move);
       // Skip figurine prefix char when computing bounds so the overlay
       // highlights only the square/file part (e.g. "f3" not "♘f3").
-      final boundsStart = _startsWithFigurine(tok.start, charRects, figurines)
-          ? tok.start + 1
-          : tok.start;
+      final boundsStart =
+          tok.start >= 0 && _startsWithFigurine(tok.start, charRects, figurines)
+              ? tok.start + 1
+              : tok.start;
       moves.add(
         CachedMove(
           moveNumber: currentMoveNum,
@@ -836,7 +990,7 @@ class MoveParser {
           rawToken: raw,
           fenBefore: fenBefore,
           fenAfter: newPosition.fen,
-          bounds: _computeBounds(charRects, boundsStart, tok.end),
+          bounds: tok.bounds ?? _computeBounds(charRects, boundsStart, tok.end),
         ),
       );
 
@@ -862,6 +1016,91 @@ class MoveParser {
 
   // --------------------------------------------------------------------------
   // Helpers
+
+  /// Builds one parser token from a CV-assembled block, applying confident
+  /// glyph-cluster labels over each element's fallback char and keeping a
+  /// code-unit → element-index map so votes can locate the glyph that acted
+  /// as the piece letter. Elements with an empty fallback char (glyph
+  /// matched no PDF text char) contribute nothing unless their cluster is
+  /// labeled — in which case the piece letter is recovered from shape alone.
+  static _Token _buildCvToken(
+    CvBlock block,
+    String? Function(int clusterId)? clusterLabel,
+  ) {
+    if (block.elements.isEmpty) {
+      return _Token(block.text, -1, -1, bounds: block.bounds);
+    }
+    final buf = StringBuffer();
+    final elemForChar = <int>[];
+    for (int i = 0; i < block.elements.length; i++) {
+      final e = block.elements[i];
+      var s = e.char;
+      final clusterId = e.clusterId;
+      if (clusterId != null && clusterLabel != null) {
+        final label = clusterLabel(clusterId);
+        if (label != null) s = label;
+      }
+      buf.write(s);
+      for (int k = 0; k < s.length; k++) {
+        elemForChar.add(i);
+      }
+    }
+    return _Token(
+      buf.toString(),
+      -1,
+      -1,
+      bounds: block.bounds,
+      elements: block.elements,
+      elemForChar: elemForChar,
+    );
+  }
+
+  /// Casts a glyph-cluster legality vote for an accepted move, when all of
+  /// the following hold:
+  ///   - the segment is anchored (exactly known starting position);
+  ///   - the token came from a CV block and the char at [pieceCharOffset]
+  ///     (the leading char of the move part) maps to a clustered glyph;
+  ///   - the accepted move's SAN starts with a piece letter (not a pawn
+  ///     move or castling);
+  ///   - legality is *unique*: exactly one of K/Q/R/B/N parses with the
+  ///     remainder of the token, and it matches the accepted move.
+  /// The uniqueness requirement is what makes votes independent from the
+  /// (possibly wrong) char the glyph was assembled as — the position alone
+  /// determines the piece.
+  static void _maybeVote({
+    required _Token tok,
+    required int pieceCharOffset,
+    required String normalisedMove,
+    required dc.Move move,
+    required dc.Position position,
+    required bool anchored,
+    required int tokenIndex,
+    required void Function(int clusterId, String piece, int tokenIndex)?
+        onPieceVote,
+  }) {
+    if (!anchored || onPieceVote == null) return;
+    final elements = tok.elements;
+    final elemForChar = tok.elemForChar;
+    if (elements == null || elemForChar == null) return;
+    if (pieceCharOffset < 0 || pieceCharOffset >= elemForChar.length) return;
+    final clusterId = elements[elemForChar[pieceCharOffset]].clusterId;
+    if (clusterId == null) return;
+
+    final san = position.makeSan(move).$2;
+    if (san.isEmpty || !'KQRBN'.contains(san[0])) return;
+    if (normalisedMove.length < 2) return;
+
+    final rest = normalisedMove.substring(1);
+    String? unique;
+    for (final p in const ['K', 'Q', 'R', 'B', 'N']) {
+      if (_parseSan(position, p + rest) != null) {
+        if (unique != null) return; // ambiguous — no vote
+        unique = p;
+      }
+    }
+    if (unique == null || unique != san[0]) return;
+    onPieceVote(clusterId, unique, tokenIndex);
+  }
 
   static List<_Token> _tokenise(String text) {
     final result = <_Token>[];
@@ -1081,9 +1320,11 @@ class MoveParser {
 
     if (tokenSquares.isEmpty) return null;
 
+    // Collect every distinct legal move the token could denote; accept only
+    // when the reading is unique — returning the first hit would silently
+    // pick an arbitrary piece and corrupt the replay position.
+    final candidates = <dc.Move>{};
     try {
-      // For each destination square found in token, try all piece + destination
-      // combinations that could be legal moves.
       for (final destSquare in tokenSquares) {
         // Try: piece + dest, capture + dest, just dest, etc.
         final patterns = [
@@ -1112,7 +1353,7 @@ class MoveParser {
             if (tokenPiece != null && sanPiece != null && tokenPiece != sanPiece) {
               continue;
             }
-            return move;
+            candidates.add(move);
           }
         }
       }
@@ -1120,7 +1361,7 @@ class MoveParser {
       return null;
     }
 
-    return null;
+    return candidates.length == 1 ? candidates.first : null;
   }
 
   static MoveBounds? _computeBounds(
@@ -1147,10 +1388,30 @@ class MoveParser {
 }
 
 class _Token {
-  const _Token(this.text, this.start, this.end);
+  const _Token(
+    this.text,
+    this.start,
+    this.end, {
+    this.bounds,
+    this.elements,
+    this.elemForChar,
+  });
   final String text;
   final int start;
   final int end;
+
+  /// Set for tokens built from CV-assembled blocks: the block's own bounds,
+  /// used directly for [CachedMove.bounds] instead of charRect spans (the
+  /// char indices [start]/[end] are meaningless for CV tokens and set to -1).
+  final MoveBounds? bounds;
+
+  /// The CV block's per-glyph elements this token was assembled from
+  /// (null for tokens produced by raw-text tokenisation).
+  final List<CvElement>? elements;
+
+  /// Maps each UTF-16 code unit of [text] to its index in [elements] —
+  /// used to find the glyph cluster behind the char at a given offset.
+  final List<int>? elemForChar;
 }
 
 /// One node in the FEN tree built during move parsing.

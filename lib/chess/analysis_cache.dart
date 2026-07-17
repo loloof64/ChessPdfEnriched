@@ -16,7 +16,7 @@ class AnalysisCache {
   static const _dirName = 'chess_pdf_cache';
 
   // Increment whenever the parser produces different output for the same input.
-  static const _cacheVersion = 3;
+  static const _cacheVersion = 4;
 
   static Future<Directory> _cacheDir() async {
     final docs = await getApplicationDocumentsDirectory();
