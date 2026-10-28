@@ -1,0 +1,30 @@
+[project]
+name = "chess-pipeline"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "torch",
+    "torchvision",
+    "paddlepaddle-gpu",
+    "paddleocr[doc-parser]",
+    "chess",
+]
+
+[tool.uv]
+# Both frameworks must share the CUDA 12.6 libraries, otherwise torch crashes on NCCL symbols.
+index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+paddlepaddle-gpu = { index = "paddle-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "paddle-cu126"
+url = "https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+explicit = true
