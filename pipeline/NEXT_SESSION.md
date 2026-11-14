@@ -59,3 +59,16 @@
 - `issues(board)` : drapeaux python-chess (rois, pions en 1re/8e rangée, >16 pièces...) + pièces promues <= pions manquants.
 - Sur le jeu de test : ne signale que 1 lecture fautive sur 5 (004 nettoyé : deux rois blancs). Aucun faux positif.
   Les fous noirs fantômes sont légaux (peu de pions => fous en plus plausibles) : il faut le classifieur de cases.
+
+## Étape 4.5 : fine-tuning sur données synthétiques (`synth.py`, `finetune.py`, fait)
+- `synth.py` : planches synthétiques = fonds de bois du livre (cases vides de img-004/005) ou planches chessground,
+  40 jeux de pièces chessground (tous types), surlignages et flèches aléatoires, flou de scan, jitter de recadrage,
+  + glyphes réels du livre (pions/rois de img-004/005, 19 tuiles). `finetune.py N` : Adam 3e-5, batch 8 (OOM à 32),
+  ~3000 pas ≈ 10 min sur la 3060, écrit `work/fenify-ft.pt` (ignoré par git).
+- Résultats sur le jeu de test (fantômes/manquantes/fausses) : brut (7,0,1) ; nettoyé (6,0,0) ;
+  fine-tuné sans glyphes réels (0,1,12) (pions lus comme autres pièces : jeux de pièces trop différents) ;
+  **fine-tuné avec glyphes réels (0,0,1)** : seul g4 de img-008 (pion noir lu dame), non signalé par le filtre.
+- Limites : les 4 diagrammes de test (006-009) sont du même livre et contiennent seulement pions et rois ;
+  fous/cavaliers/tours/dames de CE livre ne sont pas testés (ni vus à l'entraînement). Le gain réel hors livre est inconnu.
+  Fonds pris sur 004/005 uniquement ; `neutralize.py` n'est plus nécessaire avec ce modèle (non mesuré ensemble).
+- À faire : brancher `fenify-ft.pt` dans `read_fen.py`, tester sur d'autres livres/diagrammes avec toutes les pièces.
