@@ -17,6 +17,16 @@
 - `PartiesFischer.pdf` p3 : diagramme noir et blanc scanné, 64 cases justes (FEN
   `2r1r1k1/pb5p/1pn1p1p1/1N3pN1/3q1n1P/P3Q3/1PB2PP1/2R1R1K1`).
 
+## Étape 1 : essai `neutralize.py` (surlignages/flèches)
+- Principe : couleur claire/foncée de référence = médiane par parité de case ; pixels saturés, assez lumineux
+  et loin de la couleur attendue remplacés par elle (+ franges anti-crénelage). Test : `work/try_neutralize.py`.
+- Un premier essai sans critère de luminosité détruisait les pièces (reflets crème/bruns) : ne pas dilater librement.
+- Résultat sur les 6 diagrammes (img-004..009) : 005, 006, 007, 009 nettement meilleurs (fantômes disparus ;
+  006 et 009 sans erreur apparente), mais 004 et 008 gardent/ajoutent des fantômes (004 : `K` en h6 et `b` en c1 ;
+  008 : `b` en b4). Cause probable : pointes de flèche rouge sombre et recadrage décalé. Pas de jeu de test
+  de référence encore : erreurs jugées à l'œil.
+- Piste suivante : classifieur de case ou vérifier le recadrage avant de resserrer les seuils.
+
 ## À faire, par priorité
 1. Neutraliser surlignages et flèches avant l'inférence. Piège : le rouge des surlignages est proche du
    marron des cases foncées. Piste : estimer pour chaque case sa couleur de fond (claire ou foncée du
