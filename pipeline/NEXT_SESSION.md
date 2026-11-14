@@ -25,7 +25,13 @@
   brut = 7 fantômes + 1 pièce fausse ; nettoyé = 6 fantômes + 0 fausse. Gain réel faible.
   Par diagramme (fantômes brut -> nettoyé) : 004 3->4, 005 1->0, 006 0->0, 007 2->1, 008 1->1 (+1 fausse -> 0), 009 0->0.
   (L'affirmation précédente « 006 et 009 améliorés » était fausse : ils étaient déjà justes en brut.)
-- 004 est pire après nettoyage. Causes à vérifier : pointes de flèche rouge sombre, recadrage décalé.
+- Diagnostic des fantômes restants (clean) : tous sont des fous noirs (classe 9) sur des cases foncées VIDES et
+  SANS surlignage (004 : c1, c7, f8 ; 007 : c1 ; 008 : b4), plus un roi blanc à confiance 0,5 en h6 (004).
+  Ce n'est donc ni le nettoyage ni le recadrage : c'est une faiblesse du modèle fenify sur cases foncées.
+  Le nettoyage en retire certains (c'est son seul gain) mais en fait apparaître d'autres (004 c1, h6).
+- Conclusion : le nettoyage seul ne suffit pas. Prochaine piste : classifieur de cases fine-tuné (surlignages
+  synthétiques, cases foncées vides en négatifs), ou filtre de plausibilité (fous noirs sur case foncée
+  isolés, un seul roi par camp) pour alimenter la liste « à revoir ».
 - Piste suivante : classifieur de case ou vérifier le recadrage avant de resserrer les seuils.
 
 ## À faire, par priorité
