@@ -72,3 +72,15 @@
   fous/cavaliers/tours/dames de CE livre ne sont pas testés (ni vus à l'entraînement). Le gain réel hors livre est inconnu.
   Fonds pris sur 004/005 uniquement ; `neutralize.py` n'est plus nécessaire avec ce modèle (non mesuré ensemble).
 - À faire : brancher `fenify-ft.pt` dans `read_fen.py`, tester sur d'autres livres/diagrammes avec toutes les pièces.
+
+## Régénérer `work/fenify-ft.pt` (poids ignorés par git, tout est reproductible)
+Depuis `pipeline/`, avec `.venv/bin/python` :
+1. Poids de base `work/fenify-gpu.pt` : release v2023-07-10 de notnil/fenify (voir « État » en haut).
+2. Images des diagrammes de référence dans `work/am1/` (noms `img-004.png`... utilisés par `eval_fen.py` et `synth.py`) :
+   `mkdir -p work/am1 && pdfimages -png ~/Documents/Echecs/Ebooks/DeFabrice/attaque_minorite_1.pdf -f 2 -l 2 work/am1/img`
+   (page 2 ; vérifier que img-004..009 sont bien les 6 diagrammes, sinon ajuster `TRUTH` dans `eval_fen.py`).
+3. Jeux de pièces et planches : dossier `assets/` du package pub `chessground-11.0.0`
+   (`~/.pub-cache/hosted/pub.dev/`, chemin en dur dans `synth.py`) ; `flutter pub get` le recrée si absent.
+4. `.venv/bin/python finetune.py 3000` (~10 min, GPU libre : batch 8, OOM au-dessus) -> `work/fenify-ft.pt`.
+   Les lignes `REAL ...` donnent l'erreur sur les diagrammes réels ; attendu : `(0, 0, 1)` au total.
+Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : numpy, scipy, opencv, pillow.
