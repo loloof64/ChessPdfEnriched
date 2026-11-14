@@ -9,6 +9,7 @@ import torch
 from PIL import Image
 
 from neutralize import neutralize
+from plausibility import issues
 from read_fen import read_board
 
 # Board interior crop proportions: valid for this book only (see NEXT_SESSION.md).
@@ -54,7 +55,7 @@ if __name__ == "__main__":
             read = read_board(model, neutralize(im) if clean else im)
             e = errors(read, truth)
             tot[clean] = [a + b for a, b in zip(tot[clean], e)]
-            row.append(f"{'clean' if clean else 'raw  '} ghost/miss/wrong={e}")
+            row.append(f"{'clean' if clean else 'raw  '} ghost/miss/wrong={e} flagged={issues(read) or '-'}")
         print(*row)
     for clean, e in tot.items():
         print("TOTAL", "clean" if clean else "raw  ", "ghost/miss/wrong =", tuple(e), "of", n_pieces, "pieces")

@@ -54,3 +54,8 @@
 - Laurent : chat en français, code et commentaires en anglais.
 - `PartiesFischer.pdf` est en notation figurine (Laurent le déplace dans `notation_figurine/`).
 - Venv : `pipeline/.venv` (Python 3.13). Lancer avec `.venv/bin/python`.
+
+## Filtre de plausibilité (`plausibility.py`, fait)
+- `issues(board)` : drapeaux python-chess (rois, pions en 1re/8e rangée, >16 pièces...) + pièces promues <= pions manquants.
+- Sur le jeu de test : ne signale que 1 lecture fautive sur 5 (004 nettoyé : deux rois blancs). Aucun faux positif.
+  Les fous noirs fantômes sont légaux (peu de pions => fous en plus plausibles) : il faut le classifieur de cases.
