@@ -21,10 +21,11 @@
 - Principe : couleur claire/foncée de référence = médiane par parité de case ; pixels saturés, assez lumineux
   et loin de la couleur attendue remplacés par elle (+ franges anti-crénelage). Test : `work/try_neutralize.py`.
 - Un premier essai sans critère de luminosité détruisait les pièces (reflets crème/bruns) : ne pas dilater librement.
-- Résultat sur les 6 diagrammes (img-004..009) : 005, 006, 007, 009 nettement meilleurs (fantômes disparus ;
-  006 et 009 sans erreur apparente), mais 004 et 008 gardent/ajoutent des fantômes (004 : `K` en h6 et `b` en c1 ;
-  008 : `b` en b4). Cause probable : pointes de flèche rouge sombre et recadrage décalé. Pas de jeu de test
-  de référence encore : erreurs jugées à l'œil.
+- Mesure (`eval_fen.py`, FEN de référence écrites par Claude, 6 diagrammes, 87 pièces) :
+  brut = 7 fantômes + 1 pièce fausse ; nettoyé = 6 fantômes + 0 fausse. Gain réel faible.
+  Par diagramme (fantômes brut -> nettoyé) : 004 3->4, 005 1->0, 006 0->0, 007 2->1, 008 1->1 (+1 fausse -> 0), 009 0->0.
+  (L'affirmation précédente « 006 et 009 améliorés » était fausse : ils étaient déjà justes en brut.)
+- 004 est pire après nettoyage. Causes à vérifier : pointes de flèche rouge sombre, recadrage décalé.
 - Piste suivante : classifieur de case ou vérifier le recadrage avant de resserrer les seuils.
 
 ## À faire, par priorité
