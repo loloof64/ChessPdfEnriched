@@ -144,6 +144,7 @@ class ReaderPage extends StatefulWidget {
 class _ReaderPageState extends State<ReaderPage> {
   late int page = widget.book.pages.keys.reduce((a, b) => a < b ? a : b);
   String fen = kInitialFEN;
+  Side orientation = Side.white;
   String? selected, label, lastUci;
   late final _pageCtl = TextEditingController(text: '$page');
   Map<String, dynamic>? selectedDiagram;
@@ -352,7 +353,7 @@ class _ReaderPageState extends State<ReaderPage> {
             child: Column(children: [
               StaticChessboard(
                 size: side,
-                orientation: Side.white,
+                orientation: orientation,
                 fen: fen,
                 lastMove: lastMove,
                 shapes: {
@@ -362,6 +363,11 @@ class _ReaderPageState extends State<ReaderPage> {
               ),
               const SizedBox(height: 8),
               Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
+              TextButton.icon(
+                onPressed: () => setState(() => orientation = orientation.opposite),
+                icon: const Icon(Icons.swap_vert),
+                label: const Text("Retourner l'échiquier"),
+              ),
               if (selectedDiagram != null)
                 TextButton.icon(
                   onPressed: () => _editDiagram(selectedDiagram!),
@@ -390,6 +396,7 @@ class DiagramEditor extends StatefulWidget {
 
 class _DiagramEditorState extends State<DiagramEditor> {
   late Map<Square, Piece> pieces = Map.of(readFen(widget.placement));
+  Side orientation = Side.white; // view only: the saved FEN does not depend on it
 
   static const _palette = [Role.king, Role.queen, Role.rook, Role.bishop, Role.knight, Role.pawn];
 
@@ -411,7 +418,7 @@ class _DiagramEditorState extends State<DiagramEditor> {
           Column(mainAxisSize: MainAxisSize.min, children: [
             ChessboardEditor(
               size: 384,
-              orientation: Side.white,
+              orientation: orientation,
               pieces: pieces,
               onDroppedPiece: (origin, dest, piece) => setState(() {
                 if (origin != null) pieces.remove(origin);
@@ -423,6 +430,11 @@ class _DiagramEditorState extends State<DiagramEditor> {
             _paletteRow(Side.white),
             _paletteRow(Side.black),
             const SizedBox(height: 4),
+            TextButton.icon(
+              onPressed: () => setState(() => orientation = orientation.opposite),
+              icon: const Icon(Icons.swap_vert),
+              label: const Text("Retourner l'échiquier"),
+            ),
             const Text('Glisser une pièce sur une case ; hors du plateau pour la supprimer.'),
           ]),
         ]),
