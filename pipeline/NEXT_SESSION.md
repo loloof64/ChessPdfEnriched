@@ -134,3 +134,15 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   dames (7 dont 2 intrus : un `6` et un `b` passés dans le filtre). Total 29 candidats sur 58 (filtre un peu strict).
 - Reste à faire : (1) localiser aussi les figurines des blocs `text` (coups en ligne, plus petits) ; (2) rejeter les lettres
   (intrus) ; (3) étiqueter chaque cluster K/Q/R/B/N par vote de légalité (rejeu depuis le diagramme) ; (4) injecter dans le SAN.
+
+## Figurines dans les tableaux (`figurines.py`, fait pour les blocs `table`)
+- `table_cells` : fenêtre de 40 px à gauche de chaque cellule de coup (pas de composante connexe : trop fragile quand
+  la figurine touche la lettre). `calibrate` : k-means k=10 sur ces fenêtres (K/Q/R/B/N + pions + roques en vrac) ;
+  un humain nomme les 10 clusters UNE fois par livre (`work/fig_names.json`, ex. `["R","","R","N","K","","","","Q","B"]`,
+  planches `work/name*.png` produites au 1er passage). Ensuite `piece_of` donne la lettre, `""` pour les pions/roques.
+- Mesure sur PartiesFischer (8 pages) : p3 = 12 coups sur 12 justes (Qd3 Bb7 Bg5 Rfe1 Re8 Rc8 Rac1 Nd5 Ne4 + pions) ;
+  p1 `Nf6 Nc3` justes ; p2 : `Nc6` juste mais `7 Bd3` lu `d3` (fou manquant, distance de rejet trop serrée pour la classe rare) ;
+  p5 `Rxa7 Ne4 Ra6 Rd8 Rd3 Rxb6` plausibles, non vérifiés.
+- Pièges : zsh ne découpe pas `$args` (utiliser bash -c) ; k-means exige du float64 pour `predict`.
+- À faire : (1) assouplir le rejet (distance) ou le remplacer par une classe « lettre » ; (2) blocs `text` (coups en ligne,
+  variantes) ; (3) rejeu python-chess pour valider/corriger (un `d3` illégal comme pion => fou) ; (4) intégrer dans le format.
