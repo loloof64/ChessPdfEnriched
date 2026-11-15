@@ -410,14 +410,17 @@ class _DiagramEditorState extends State<DiagramEditor> {
       ]);
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) {
+    // board + palette + buttons must fit the window height (title, palette, flip button, hint and actions take ~420 px)
+    final side = (MediaQuery.sizeOf(context).height - 420).clamp(220.0, 384.0);
+    return AlertDialog(
         title: const Text('Corriger le diagramme'),
-        content: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        content: SingleChildScrollView(child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (widget.image != null) Image.memory(widget.image!, width: 260),
           const SizedBox(width: 16),
           Column(mainAxisSize: MainAxisSize.min, children: [
             ChessboardEditor(
-              size: 384,
+              size: side,
               orientation: orientation,
               pieces: pieces,
               onDroppedPiece: (origin, dest, piece) => setState(() {
@@ -437,10 +440,11 @@ class _DiagramEditorState extends State<DiagramEditor> {
             ),
             const Text('Glisser une pièce sur une case ; hors du plateau pour la supprimer.'),
           ]),
-        ]),
+        ])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
           FilledButton(onPressed: () => Navigator.pop(context, writeFen(pieces)), child: const Text('Enregistrer')),
         ],
       );
+  }
 }
