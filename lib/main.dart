@@ -8,9 +8,11 @@ import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Minimal .chessbook reader: text on the left with clickable moves, board on the right.
-/// Book path comes from the CHESSBOOK environment variable (no file picker yet).
-void main() {
-  final path = io.Platform.environment['CHESSBOOK'];
+/// Book path: first program argument, else CHESSBOOK, else the dev sample (no file picker yet).
+void main(List<String> args) {
+  // ponytail: dev default relative to the project root (what an IDE run uses); replace by a file picker
+  const sample = 'pipeline/work/fab/attaque_minorite.chessbook';
+  final path = args.firstOrNull ?? io.Platform.environment['CHESSBOOK'] ?? (io.File(sample).existsSync() ? sample : null);
   runApp(ReaderApp(book: path == null ? null : Book.load(path)));
 }
 
@@ -43,7 +45,7 @@ class ReaderApp extends StatelessWidget {
         title: 'ChessPdfEnriched',
         theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown)),
         home: book == null
-            ? const Scaffold(body: Center(child: Text('Aucun livre : lancer avec CHESSBOOK=chemin.chessbook')))
+            ? const Scaffold(body: Center(child: Text('Aucun livre : passer le chemin du .chessbook en argument ou dans CHESSBOOK')))
             : ReaderPage(book: book!),
       );
 }
