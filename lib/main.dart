@@ -140,14 +140,18 @@ class _ReaderPageState extends State<ReaderPage> {
             for (final b in (data['blocks'] as List)) _block(b as Map<String, dynamic>, moves),
           ]),
         ),
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(children: [
-            StaticChessboard(size: 400, orientation: Side.white, fen: fen),
-            const SizedBox(height: 8),
-            Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
-          ]),
-        ),
+        LayoutBuilder(builder: (context, _) {
+          // board fits the window: at most 400 px, at most the height left under the app bar minus the caption
+          final side = (MediaQuery.sizeOf(context).height - kToolbarHeight - 90).clamp(120.0, 400.0);
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              StaticChessboard(size: side, orientation: Side.white, fen: fen),
+              const SizedBox(height: 8),
+              Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
+            ]),
+          );
+        }),
       ]),
     );
   }
