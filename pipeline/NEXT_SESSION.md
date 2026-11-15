@@ -159,3 +159,19 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   (figurine / lettre / chiffre), (4) aligner avec les mots SAN du texte OCR, (5) rejeu python-chess. Les glyphes
   `~/Documents/Programmation/entrainement_ocr_echecs/glyphs/{digit,lowercase,uppercase,punctuation}` pourraient servir à lire
   les coups sans l'OCR (non testé).
+
+## Figurines en ligne (`inline.py`, spike, rendement faible)
+- Chaîne : lignes (projection horizontale, ligne >12 px) -> mots (écart >9 px à 200 dpi) -> premier blob du mot -> boîte
+  serrée redimensionnée 32x40 -> plus proche exemplaire (mêmes `picks.json` que `figurines.py`, coupure 14) ; puis les
+  symboles parasites de l'OCR (`GARBAGE_MOVE`) sont remplacés dans l'ordre par les lettres trouvées ; si les nombres
+  diffèrent le bloc reste inchangé (REV).
+- Vérifié juste à l'oeil sur 3 lignes de p2 (`Bc4 Be7 Re1 Nxd5 Bb5`, 5/5 sans faux positif) ; sur les 8 pages ~7 blocs de coups
+  récupérés (p2 `7 Bc4 ... 12 Bb5`, p3/p4 `Position after ... Nb5!/Be4!`, p4 `Nd6`, p5 `33 Rc2`, p7 `47 Rg8 Rxa6 ... 48...Bb6`
+  (dernier suspect : `Bb6` plutôt `Rb6`)) ; la grande majorité reste REV.
+- Causes (diag `work/inline_diag.py`) : (a) faux positifs dans le texte sans coups (lettres capitales B/F/W/E... à distance <14 :
+  `Prematurely forceful`, `Fairly typical` donnent 1-3 « figurines ») ; (b) rappel faible dans les blocs de variantes (p4 : 30 trouvées
+  pour 44 symboles OCR ; p6 11/20 ; p7 8/17), car exemplars issus des seuls tableaux (taille/graisse différentes) ;
+  (c) l'OCR omet parfois le symbole (`22 fx e3 23 xg2` : zéro symbole).
+- Pistes : auto-apprentissage des exemplaires en ligne à partir des blocs OK ; rejeter les capitales par le contexte
+  (un coup suit un numéro de coup) ; alignement par mot plutôt que par bloc ; filtre de légalité python-chess (le plus
+  discriminant : `Bb6` illégal si aucun fou ne peut aller en b6).
