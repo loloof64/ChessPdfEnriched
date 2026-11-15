@@ -92,3 +92,10 @@ Depuis `pipeline/`, avec `.venv/bin/python` :
 4. `.venv/bin/python finetune.py 3000` (~10 min, GPU libre : batch 8, OOM au-dessus) -> `work/fenify-ft.pt`.
    Les lignes `REAL ...` donnent l'erreur sur les diagrammes réels ; attendu : `(0, 0, 1)` au total.
 Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : numpy, scipy, opencv, pillow.
+
+## Orientation (`orientation.py`, fait)
+- Heuristique géométrique : écart de rang moyen entre l'armée noire et la blanche (pions inclus). `orient(board)` renvoie
+  (plateau blancs en bas, pivoté ?, sûr ?). Seuil 2,0 ; en dessous : à revoir.
+- Mesure sur 22 diagrammes (18 blancs en bas, 4 noirs en bas) : 20 sûrs et justes ; 1 juste mais « à revoir » (score 1,75) ;
+  1 faux et « à revoir » (finale de pions avancés, score -1,67). Aucune erreur sûre.
+- Pas testé : diagrammes avec coordonnées imprimées (les lire serait fiable) ; indices de texte (« trait aux noirs »).
