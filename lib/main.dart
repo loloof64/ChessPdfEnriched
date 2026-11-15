@@ -360,9 +360,10 @@ class _ReaderPageState extends State<ReaderPage> {
     return [
       for (final r in rects)
         Positioned(
-          left: (r[0] as num) * k,
+          // the located boxes hug the characters: widen them sideways (a fifth of the line height each side) so they match the visible move
+          left: ((r[0] as num) - (r[3] as num) * 0.22) * k,
           top: (r[1] as num) * k,
-          width: (r[2] as num) * k,
+          width: ((r[2] as num) + (r[3] as num) * 0.44) * k,
           height: (r[3] as num) * k,
           child: InkWell(
             onTap: ok ? () => _pick(m) : null,

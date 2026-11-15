@@ -123,6 +123,9 @@ def replay(text, start=None, lang="fr"):
         elif kind == "close" and stack:
             board, before_last, dead = stack.pop()
         elif kind == "move":
+            # a move number glued to the move ('23...Fxd5') is part of what the book prints in bold: include it in the span
+            if idx > 0 and toks[idx - 1][0] == "num" and toks[idx - 1][3] == start:
+                start = toks[idx - 1][2]
             if dead or not (run_ok.get(idx) or plausible_lone(val, pieces)):
                 continue
             mv = None

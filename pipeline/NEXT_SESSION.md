@@ -307,3 +307,5 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   est essayé par lots (`read_boxes`, GPU si dispo) ; la 1re lecture qui EST une position de la partie gagne. Sinon la lecture du meilleur carré est conservée.
 - Résultat : plateaux retrouvés dans la partie : attaque_minorite_2 p4 3/3, p5 2/2, p6 3/3, p7 3/3 ; attaque_minorite_1 p3 2/2, p4 2/2, p5 2/2.
   Limite : un diagramme qui montre une position absente de toute partie (variante) garde la lecture du meilleur carré, sans confirmation.
+- Zones cliquables trop étroites (retour de Laurent) : (1) `span` d'un coup inclut maintenant le numéro de coup collé (`23...Fxd5`, `29.axb3`), comme le gras du livre ;
+  (2) le lecteur élargit chaque zone de 0,22 x la hauteur de ligne de chaque côté. Vérifié sur p4 de attaque_minorite_2 (rectangles dessinés sur l'image).
