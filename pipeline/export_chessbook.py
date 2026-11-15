@@ -22,7 +22,7 @@ def page_data(no, blocks, png, moves):
         offs.append((o, o + len(b["block_content"]))); o += len(b["block_content"]) + 1
     w, h = Image.open(png).size
     out_blocks = [{"id": f"p{no}_t{i + 1}", "bbox": [b["block_bbox"][0], b["block_bbox"][1], b["block_bbox"][2] - b["block_bbox"][0],
-                   b["block_bbox"][3] - b["block_bbox"][1]], "text": b["block_content"], "moves": []} for i, b in enumerate(tb)]
+                   b["block_bbox"][3] - b["block_bbox"][1]], "text": b["block_content"], "moves": [], **({"style": b["style"]} if b.get("style") else {})} for i, b in enumerate(tb)]
     out_moves = []
     for m in moves:
         for i, (a, e) in enumerate(offs):

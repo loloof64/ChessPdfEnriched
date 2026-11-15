@@ -10,12 +10,14 @@ file there to redo that step. An existing output file is replaced but its correc
 Not supported yet: figurine notation (see figurines.py / inline.py spikes in NEXT_SESSION.md).
 """
 import argparse
+import ctypes
 import html
 import json
 import re
 import subprocess
 import sys
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import chess
@@ -95,6 +97,39 @@ def image_blocks(doc, n, k, work):
     return out
 
 
+def strip_text(doc, n, k):
+    """Style of every text object of a text-layer page, then the page rendered WITHOUT its text (shapes, colours, images and
+    borders stay): the reader draws that as the page background and the text on top, in the original colours.
+    Returns ([(cx_pt, cy_pt, bold, "#rrggbb")], background PIL image). Modifies the in-memory page: call after reading its images."""
+    page = doc[n - 1]
+    h = page.get_size()[1]
+    objs = list(page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_TEXT]))
+    info = []
+    for o in objs[:20000]:  # bound the work on a hostile PDF
+        l, b, r, t = o.get_bounds()
+        try:
+            name = o.get_font().get_base_name() or ""
+        except Exception:
+            name = ""
+        rgba = [ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint()]
+        pdfium_c.FPDFPageObj_GetFillColor(o.raw, *[ctypes.byref(c) for c in rgba])
+        info.append(((l + r) / 2, h - (b + t) / 2, bool(re.search(r"bold|black|heavy", name, re.I)), "#%02x%02x%02x" % tuple(c.value & 255 for c in rgba[:3])))
+    for o in objs:
+        page.remove_obj(o)
+    page.gen_content()
+    return info, page.render(scale=k).to_pil().convert("RGB")
+
+
+def style_of(box, info, k):
+    """{"bold", "color"} of the text objects whose centre lies inside the line box (px), or None."""
+    x0, y0, x1, y1 = (v / k for v in box)
+    inside = [(bold, col) for cx, cy, bold, col in info if x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1]
+    if not inside:
+        return None
+    (bold, col), _ = Counter(inside).most_common(1)[0]
+    return {"bold": bold, "color": col}
+
+
 class Ocr:
     """PaddleOCR-VL, loaded on first use (importing paddle takes a while)."""
 
@@ -150,7 +185,13 @@ def page_blocks(pdf, doc, n, dpi, work, ocr, min_words):
     words = len(subprocess.check_output(["pdftotext", "-f", str(n), "-l", str(n), str(pdf), "-"], text=True).split())
     if words >= min_words:
         k = dpi / 72
-        blocks, how = text_layer_blocks(pdf, n, k) + image_blocks(doc, n, k, work), "text layer"
+        imgs = image_blocks(doc, n, k, work)
+        lines = text_layer_blocks(pdf, n, k)
+        info, bg = strip_text(doc, n, k)
+        bg.save(work / "pages" / f"p{n}_bg.png")
+        for b in lines:
+            b["style"] = style_of(b["block_bbox"], info, k)
+        blocks, how = lines + imgs, "text layer"
     else:
         blocks, how = ocr.read_page(png), "OCR"
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -268,6 +309,9 @@ def main():
             fen, src = infer_start(texts[n], a.lang, [(p, replays[p]) for p in sorted(replays, key=lambda p: abs(p - n))])
             replays[n], starts[n], start_fens[n] = (replay(texts[n], fen, a.lang) if fen else []), src, fen
     data = {n: page_data(n, blocks[n], pngs[n], replays[n]) for n in pages}
+    for n in pages:  # text-layer pages: the page without its text, drawn under the text by the reader
+        if (work / "pages" / f"p{n}_bg.png").exists():
+            data[n]["background"] = f"backgrounds/p{n}.png"
 
     # diagrams: read each figure, then look for its position in the games of the book
     known = {mv["fen"].split()[0] for p in pages for mv in data[p]["moves"] if mv["ok"]} | {chess.Board(f).board_fen() for f in start_fens.values() if f}
@@ -320,6 +364,8 @@ def main():
             z.writestr(f"pages/p{n:04d}.json", json.dumps(data[n], ensure_ascii=False, indent=1))
             if not a.no_scans:
                 z.write(pngs[n], f"scans/p{n:04d}.png")
+            if data[n].get("background"):
+                z.write(work / "pages" / f"p{n}_bg.png", data[n]["background"])
             for d in data[n]["diagrams"]:
                 z.write(work / d["image"], d["image"])
     tmp.replace(out)

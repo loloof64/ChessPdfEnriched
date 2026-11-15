@@ -279,3 +279,13 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   de la partie (positions de tous les coups de toutes les pages). Confirmés : attaque_minorite_2 8/11 (p4 3/3, p5 2/2, p6 1/3, p7 2/3), attaque_minorite_1
   p4 2/2, p5 2/2, p3 0/2 (positions peut-être absentes de la partie). Les non confirmés restent à vérifier à l'oeil (pas de `matches_move`).
 - Fichier produit : `pipeline/work/attaque_minorite_2.chessbook` (`make_chessbook.py ... -o work/attaque_minorite_2.chessbook`).
+
+## Fidélité de mise en page des pages à couche texte (nov. 2026, retour de Laurent sur attaque_minorite_2 p1-p3)
+- Constat (rendu réel obtenu par `test/render_page_test.dart`, polices Noto chargées : `BOOK=... PAGES=1,2,3 flutter test test/render_page_test.dart --update-goldens`
+  puis lire `test/render/pageN.png`) : texte sur fond blanc, sans formes ni couleurs = trop loin de l'original (cadres, boîtes rouges, flèches, ovale).
+- Correctif : pour les pages à couche texte, `strip_text` retire les objets texte du PDF (pypdfium2 `remove_obj`) et rend la page SANS texte = fond
+  (`backgrounds/pN.png`, clé `background` de la page) ; couleur (`FPDFPageObj_GetFillColor`) et gras (nom de police) de chaque ligne -> `style` du bloc.
+  Le lecteur dessine le fond, les images en zones cliquables transparentes, puis le texte par-dessus (centré dans sa boîte de ligne).
+- Deux bugs de mesure corrigés au passage : (1) la police était mesurée avec le style du contexte AU-DESSUS du Material (pas celui de l'affichage) ;
+  (2) `letterSpacing` du thème (0,25 px, non proportionnel) -> mis à 0, plus 2 % de marge de largeur.
+- Pages OCR (captures) : pas de fond (le texte est dans l'image) ; rendu = texte repositionné, sans gras/filets du livre.

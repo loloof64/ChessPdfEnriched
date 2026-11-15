@@ -39,7 +39,7 @@ class Book {
       final m = RegExp(r'^pages/p(\d+)\.json$').firstMatch(f.name);
       if (m != null) pages[int.parse(m.group(1)!)] = json(f.name);
     }
-    final images = {for (final f in zip.files) if (f.name.startsWith('diagrams/')) f.name: Uint8List.fromList(f.readBytes()!)};
+    final images = {for (final f in zip.files) if (f.name.startsWith('diagrams/') || f.name.startsWith('backgrounds/')) f.name: Uint8List.fromList(f.readBytes()!)};
     final corrections = <String, Map<String, dynamic>>{};
     if (zip.findFile('corrections.json') != null) {
       for (final c in json('corrections.json')['corrections'] as List) {
@@ -240,9 +240,17 @@ class _ReaderPageState extends State<ReaderPage> {
 
   final _fonts = <String, double>{};
 
+  /// Colour and weight the book prints this block with (text-layer pages record them), else the reader's defaults.
+  (Color, FontWeight?) _blockStyle(Map<String, dynamic> block) {
+    final st = block['style'] as Map<String, dynamic>?;
+    if (st == null) return (Colors.black87, null);
+    final hex = (st['color'] as String).substring(1);
+    return (Color(0xFF000000 | int.parse(hex, radix: 16)), st['bold'] == true ? FontWeight.bold : null);
+  }
+
   /// Largest font size (page px) at which the block, wrapped to its width, fits its height. Measured with the same spans
   /// as the display, bold moves included (they are wider than plain text).
-  double _fitOne(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) =>
+  double _fitOne(BuildContext ctx, Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) =>
       _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
         final b = (block['bbox'] as List).cast<num>();
         // Generic no-overlap rule: a block may not extend past the top of any block or figure that starts below its own top
@@ -258,16 +266,17 @@ class _ReaderPageState extends State<ReaderPage> {
         }
         // the OCR box itself tolerates 2 %; a limit set by a neighbour does not (it is where the overlap would start), with 2 % margin
         final limit = maxH < b[3] ? maxH * 0.98 : b[3] * 1.02;
-        final base = DefaultTextStyle.of(context).style;
-        final scaler = MediaQuery.textScalerOf(context);
+        // ctx must be BELOW the Scaffold/Material: that is where the displayed Text gets its theme font and spacing
+        final base = DefaultTextStyle.of(ctx).style;
+        final scaler = MediaQuery.textScalerOf(ctx);
         var f = 80.0;
         while (f > 8) {
           // same effective style as the displayed Text.rich (theme font and letter spacing, text scale), or the measure is too narrow
           final tp = TextPainter(
-              text: TextSpan(children: _spans(block, moves, null), style: base.merge(TextStyle(fontSize: f, height: 1.25))),
+              text: TextSpan(children: _spans(block, moves, null), style: base.merge(TextStyle(fontSize: f, height: 1.25, letterSpacing: 0, fontWeight: _blockStyle(block).$2))),
               textDirection: TextDirection.ltr,
               textScaler: scaler)
-            ..layout(maxWidth: b[2].toDouble());
+            ..layout(maxWidth: b[2].toDouble() * 0.98); // 2 % margin: a line that just fits when measured must not wrap when drawn
           if (tp.height <= limit) break;
           f -= 0.5;
         }
@@ -276,12 +285,12 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// Paragraphs (150+ characters) of a page share ONE size, the smallest that fits any of them, so the text looks uniform like
   /// the book's and cannot overflow (each is drawn at most at its own fit). Titles and short blocks keep their own size.
-  double _fit(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) {
-    final own = _fitOne(block, moves);
+  double _fit(BuildContext ctx, Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) {
+    final own = _fitOne(ctx, block, moves);
     if ((block['text'] as String).length < 150) return own;
     var body = own;
     for (final o in (widget.book.pages[page]!['blocks'] as List).cast<Map<String, dynamic>>()) {
-      if ((o['text'] as String).length >= 150) body = min(body, _fitOne(o, moves));
+      if ((o['text'] as String).length >= 150) body = min(body, _fitOne(ctx, o, moves));
     }
     return body;
   }
@@ -318,18 +327,20 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// Text of a block, positioned where the block sits on the original page (page px scaled by [k]).
-  Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, double k) {
+  Widget _block(BuildContext ctx, Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, double k) {
     final b = (block['bbox'] as List).cast<num>();
     return Positioned(
       left: b[0] * k,
       top: b[1] * k,
       width: b[2] * k,
+      // text-layer lines have a box fitted to their own text: centring inside it keeps centred lines centred when our font is narrower
       child: Text.rich(TextSpan(children: _spans(block, moves, _taps)),
-          style: TextStyle(fontSize: _fit(block, moves) * k, height: 1.25, color: Colors.black87)),
+          textAlign: block['style'] != null ? TextAlign.center : TextAlign.start,
+          style: TextStyle(fontSize: _fit(ctx, block, moves) * k, height: 1.25, letterSpacing: 0, color: _blockStyle(block).$1, fontWeight: _blockStyle(block).$2)),
     );
   }
 
-  Widget _figure(Map<String, dynamic> d, double k) {
+  Widget _figure(Map<String, dynamic> d, double k, bool drawImage) {
     final b = (d['bbox'] as List).cast<num>();
     final bytes = widget.book.images[d['image']];
     return Positioned(
@@ -342,7 +353,7 @@ class _ReaderPageState extends State<ReaderPage> {
         onSecondaryTap: d['fen'] == null ? null : () => _editDiagram(d),
         child: Container(
           decoration: BoxDecoration(border: Border.all(color: d['id'] == selected ? Colors.brown : Colors.transparent, width: 3)),
-          child: bytes == null ? null : Image.memory(bytes, fit: BoxFit.fill),
+          child: bytes == null || !drawImage ? null : Image.memory(bytes, fit: BoxFit.fill),
         ),
       ),
     );
@@ -405,6 +416,7 @@ class _ReaderPageState extends State<ReaderPage> {
             final k = fit == 'page' ? fitPage : fit == 'width' ? fitWidth : percent / 100 * _k100;
             _lastK = k;
             final w = pw * k;
+            final background = widget.book.images[data['background']];
             final page = SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -415,8 +427,10 @@ class _ReaderPageState extends State<ReaderPage> {
                   height: (data['height'] as num) * k,
                   decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.black26)),
                   child: Stack(children: [
-                    for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>()) _figure(d, k),
-                    for (final b in (data['blocks'] as List).cast<Map<String, dynamic>>()) _block(b, moves, k),
+                    // text-layer pages: the page without its text (shapes, colours, images) under the text
+                    if (background != null) Positioned.fill(child: Image.memory(background, fit: BoxFit.fill)),
+                    for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>()) _figure(d, k, background == null),
+                    for (final b in (data['blocks'] as List).cast<Map<String, dynamic>>()) _block(context, b, moves, k),
                   ]),
                 ),
               ]),
