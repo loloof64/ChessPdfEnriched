@@ -51,17 +51,16 @@ class _ReaderAppState extends State<ReaderApp> {
   late Book? book = widget.initial;
 
   Future<void> _open() async {
-    final picked = await FilePicker.pickFiles(
-      dialogTitle: 'Ouvrir un livre',
-      type: FileType.custom,
-      allowedExtensions: ['chessbook'],
-    );
-    final path = picked.firstOrNull?.path;
-    if (path == null) return;
     try {
-      setState(() => book = Book.load(path));
+      final picked = await FilePicker.pickFiles(
+        dialogTitle: 'Ouvrir un livre',
+        type: FileType.custom,
+        allowedExtensions: ['chessbook'],
+      );
+      final path = picked.firstOrNull?.path;
+      if (path != null) setState(() => book = Book.load(path));
     } catch (e) {
-      _messenger.currentState?.showSnackBar(SnackBar(content: Text('Fichier illisible : $e')));
+      _messenger.currentState?.showSnackBar(SnackBar(content: Text('Ouverture impossible : $e')));
     }
   }
 
