@@ -106,3 +106,13 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   Décalage de ~5 px par rapport au vrai plateau, sans effet sur la lecture. Fischer (scan) : trouve le plateau entier.
 - PRIORITÉ (consigne de Laurent) : la fonction principale est la reconnaissance des COUPS ; les diagrammes sont auxiliaires.
   Prochaine étape = figurines / coups (point 5 de « À faire »), pas d'autre polissage des diagrammes.
+
+## Figurines : mesure sur `PartiesFischer.pdf` p3 (OCR PaddleOCR-VL, `work/pf-3.json`)
+- Pas de couche texte (scan). Figurines de l'OCR inutilisables : 1er tableau = toutes LAISSÉES de côté (`d3`, `b7`, `g5`,
+  `fe1`, `e8` au lieu de Qd3, Bb7, Bg5, Rfe1, Re8) ; 2e tableau = symboles parasites cohérents pour T (☰) mais ♂/♀ pour
+  deux cavaliers ; texte courant : même symbole ♠ pour un cavalier ET un fou (`18 ♠c3 ♠xg5`) ; `�`, `w`, `☑` ailleurs.
+- Conclusion : l'identité de la pièce ne peut pas venir du texte OCR. Il faut lire les glyphes de figurine eux-mêmes.
+- Plan proposé : (1) localiser par CV les glyphes figurine (composantes connexes à gauche d'un mot SAN, dans les blocs
+  table/text de l'OCR) ; (2) classer en K/Q/R/B/N, soit classifieur entraîné (`~/Documents/Programmation/entrainement_ocr_echecs/
+  {6class,glyphs}` existe), soit clustering par livre + vote de légalité (rejeu des coups depuis le diagramme) ;
+  (3) injecter la lettre dans le SAN, valider par rejeu python-chess.
