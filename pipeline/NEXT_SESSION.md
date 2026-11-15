@@ -204,7 +204,7 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 
 ## Lecteur Flutter : affichage Linux (nov. 2026)
 - Après la mise à jour de Flutter 3.50 (même jour), la fenêtre Linux se dessinait décalée/réduite (coin 640x360, reste noir), y compris
-  pour une app minimale (un seul `Text`) : défaut du moteur, pas du lecteur. Corrigé côté Laurent (réglage/commande à préciser) ;
+  pour une app minimale (un seul `Text`) : défaut du moteur, pas du lecteur. Corrigé par `flutter downgrade` (version d'avant la mise à jour du jour ; ne pas remettre à jour sans vérifier) ;
   essais proposés : `--no-enable-impeller`, `--enable-software-rendering`, `flutter downgrade`.
 - Vérifié visuellement par Laurent : texte à gauche, coups cliquables, plateau à droite ; la position après `8...Cf8` est exacte.
 - À faire côté lecteur : étiquette du coup en français (C F T D R) au lieu de l'anglais, sélecteur de fichier, diagrammes, corrections.
