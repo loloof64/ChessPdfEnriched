@@ -39,7 +39,7 @@ def page_data(no, js, png, start=None, crops_dir=None):
     figures = []
     if crops_dir:  # images found by the OCR (e.g. small boards in screenshots): kept at their place, FEN not read yet
         page = Image.open(png).convert("RGB")
-        for i, b in enumerate(b for b in json.load(open(js)) if b["block_label"] == "image"):
+        for i, b in enumerate(b for b in json.load(open(js)) if b["block_label"] in ("image", "chart")):
             x0, y0, x1, y1 = b["block_bbox"]
             name = f"p{no}_f{i + 1}.png"
             page.crop((x0, y0, x1, y1)).save(f"{crops_dir}/{name}")

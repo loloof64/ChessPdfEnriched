@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 import 'dart:io' as io;
 
@@ -227,11 +226,12 @@ class _ReaderPageState extends State<ReaderPage> {
   double _fit(Map<String, dynamic> block) => _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
         final text = block['text'] as String;
         final b = (block['bbox'] as List).cast<num>();
-        var f = sqrt(b[2] * b[3] / (text.length.clamp(1, 100000) * 0.62)) * 1.15;
+        // start large and shrink to the largest size that fits (OCR boxes are tight, so this recovers the book's size)
+        var f = 80.0;
         while (f > 8) {
           final tp = TextPainter(
               text: TextSpan(text: text, style: TextStyle(fontSize: f, height: 1.25)), textDirection: TextDirection.ltr)
-            ..layout(maxWidth: b[2].toDouble());
+            ..layout(maxWidth: b[2].toDouble() * 0.97); // bold moves are a bit wider than the plain text measured here
           if (tp.height <= b[3] * 1.02) break;
           f -= 0.5;
         }

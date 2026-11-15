@@ -226,3 +226,11 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   confiance inutile. Corrigé à la main dans `build_fabrice.py` (`CORRECTIONS`, `reviewed: true`). C'est l'erreur (0,0,1) connue du jeu de test (img-008 g4).
 - À faire : mécanisme de corrections dans le lecteur (`corrections.json`, clic droit : éditeur de position) ; et entraîner avec des flèches/surlignages
   qui recouvrent la pièce (pointes rouges sur la case voisine) pour corriger la cause plutôt que le symptôme.
+
+## Page 5 de Fabrice : texte mal placé (corrigé)
+- Cause : PaddleOCR-VL a mis le texte de la colonne de droite (27...a5 ... 30...axb3) à la FIN du bloc du bas à gauche et laissé le bloc de droite
+  VIDE. Les coups étaient lus une fois (rien de perdu) mais le texte était dessiné hors de son cadre. `reocr_empty.py` ré-OCRise les blocs
+  `text` vides ET retire le doublon du bloc précédent (sans cette coupe : coups lus deux fois, 2 illégaux). Appliqué à p5 ; p3, p4, p6 sans bloc vide.
+- Le petit échiquier de gauche de p5 est un bloc `chart` (pas `image`) : l'export garde maintenant les deux.
+- Police du lecteur : démarre à 80 px et réduit jusqu'à tenir dans le cadre (l'ancienne estimation ne faisait que réduire, d'où un texte trop petit).
+- À surveiller sur les autres livres : bloc vide = texte déplacé dans le bloc voisin.
