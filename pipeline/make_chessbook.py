@@ -29,6 +29,9 @@ from moves import replay, tokens
 from orientation import orient
 from plausibility import issues
 
+MAX_EMBEDDED_PX = 40_000_000  # an embedded image bigger than this (width x height) is not extracted: PDFs can be hostile
+MAX_EMBEDDED_PER_PAGE = 60
+Image.MAX_IMAGE_PIXELS = 100_000_000  # explicit PIL limit (it raises above twice this) for rendered pages and extracted images
 MIN_BOARD_SCORE = 2.5  # autocrop checkerboard score: logos < 1, small screenshot boards 3-5, real diagrams 6+
 HERE = Path(__file__).parent
 
@@ -78,10 +81,16 @@ def image_blocks(doc, n, k, work):
     found.sort(key=lambda f: (round(f[0][1] / 100), f[0][0]))  # top to bottom, then left to right
     out = []
     (work / "embedded").mkdir(parents=True, exist_ok=True)
-    for i, (box, o) in enumerate(found, 1):
-        path = work / "embedded" / f"p{n}_{i}.png"
-        o.get_bitmap(render=True).to_pil().save(path)
-        out.append({"block_label": "image", "block_content": "", "block_bbox": box, "image_file": str(path.relative_to(work))})
+    for i, (box, o) in enumerate(found[:MAX_EMBEDDED_PER_PAGE], 1):
+        block = {"block_label": "image", "block_content": "", "block_bbox": box}
+        w_px, h_px = o.get_px_size()  # native size, read BEFORE decoding the image
+        if 0 < w_px * h_px <= MAX_EMBEDDED_PX:  # otherwise the figure is cropped from the page render (text included)
+            path = work / "embedded" / f"p{n}_{i}.png"
+            im = o.get_bitmap(render=True).to_pil()
+            im.thumbnail((4000, 4000))
+            im.save(path)
+            block["image_file"] = str(path.relative_to(work))
+        out.append(block)
     return out
 
 

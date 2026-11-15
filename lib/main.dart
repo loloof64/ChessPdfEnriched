@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:io' as io;
 
@@ -244,13 +245,24 @@ class _ReaderPageState extends State<ReaderPage> {
   double _fit(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) =>
       _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
         final b = (block['bbox'] as List).cast<num>();
+        // Generic no-overlap rule: a block may not extend past the top of any block or figure that starts below its own top
+        // and shares part of its width (OCR boxes often run a few px into their neighbour, p3: paragraph over the '1-0' line).
+        // An obstacle that starts inside the upper 60 % of the box is a figure the text wraps around: ignored.
+        var maxH = b[3].toDouble();
+        final page_ = widget.book.pages[page]!;
+        for (final o in [...(page_['blocks'] as List), ...(page_['diagrams'] as List)].cast<Map<String, dynamic>>()) {
+          final c = (o['bbox'] as List).cast<num>();
+          final sideBySide = c[0] < b[0] + b[2] && c[0] + c[2] > b[0];
+          final below = c[1] > b[1] + b[3] * 0.6 && c[1] < b[1] + b[3];
+          if (o['id'] != block['id'] && sideBySide && below) maxH = min(maxH, c[1] - b[1] - 2.0);
+        }
         var f = 80.0;
         while (f > 8) {
           final tp = TextPainter(
               text: TextSpan(children: _spans(block, moves, null), style: TextStyle(fontSize: f, height: 1.25)),
               textDirection: TextDirection.ltr)
             ..layout(maxWidth: b[2].toDouble());
-          if (tp.height <= b[3] * 1.02) break;
+          if (tp.height <= maxH * 1.02) break;
           f -= 0.5;
         }
         return f;

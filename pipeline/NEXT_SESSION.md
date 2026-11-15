@@ -254,3 +254,11 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - p5 : `a3=` (signe `=` collé à un coup) n'était pas reconnu : le coup 30...a3 de la variante est lu (123 coups). Regex : `=` autorisé si non suivi d'une lettre/chiffre.
 - p5 bas droite : police mesurée avec les coups en GRAS (identique à l'affichage) pour que les blocs riches en coups ne débordent plus.
 - Zoom : « Page entière » existe (toute la page visible) ; pas de bouton pour masquer l'échiquier (Laurent : ok pour page entière).
+
+## Règle générique anti-chevauchement (lecteur) + durcissement (nov. 2026)
+- Au lieu de rustines par page : la police d'un bloc est la plus grande qui tient dans son cadre ET qui ne dépasse pas le haut de tout bloc/figure
+  situé en dessous (même colonne, démarrant dans les 40 % bas du cadre ; sinon c'est une figure habillée par le texte : ignorée). Mesure avec les
+  coups en gras. Reste approximatif : un fac-similé (scan en fond + coups cliquables) serait fidèle à coup sûr mais exige les boîtes MOT par MOT,
+  que PaddleOCR-VL ne donne pas.
+- Revue de sécurité : images intégrées d'un PDF non fiable : taille lue AVANT décodage (`get_px_size`), plafond 40 Mpx et 60 images par page,
+  miniature 4000 px, `Image.MAX_IMAGE_PIXELS` explicite. Non traité : page de dimensions énormes (pdftoppm) ; `--dpi` borné par l'utilisateur.
