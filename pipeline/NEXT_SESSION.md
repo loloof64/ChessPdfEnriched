@@ -125,3 +125,12 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   donc la localisation par composantes à gauche d'un mot SAN est faisable ; seule la classification pose problème.
 - Décision : regroupement par livre (k-means sur les glyphes candidats, 5 classes) + étiquetage par légalité des coups
   rejoués. Pas d'entraînement global.
+
+## Regroupement de figurines par livre (spike `work/fig_cluster.py`, jetable) : ça marche
+- Données : `PartiesFischer.pdf` 8 pages, 200 dpi (`pdftoppm -r 200`), OCR de toutes les pages (`work/ocr_all.py`, ~3 min,
+  JSON dans `work/pfall/`). Candidats = premier glyphe de chaque cellule de coup des blocs `table` ; filtre : hauteur >= 30 px et
+  encre < 45 % (les lettres sont grasses et denses) ; k-means k=5 sur pixels 40x48.
+- Résultat : clusters PURS à l'oeil : fous (2), cavaliers (7), tours (8), « couronne simple » (5, sans doute rois),
+  dames (7 dont 2 intrus : un `6` et un `b` passés dans le filtre). Total 29 candidats sur 58 (filtre un peu strict).
+- Reste à faire : (1) localiser aussi les figurines des blocs `text` (coups en ligne, plus petits) ; (2) rejeter les lettres
+  (intrus) ; (3) étiqueter chaque cluster K/Q/R/B/N par vote de légalité (rejeu depuis le diagramme) ; (4) injecter dans le SAN.
