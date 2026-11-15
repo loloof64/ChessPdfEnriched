@@ -99,3 +99,10 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Mesure sur 22 diagrammes (18 blancs en bas, 4 noirs en bas) : 20 sûrs et justes ; 1 juste mais « à revoir » (score 1,75) ;
   1 faux et « à revoir » (finale de pions avancés, score -1,67). Aucune erreur sûre.
 - Pas testé : diagrammes avec coordonnées imprimées (les lire serait fiable) ; indices de texte (« trait aux noirs »).
+
+## Recadrage automatique (`autocrop.py`, fait, ne plus y toucher sauf besoin)
+- `find_board(img)` cherche le carré dont les 64 cases suivent un damier (patchs de coin de case). ~4 s/image (non optimisé).
+- Sur les 6 diagrammes am1 : brut ghost/miss/wrong base (2,0,1) vs proportions fixes (7,0,1) ; ft (0,0,1) dans les deux cas.
+  Décalage de ~5 px par rapport au vrai plateau, sans effet sur la lecture. Fischer (scan) : trouve le plateau entier.
+- PRIORITÉ (consigne de Laurent) : la fonction principale est la reconnaissance des COUPS ; les diagrammes sont auxiliaires.
+  Prochaine étape = figurines / coups (point 5 de « À faire »), pas d'autre polissage des diagrammes.
