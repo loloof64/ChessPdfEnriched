@@ -214,34 +214,62 @@ def onwhite(im):
     return Image.alpha_composite(bg, im).convert("RGB")
 
 
-def read_at(model, im, box):
-    """(raw board, confidence) of the board inside box (fenify, square 0 = a1)."""
+def read_boxes(model, im, boxes, batch=32):
+    """[(raw board, confidence)] for the board inside each box (fenify, square 0 = a1), evaluated in batches."""
     import torch
     from read_fen import prep
-    with torch.no_grad():
-        p = model(prep(im.crop(box)).unsqueeze(0)).squeeze()  # (64, 13) probabilities
-    board = chess.Board(None)
-    for i, c in enumerate(p.argmax(dim=1).tolist()):
-        if c:
-            board.set_piece_at(i, chess.Piece((c - 1) % 6 + 1, chess.BLACK if c > 6 else chess.WHITE))
-    return board, p.max(dim=1).values.mean().item()
+    dev = next(iter(model.parameters())).device if list(model.parameters()) else "cpu"
+    out = []
+    for i in range(0, len(boxes), batch):
+        x = torch.stack([prep(im.crop(b)) for b in boxes[i:i + batch]]).to(dev)
+        with torch.no_grad():
+            p = model(x).cpu()  # (B, 64, 13) probabilities
+        for q in p:
+            board = chess.Board(None)
+            for sq, c in enumerate(q.argmax(dim=1).tolist()):
+                if c:
+                    board.set_piece_at(sq, chess.Piece((c - 1) % 6 + 1, chess.BLACK if c > 6 else chess.WHITE))
+            out.append((board, q.max(dim=1).values.mean().item()))
+    return out
+
+
+def dense_boxes(im, base):
+    """Squares around the autocrop's best one, in steps of a third of a cell over +-1.6 cells and 3 sizes, nearest first.
+    The autocrop can be off by a cell AND a few pixels (a checkerboard is periodic), which the one-cell shifts do not cover."""
+    x0, y0, x1, y1 = base
+    c = (x1 - x0) / 8
+    step = max(3, round(c / 3))
+    out = []
+    for scale in (1.0, 0.94, 1.06):
+        s = round((x1 - x0) * scale)
+        for dy in range(-round(1.6 * c), round(1.6 * c) + 1, step):
+            for dx in range(-round(1.6 * c), round(1.6 * c) + 1, step):
+                b = (x0 + dx, y0 + dy, x0 + dx + s, y0 + dy + s)
+                if b[0] >= 0 and b[1] >= 0 and b[2] <= im.width and b[3] <= im.height:
+                    out.append((abs(dx) + abs(dy) + abs(scale - 1) * 100, b))
+    return [b for _, b in sorted(out)]
 
 
 def read_diagram(model, im, known=frozenset()):
     """(oriented board, confidence, flipped, orientation sure, raw board) or None when the image is not a board.
-    `known` = piece placements that occur in the book's games: among the crops tried (the best square and its one-cell shifts),
-    the first whose reading is a known position wins; otherwise the best square's reading is kept."""
+    `known` = piece placements that occur in the book's games. Tries the best square and its one-cell shifts; if none reads as a
+    known position, searches more finely around it (batched). The first reading that IS a known position wins, otherwise the
+    best square's own reading is kept (the diagram may show a position that is in no game)."""
     if not .8 <= im.width / im.height <= 1.25:  # banners, labels
         return None
     if find_board(im)[4] < MIN_BOARD_SCORE:
         return None
-    reads = [read_at(model, im, box) for box in candidate_boxes(im)]
+    first = candidate_boxes(im)
+    reads = read_boxes(model, im, first)
     best = reads[0]
-    for raw, conf in reads:
-        if orient(raw)[0].board_fen() in known:
-            best = (raw, conf)
-            break
-    raw, conf = best
+    hit = next((r for r in reads if orient(r[0])[0].board_fen() in known), None)
+    if hit is None and known:
+        dense = dense_boxes(im, first[0])
+        for i in range(0, len(dense), 64):
+            hit = next((r for r in read_boxes(model, im, dense[i:i + 64]) if orient(r[0])[0].board_fen() in known), None)
+            if hit:
+                break
+    raw, conf = hit or best
     oriented, flipped, sure = orient(raw)
     return oriented, conf, flipped, sure, raw
 
@@ -353,7 +381,7 @@ def main():
             im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
             if model is None:
                 import torch
-                model = torch.jit.load(str(a.weights), map_location="cpu").eval()
+                model = torch.jit.load(str(a.weights), map_location="cuda" if torch.cuda.is_available() else "cpu").eval()
             r = read_diagram(model, onwhite(im), known)
             # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
             if r:

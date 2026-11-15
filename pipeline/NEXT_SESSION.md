@@ -299,3 +299,11 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Lecteur : fac-similé par défaut (bouton page/image pour basculer vers le texte reconstitué) ; fichiers du zip lus à la demande (`Book.file`, cache de 12).
 - Reste : coups non localisés (p5 de _2 : 7) restent non cliquables en fac-similé (cliquables en mode texte) ; seule la hauteur d'une ligne est couverte, les
   coups coupés en fin de ligne n'ont pas de zone de continuation précise.
+
+## Diagrammes : recherche fine du recadrage guidée par la partie (nov. 2026, retour : p3 d1 et d2 de attaque_minorite_1 faux)
+- Cause : le modèle lisait PARFAITEMENT (0 case fausse) avec le bon recadrage ; l'autocrop était décalé d'une case ET de ~11 px (damier périodique), ce que les décalages
+  d'une case entière ne couvraient pas. La position vraie (lue à l'oeil) est celle de la partie après 21...bxc6.
+- Correctif générique : si aucun des 9 recadrages (meilleur + décalages d'une case) ne donne une position de la partie, `dense_boxes` (pas d'un tiers de case sur +-1,6 case, 3 tailles)
+  est essayé par lots (`read_boxes`, GPU si dispo) ; la 1re lecture qui EST une position de la partie gagne. Sinon la lecture du meilleur carré est conservée.
+- Résultat : plateaux retrouvés dans la partie : attaque_minorite_2 p4 3/3, p5 2/2, p6 3/3, p7 3/3 ; attaque_minorite_1 p3 2/2, p4 2/2, p5 2/2.
+  Limite : un diagramme qui montre une position absente de toute partie (variante) garde la lecture du meilleur carré, sans confirmation.
