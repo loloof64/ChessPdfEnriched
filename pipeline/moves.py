@@ -1,9 +1,9 @@
-"""Step 6: parse French algebraic moves (C F T D R) out of OCR'd text and replay them with python-chess.
+"""Step 6: parse algebraic moves out of OCR'd text (French C F T D R, or English N B R Q K) and replay them with python-chess.
 
 Mainline from the start position; '[ ... ]' variations branch from the position before the last mainline move.
 Prose contains squares too ('pions a4 et b4'): a bare move is only taken when it sits in a run with a move number,
 or is a capture / piece move / castling that the board expects (see `plausible_lone`).
-Usage: french_moves.py PAGE.json [...]
+Usage: moves.py [--lang fr|en] PAGE.json [...]   (OCR block lists)
 """
 import json
 import re
@@ -11,27 +11,32 @@ import sys
 
 import chess
 
-FR = str.maketrans("CFTDR", "NBRQK")
-SAN = r"(?:0-0-0|0-0|O-O-O|O-O|[CFTDR]?[a-h]?[1-8]?x?[a-h][1-8](?:=[CFTD])?)[+#]?[!?]*"
-TOKEN = re.compile(rf"(?P<num>\d+\.(?:\.\.)?|\d+\.\.\.)|(?P<move>{SAN})(?![A-Za-z0-9=.])|(?P<semi>;)|(?P<open>\[)|(?P<close>\])|(?P<res>1-0|0-1|1/2-1/2)")
-STRIP = str.maketrans("", "", "+#!?=-")
+PIECES = {"fr": "CFTDR", "en": "NBRQK"}  # knight, bishop, rook, queen, king as printed in the book
 
 
-def to_san(m: str) -> str:
+def _lang(lang):
+    """(token regex, translate table to English SAN, piece letters) for a book language."""
+    p = PIECES[lang]
+    san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}])?)[+#]?[!?]*"
+    tok = re.compile(rf"(?P<num>\d+\.(?:\.\.)?|\d+\.\.\.)|(?P<move>{san})(?![A-Za-z0-9=.])|(?P<semi>;)|(?P<open>\[)|(?P<close>\])|(?P<res>1-0|0-1|1/2-1/2)")
+    return tok, str.maketrans(p, "NBRQK"), p
+
+
+def to_san(m: str, table) -> str:
     m = m.replace("0-0-0", "O-O-O").replace("0-0", "O-O")
     head = m.rstrip("!?")
-    return head.translate(FR) if "O" not in head else head
+    return head.translate(table) if "O" not in head else head
 
 
-def plausible_lone(tok: str) -> bool:
+def plausible_lone(tok: str, pieces: str) -> bool:
     """A bare move with no move number next to it: only believe it if it looks like a move, not a pawn square in prose."""
-    return "x" in tok or tok[0] in "CFTDR" or tok.startswith(("0-0", "O-O")) or tok[-1] in "!?"  # 'a6!?': an annotation marks a move
+    return "x" in tok or tok[0] in pieces or tok.startswith(("0-0", "O-O")) or tok[-1] in "!?"  # 'a6!?': an annotation marks a move
 
 
-def tokens(text):
+def tokens(text, lang="fr"):
     """[(kind, value, start, end)] in order; prose between tokens is recorded as ('prose', '')."""
     out, pos = [], 0
-    for m in TOKEN.finditer(text):
+    for m in _lang(lang)[0].finditer(text):
         if text[pos:m.start()].strip(" \n\t,;:.()"):
             out.append(("prose", "", pos, m.start()))
         kind = m.lastgroup
@@ -40,9 +45,10 @@ def tokens(text):
     return out
 
 
-def replay(text, start=None):
+def replay(text, start=None, lang="fr"):
     """[{san, fen, ok, depth, ply, raw}] ; mainline + variations. Stops a line at its first illegal move."""
-    toks = tokens(text)
+    toks = tokens(text, lang)
+    _, table, pieces = _lang(lang)
     board, before_last = chess.Board(start) if start else chess.Board(), None
     stack, moves = [], []
     # runs of tokens without prose between them: a run is trusted if it holds a move number
@@ -67,12 +73,12 @@ def replay(text, start=None):
         elif kind == "close" and stack:
             board, before_last, dead = stack.pop()
         elif kind == "move":
-            if dead or not (run_ok.get(idx) or plausible_lone(val)):
+            if dead or not (run_ok.get(idx) or plausible_lone(val, pieces)):
                 continue
             try:
-                mv = board.parse_san(to_san(val))
+                mv = board.parse_san(to_san(val, table))
             except ValueError:
-                if (idx > 0 and toks[idx - 1][0] == "num") or plausible_lone(val):  # a pawn square in prose is just skipped
+                if (idx > 0 and toks[idx - 1][0] == "num") or plausible_lone(val, pieces):  # a pawn square in prose is just skipped
                     moves.append({"raw": val, "san": None, "fen": None, "ok": False, "depth": len(stack), "span": [start, end]})
                     dead = True
                 continue
@@ -84,7 +90,11 @@ def replay(text, start=None):
 
 
 if __name__ == "__main__":
-    text = " ".join(b["block_content"] for p in sys.argv[1:] for b in json.load(open(p)) if b["block_label"] in ("text", "paragraph_title"))
-    ms = replay(text)
+    args = sys.argv[1:]
+    lang = "fr"
+    if args[:1] == ["--lang"]:
+        lang, args = args[1], args[2:]
+    text = " ".join(b["block_content"] for p in args for b in json.load(open(p)) if b["block_label"] in ("text", "paragraph_title"))
+    ms = replay(text, lang=lang)
     print(len(ms), "moves,", sum(not m["ok"] for m in ms), "illegal")
     print(" ".join(("" if m["depth"] == 0 else "(" * m["depth"]) + (m["san"] or "??" + m["raw"]) for m in ms))

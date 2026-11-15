@@ -234,3 +234,16 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Le petit échiquier de gauche de p5 est un bloc `chart` (pas `image`) : l'export garde maintenant les deux.
 - Police du lecteur : démarre à 80 px et réduit jusqu'à tenir dans le cadre (l'ancienne estimation ne faisait que réduire, d'où un texte trop petit).
 - À surveiller sur les autres livres : bloc vide = texte déplacé dans le bloc voisin.
+
+## `make_chessbook.py` : programme générique PDF -> .chessbook (nov. 2026)
+- Remplace `build_fabrice.py` (supprimé : positions en dur) ; `french_moves.py` renommé `moves.py` (option de langue fr/en). Voir le README
+  (installation du venv par `pipeline/setup_venv.sh`, options, reprise, corrections conservées).
+- Vérifié sur `attaque_minorite_1.pdf` : coups IDENTIQUES au livre fait à la main sur les 6 pages (p3 77/0 illégal, p4 42 avec départ trouvé seul
+  = position de p6 au ply 31, p5 122/1, p6 66/0), diagrammes de p2 identiques (la correction `p2_d5` reste valide). Les plateaux des captures p3-p5
+  sont maintenant lus : p4 2/2 et p5 2/2 retrouvés dans la partie (`matches_move`), p3 : d1 à 1 case près (tour a8 lue dame), d2 faux (cadre mal
+  aligné par `autocrop` : ambiguïté d'une case sur un damier périodique) : signalés par l'absence de `matches_move`.
+- Nettoyage OCR généralisé (`dedupe`) : un bloc qui répète à sa fin le début d'un bloc suivant est coupé ; vu sur p3 à 200 dpi (22.Tb6...33.Txc6 lus
+  deux fois -> 2 illégaux) et p5. Blocs `text` vides : ré-OCR sur recorte.
+- Ids : plateaux `pN_dK`, autres images `pN_iK` (logos, chiffres) ; la numérotation des plateaux ne dépend pas des autres images.
+- Pas fait : figurines ; `uv.lock` n'a pas été régénéré (la résolution `uv lock` dépasse 2 min : lancer `uv sync` sur la machine, qui le fait) ;
+  autocrop à améliorer (ambiguïté d'une case) ; PDF de Fabrice 2 et 3 non traités avec le programme générique.

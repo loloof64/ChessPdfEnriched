@@ -16,12 +16,12 @@ void main() {
     expect(book.fenOf(d5), '6k1/4pppp/p2p4/1p1P4/2P5/1P6/P4PPP/6K1 w - - 0 1');
     expect(book.needsReview(d5), isFalse);
 
-    final d1 = (book.pages[2]!['diagrams'] as List).cast<Map<String, dynamic>>().first;
+    final d1 = (book.pages[2]!['diagrams'] as List).cast<Map<String, dynamic>>().firstWhere((d) => d['id'] == 'p2_d1');
     const fixed = '8/8/8/8/8/8/8/K6k w - - 0 1';
     book.saveDiagramFen(d1['id'] as String, d1['fen'] as String, fixed);
 
     final again = Book.load(tmp.path);
-    final e1 = (again.pages[2]!['diagrams'] as List).cast<Map<String, dynamic>>().first;
+    final e1 = (again.pages[2]!['diagrams'] as List).cast<Map<String, dynamic>>().firstWhere((d) => d['id'] == 'p2_d1');
     expect(again.fenOf(e1), fixed);
     expect(again.pages.keys, book.pages.keys);
     expect(again.images.length, book.images.length);

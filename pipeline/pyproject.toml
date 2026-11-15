@@ -8,6 +8,13 @@ dependencies = [
     "paddlepaddle-gpu",
     "paddleocr[doc-parser]",
     "chess",
+    # used directly by the pipeline (previously only present through paddleocr's dependencies)
+    "numpy>=2",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "pillow>=10",
+    "opencv-contrib-python>=4.10",
+    "pypdfium2>=4.30",
 ]
 
 [tool.uv]
