@@ -187,3 +187,17 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   de substitut. Et `f3` sans figurine vue reste pion : un cavalier oublié (`7 f3` = Nf3) n'est détectable que par l'image.
 - Il manque encore : assembler les jetons (tableaux + blocs texte + fragments de colonnes) en séquences avec leur position de
   départ (diagrammes ou début de partie) ; c'est le travail suivant (`mainline.py`).
+
+## PDF de Fabrice (`attaque_minorite_1.pdf`) : décodé + lecteur (nov. 2026)
+- Le PDF est un document Word : texte réel seulement page 1 ; pages 2 = 6 diagrammes (déjà utilisés), pages 3-6 = CAPTURES d'écran
+  d'un cours (coups en français `1.d4 Cf6 ... Tab1`, diagrammes minuscules à coordonnées inversées). Extraction : `pdfimages -png -p`
+  puis agrandissement x2 (PaddleOCR-VL lit alors le français très proprement, `work/ocr_fab.py`).
+- `french_moves.py` : C F T D R -> N B R Q K, variantes `[ ... ; ... ]` (pile + `;` = frère), rejeu depuis la position de départ.
+  Les cases en prose (`pions a4 et b4`) sont ignorées : coup nu accepté seulement dans une suite avec numéro, ou avec `x`/pièce/
+  roque/`!?`. Résultat : p3 77 coups 0 illégal (partie jusqu'à 33.Txc6), p6 66 coups 0 illégal (partie complète 1.e4...0-1),
+  p5 122 coups 1 illégal (fin de texte). p4 : commence au coup 16 sans position de départ -> pas de coups (à lire sur un diagramme).
+- `export_chessbook.py` écrit `work/fab/attaque_minorite.chessbook` (schéma `schema/chessbook.md` : pages, blocs, coups cliquables avec
+  FEN, scans). PAS de diagrammes (`diagrams: []`) : les petits plateaux des captures ne sont pas encore lus.
+- Lecteur Flutter (`lib/main.dart`, remplace le gabarit compteur) : `CHESSBOOK=chemin.chessbook flutter run -d linux` ; texte à
+  gauche, coups cliquables (rouge = illégal), plateau `StaticChessboard` à droite. Pas de sélecteur de fichier, pas d'éditeur,
+  pas de `corrections.json` ; non vérifié visuellement par Claude (pas d'accès à l'écran), seulement analyse + test + lancement.

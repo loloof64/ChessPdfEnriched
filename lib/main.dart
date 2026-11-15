@@ -1,122 +1,154 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'dart:io' as io;
 
+import 'package:archive/archive.dart';
+import 'package:chessground/chessground.dart';
+import 'package:dartchess/dartchess.dart';
+import 'package:flutter/gestures.dart';
+import 'package:material_ui/material_ui.dart';
+
+/// Minimal .chessbook reader: text on the left with clickable moves, board on the right.
+/// Book path comes from the CHESSBOOK environment variable (no file picker yet).
 void main() {
-  runApp(const MyApp());
+  final path = io.Platform.environment['CHESSBOOK'];
+  runApp(ReaderApp(book: path == null ? null : Book.load(path)));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  // This widget is the root of your application.
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
-  }
-}
-
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
+class Book {
+  Book(this.title, this.pages);
 
   final String title;
+  final Map<int, Map<String, dynamic>> pages;
 
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  factory Book.load(String path) {
+    final zip = ZipDecoder().decodeBytes(io.File(path).readAsBytesSync());
+    Map<String, dynamic> json(String name) =>
+        jsonDecode(utf8.decode(zip.findFile(name)!.readBytes()!)) as Map<String, dynamic>;
+    final pages = <int, Map<String, dynamic>>{};
+    for (final f in zip.files) {
+      final m = RegExp(r'^pages/p(\d+)\.json$').firstMatch(f.name);
+      if (m != null) pages[int.parse(m.group(1)!)] = json(f.name);
+    }
+    return Book(json('manifest.json')['title'] as String, pages);
+  }
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class ReaderApp extends StatelessWidget {
+  const ReaderApp({super.key, required this.book});
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  final Book? book;
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+        title: 'ChessPdfEnriched',
+        theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown)),
+        home: book == null
+            ? const Scaffold(body: Center(child: Text('Aucun livre : lancer avec CHESSBOOK=chemin.chessbook')))
+            : ReaderPage(book: book!),
+      );
+}
+
+class ReaderPage extends StatefulWidget {
+  const ReaderPage({super.key, required this.book});
+
+  final Book book;
+
+  @override
+  State<ReaderPage> createState() => _ReaderPageState();
+}
+
+class _ReaderPageState extends State<ReaderPage> {
+  late int page = widget.book.pages.keys.reduce((a, b) => a < b ? a : b);
+  String fen = kInitialFEN;
+  String? selected, label;
+  final _taps = <TapGestureRecognizer>[];
+
+  @override
+  void dispose() {
+    for (final t in _taps) {
+      t.dispose();
+    }
+    super.dispose();
+  }
+
+  void _pick(Map<String, dynamic> m) => setState(() {
+        selected = m['id'] as String;
+        label = m['san'] as String?;
+        fen = (m['fen'] as String?) ?? fen;
+      });
+
+  Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) {
+    final text = block['text'] as String;
+    final spans = <InlineSpan>[];
+    var pos = 0;
+    for (final id in (block['moves'] as List).cast<String>()) {
+      final m = moves[id]!;
+      final s = (m['span'] as List).cast<int>();
+      if (s[0] < pos) continue;
+      spans.add(TextSpan(text: text.substring(pos, s[0])));
+      final ok = m['ok'] as bool;
+      final tap = TapGestureRecognizer()..onTap = ok ? () => _pick(m) : null;
+      _taps.add(tap);
+      spans.add(TextSpan(
+        text: text.substring(s[0], s[1]),
+        recognizer: tap,
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          color: !ok ? Colors.red : (id == selected ? Colors.white : Colors.brown.shade800),
+          backgroundColor: id == selected ? Colors.brown : null,
+        ),
+      ));
+      pos = s[1];
+    }
+    spans.add(TextSpan(text: text.substring(pos)));
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text.rich(TextSpan(children: spans), style: const TextStyle(fontSize: 16, height: 1.4)),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    for (final t in _taps) {
+      t.dispose();
+    }
+    _taps.clear();
+    final data = widget.book.pages[page]!;
+    final moves = {for (final m in (data['moves'] as List)) (m as Map<String, dynamic>)['id'] as String: m};
+    final nOk = moves.values.where((m) => m['ok'] as bool).length;
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: Text(widget.book.title),
+        actions: [
+          DropdownButton<int>(
+            value: page,
+            items: [for (final p in widget.book.pages.keys.toList()..sort()) DropdownMenuItem(value: p, child: Text('Page $p'))],
+            onChanged: (p) => setState(() {
+              page = p!;
+              fen = kInitialFEN;
+              selected = label = null;
+            }),
+          ),
+          const SizedBox(width: 16),
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+      body: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: ListView(padding: const EdgeInsets.all(16), children: [
+            Text('${moves.length} coups, ${moves.length - nOk} illégaux (en rouge)', style: Theme.of(context).textTheme.labelMedium),
+            const SizedBox(height: 8),
+            for (final b in (data['blocks'] as List)) _block(b as Map<String, dynamic>, moves),
+          ]),
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(children: [
+            StaticChessboard(size: 400, orientation: Side.white, fen: fen),
+            const SizedBox(height: 8),
+            Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
+          ]),
+        ),
+      ]),
     );
   }
 }
