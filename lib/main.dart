@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:io' as io;
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:chessground/chessground.dart';
 import 'package:dartchess/dartchess.dart';
 import 'package:file_picker/file_picker.dart';
@@ -18,11 +19,15 @@ void main(List<String> args) {
 }
 
 class Book {
-  Book(this.title, this.pages, this.images);
+  Book(this.path, this.title, this.pages, this.images, this.corrections);
 
+  final String path;
   final String title;
   final Map<int, Map<String, dynamic>> pages;
   final Map<String, Uint8List> images; // 'diagrams/p2_d1.png' -> bytes
+  final Map<String, Map<String, dynamic>> corrections; // target id -> entry of corrections.json
+
+  static String hash(String s) => 'sha256:${sha256.convert(utf8.encode(s))}';
 
   factory Book.load(String path) {
     final zip = ZipDecoder().decodeBytes(io.File(path).readAsBytesSync());
@@ -34,7 +39,49 @@ class Book {
       if (m != null) pages[int.parse(m.group(1)!)] = json(f.name);
     }
     final images = {for (final f in zip.files) if (f.name.startsWith('diagrams/')) f.name: Uint8List.fromList(f.readBytes()!)};
-    return Book(json('manifest.json')['title'] as String, pages, images);
+    final corrections = <String, Map<String, dynamic>>{};
+    if (zip.findFile('corrections.json') != null) {
+      for (final c in json('corrections.json')['corrections'] as List) {
+        corrections[(c as Map<String, dynamic>)['target'] as String] = c;
+      }
+    }
+    return Book(path, json('manifest.json')['title'] as String, pages, images, corrections);
+  }
+
+  /// FEN to show for a diagram: the reviewed value, unless the generated FEN changed since (then it needs review).
+  String? fenOf(Map<String, dynamic> d) {
+    final generated = d['fen'] as String?;
+    final c = corrections[d['id']];
+    if (generated == null || c == null || c['type'] != 'diagram_fen') return generated;
+    return c['source_hash'] == hash(generated) ? c['value'] as String : generated;
+  }
+
+  bool isCorrected(Map<String, dynamic> d) => fenOf(d) != d['fen'];
+
+  bool needsReview(Map<String, dynamic> d) {
+    final c = corrections[d['id']];
+    final generated = d['fen'] as String?;
+    return c != null && generated != null && c['source_hash'] != hash(generated);
+  }
+
+  /// Stores a diagram correction in corrections.json (the only file the reader writes): the zip is rewritten to a
+  /// temporary file next to the original, then renamed over it.
+  void saveDiagramFen(String id, String generatedFen, String value) {
+    corrections[id] = {
+      'target': id,
+      'type': 'diagram_fen',
+      'value': value,
+      'source_hash': hash(generatedFen),
+      'needs_review': false,
+    };
+    final out = Archive();
+    for (final f in ZipDecoder().decodeBytes(io.File(path).readAsBytesSync()).files) {
+      if (f.name != 'corrections.json') out.addFile(ArchiveFile.bytes(f.name, f.readBytes()!));
+    }
+    out.addFile(ArchiveFile.string(
+        'corrections.json', jsonEncode({'schema_version': 1, 'corrections': corrections.values.toList()})));
+    final tmp = io.File('$path.tmp')..writeAsBytesSync(ZipEncoder().encode(out));
+    tmp.renameSync(path);
   }
 }
 
@@ -98,6 +145,7 @@ class _ReaderPageState extends State<ReaderPage> {
   late int page = widget.book.pages.keys.reduce((a, b) => a < b ? a : b);
   String fen = kInitialFEN;
   String? selected, label;
+  Map<String, dynamic>? selectedDiagram;
   final _taps = <TapGestureRecognizer>[];
 
   @override
@@ -119,16 +167,51 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _pickDiagram(Map<String, dynamic> d) => setState(() {
         selected = d['id'] as String;
-        fen = d['fen'] as String;
-        label = 'Diagramme ${d['id']}${d['flipped'] == true ? ' (retourné : blancs en bas)' : ''}';
+        selectedDiagram = d;
+        fen = widget.book.fenOf(d)!;
+        label = 'Diagramme ${d['id']}${d['flipped'] == true ? ' (retourné : blancs en bas)' : ''}'
+            '${widget.book.isCorrected(d) ? ' — corrigé' : ''}${widget.book.needsReview(d) ? ' — correction à revoir' : ''}';
+      });
+
+  Future<void> _editDiagram(Map<String, dynamic> d) async {
+    final current = widget.book.fenOf(d);
+    if (current == null) return;
+    final edited = await showDialog<String>(
+      context: context,
+      builder: (_) => DiagramEditor(placement: current.split(' ').first, image: widget.book.images[d['image']]),
+    );
+    if (edited == null || edited == current.split(' ').first) return;
+    try {
+      widget.book.saveDiagramFen(d['id'] as String, d['fen'] as String, '$edited ${(d['fen'] as String).split(' ').skip(1).join(' ')}');
+      setState(() => _pickDiagram(d));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Enregistrement impossible : $e')));
+    }
+  }
+
+  final _fonts = <String, double>{};
+
+  /// Largest font size (page px) at which the text, wrapped to the block's width, fits the block's height.
+  /// ponytail: measured on plain text (bold moves are a bit wider); the OCR gives no font information.
+  double _fit(Map<String, dynamic> block) => _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
+        final text = block['text'] as String;
+        final b = (block['bbox'] as List).cast<num>();
+        var f = sqrt(b[2] * b[3] / (text.length.clamp(1, 100000) * 0.62)) * 1.15;
+        while (f > 8) {
+          final tp = TextPainter(
+              text: TextSpan(text: text, style: TextStyle(fontSize: f, height: 1.25)), textDirection: TextDirection.ltr)
+            ..layout(maxWidth: b[2].toDouble());
+          if (tp.height <= b[3] * 1.02) break;
+          f -= 0.5;
+        }
+        return f;
       });
 
   /// Text of a block, positioned where the block sits on the original page (page px scaled by [k]).
   Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, double k) {
     final text = block['text'] as String;
     final b = (block['bbox'] as List).cast<num>();
-    // ponytail: font size from the box area and text length (OCR gives no font info); exact only for plain paragraphs
-    final font = sqrt(b[2] * b[3] / (text.length.clamp(1, 100000) * 0.62)).clamp(9.0, 60.0) * k;
+    final font = _fit(block) * k;
     final spans = <InlineSpan>[];
     var pos = 0;
     for (final id in (block['moves'] as List).cast<String>()) {
@@ -169,6 +252,7 @@ class _ReaderPageState extends State<ReaderPage> {
       height: b[3] * k,
       child: InkWell(
         onTap: d['fen'] == null ? null : () => _pickDiagram(d),
+        onSecondaryTap: d['fen'] == null ? null : () => _editDiagram(d),
         child: Container(
           decoration: BoxDecoration(border: Border.all(color: d['id'] == selected ? Colors.brown : Colors.transparent, width: 3)),
           child: bytes == null ? null : Image.memory(bytes, fit: BoxFit.fill),
@@ -198,6 +282,7 @@ class _ReaderPageState extends State<ReaderPage> {
               page = p!;
               fen = kInitialFEN;
               selected = label = null;
+              selectedDiagram = null;
             }),
           ),
           const SizedBox(width: 16),
@@ -235,10 +320,73 @@ class _ReaderPageState extends State<ReaderPage> {
               StaticChessboard(size: side, orientation: Side.white, fen: fen),
               const SizedBox(height: 8),
               Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
+              if (selectedDiagram != null)
+                TextButton.icon(
+                  onPressed: () => _editDiagram(selectedDiagram!),
+                  icon: const Icon(Icons.edit),
+                  label: const Text('Corriger ce diagramme (ou clic droit)'),
+                ),
             ]),
           );
         }),
       ]),
     );
   }
+}
+
+
+/// Position editor for a diagram: drag a piece from the palette onto a square, drag a piece off the board to delete it.
+class DiagramEditor extends StatefulWidget {
+  const DiagramEditor({super.key, required this.placement, this.image});
+
+  final String placement; // piece placement part of a FEN
+  final Uint8List? image;
+
+  @override
+  State<DiagramEditor> createState() => _DiagramEditorState();
+}
+
+class _DiagramEditorState extends State<DiagramEditor> {
+  late Map<Square, Piece> pieces = Map.of(readFen(widget.placement));
+
+  static const _palette = [Role.king, Role.queen, Role.rook, Role.bishop, Role.knight, Role.pawn];
+
+  Widget _paletteRow(Side side) => Row(mainAxisSize: MainAxisSize.min, children: [
+        for (final r in _palette)
+          Draggable<Piece>(
+            data: Piece(color: side, role: r),
+            feedback: PieceWidget(piece: Piece(color: side, role: r), size: 48, pieceAssets: PieceSet.cburnettAssets),
+            child: PieceWidget(piece: Piece(color: side, role: r), size: 48, pieceAssets: PieceSet.cburnettAssets),
+          ),
+      ]);
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Corriger le diagramme'),
+        content: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (widget.image != null) Image.memory(widget.image!, width: 260),
+          const SizedBox(width: 16),
+          Column(mainAxisSize: MainAxisSize.min, children: [
+            ChessboardEditor(
+              size: 384,
+              orientation: Side.white,
+              pieces: pieces,
+              onDroppedPiece: (origin, dest, piece) => setState(() {
+                if (origin != null) pieces.remove(origin);
+                pieces[dest] = piece;
+              }),
+              onDiscardedPiece: (sq) => setState(() => pieces.remove(sq)),
+            ),
+            const SizedBox(height: 8),
+            _paletteRow(Side.white),
+            _paletteRow(Side.black),
+            const SizedBox(height: 4),
+            const Text('Glisser une pièce sur une case ; hors du plateau pour la supprimer.'),
+          ]),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
+          FilledButton(onPressed: () => Navigator.pop(context, writeFen(pieces)), child: const Text('Enregistrer')),
+        ],
+      );
 }

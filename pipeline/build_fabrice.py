@@ -8,6 +8,8 @@ import os
 import re
 import subprocess
 import sys
+import hashlib
+import os.path
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -28,9 +30,9 @@ K = DPI / 72
 # diagram boxes of page 2 in pdftohtml units (page 892 px wide for 595.32 pt): measured once with `pdftohtml -xml`
 P2_BOXES = [(133, 139, 302, 305), (494, 143, 298, 301), (133, 479, 299, 302), (492, 482, 299, 299), (133, 884, 298, 301), (498, 887, 297, 299)]
 HTML = 1240 / 892
-# Hand corrections (white at the bottom, placement only), checked square by square on the image. fenify reads the black pawn on b5
-# (yellow highlight + arrow tips) as a queen with 98.7 % confidence, so no threshold can flag it.
-CORRECTIONS = {"p2_d5": "6k1/4pppp/p2p4/1p1P4/2P5/1P6/P4PPP/6K1"}
+# Review corrections seeded once into a NEW chessbook (afterwards corrections.json belongs to the reader and is carried over).
+# fenify reads the black pawn on p2_d5 b5 (yellow highlight + arrow tips) as a queen with 98.7 % confidence: no threshold flags it.
+SEED = {"p2_d5": "6k1/4pppp/p2p4/1p1P4/2P5/1P6/P4PPP/6K1 w - - 0 1"}
 
 
 def pdf_text_blocks(no):
@@ -80,9 +82,6 @@ if __name__ == "__main__":
             "id": f"p2_d{d}", "bbox": [round(x * HTML), round(y * HTML), round(bw * HTML), round(bh * HTML)], "image": f"diagrams/p2_d{d}.png",
             "fen": oriented.board_fen() + " w - - 0 1", "confidence": round(conf, 3), "reviewed": False,
             "flipped": flipped, "orientation_sure": sure, "issues": issues(board)})
-        if (fix := CORRECTIONS.get(f"p2_d{d}")):
-            assert fix != oriented.board_fen(), "correction is now redundant"
-            pages[2]["diagrams"][-1].update(fen=fix + " w - - 0 1", reviewed=True, corrected=True)
         files[f"diagrams/p2_d{d}.png"] = src
 
     # page 6 is the full game that page 4 continues from move 16: its start position is the page-6 position after 16.Re3 (ply 31)
@@ -95,7 +94,18 @@ if __name__ == "__main__":
             files[d["image"]] = f"work/fab/crops/{os.path.basename(d['image'])}"
         files[f"scans/p{no:04d}.png"] = f"work/fab/page{no}.png"
 
+    corrections = None  # keep the reader's corrections.json across rebuilds
+    if os.path.exists(out):
+        with zipfile.ZipFile(out) as old:
+            if "corrections.json" in old.namelist():
+                corrections = old.read("corrections.json").decode()
+    if corrections is None:
+        gen = {d["id"]: d["fen"] for d in pages[2]["diagrams"]}
+        corrections = json.dumps({"schema_version": 1, "corrections": [
+            {"target": t, "type": "diagram_fen", "value": v, "source_hash": "sha256:" + hashlib.sha256(gen[t].encode()).hexdigest(),
+             "needs_review": False} for t, v in SEED.items()]}, ensure_ascii=False, indent=1)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("corrections.json", corrections)
         z.writestr("manifest.json", json.dumps({"schema_version": 1, "title": "L'attaque de minorité (Fabrice)", "language": "fr",
                                                 "figurine_notation": False, "page_count": 6, "has_scans": True}, ensure_ascii=False, indent=1))
         for no, d in sorted(pages.items()):
