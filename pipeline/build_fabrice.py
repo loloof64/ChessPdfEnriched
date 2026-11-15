@@ -28,6 +28,9 @@ K = DPI / 72
 # diagram boxes of page 2 in pdftohtml units (page 892 px wide for 595.32 pt): measured once with `pdftohtml -xml`
 P2_BOXES = [(133, 139, 302, 305), (494, 143, 298, 301), (133, 479, 299, 302), (492, 482, 299, 299), (133, 884, 298, 301), (498, 887, 297, 299)]
 HTML = 1240 / 892
+# Hand corrections (white at the bottom, placement only), checked square by square on the image. fenify reads the black pawn on b5
+# (yellow highlight + arrow tips) as a queen with 98.7 % confidence, so no threshold can flag it.
+CORRECTIONS = {"p2_d5": "6k1/4pppp/p2p4/1p1P4/2P5/1P6/P4PPP/6K1"}
 
 
 def pdf_text_blocks(no):
@@ -77,6 +80,9 @@ if __name__ == "__main__":
             "id": f"p2_d{d}", "bbox": [round(x * HTML), round(y * HTML), round(bw * HTML), round(bh * HTML)], "image": f"diagrams/p2_d{d}.png",
             "fen": oriented.board_fen() + " w - - 0 1", "confidence": round(conf, 3), "reviewed": False,
             "flipped": flipped, "orientation_sure": sure, "issues": issues(board)})
+        if (fix := CORRECTIONS.get(f"p2_d{d}")):
+            assert fix != oriented.board_fen(), "correction is now redundant"
+            pages[2]["diagrams"][-1].update(fen=fix + " w - - 0 1", reviewed=True, corrected=True)
         files[f"diagrams/p2_d{d}.png"] = src
 
     # page 6 is the full game that page 4 continues from move 16: its start position is the page-6 position after 16.Re3 (ply 31)

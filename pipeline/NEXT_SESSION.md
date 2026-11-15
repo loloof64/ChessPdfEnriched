@@ -220,3 +220,9 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   police estimée par l'aire du bloc et la longueur du texte (`sqrt(w*h/(len*0.62))`) : approximatif, peut déborder du cadre.
   Les images vues par l'OCR (petits échiquiers des captures p3-p5, `pN_fK.png`) sont gardées à leur place, FEN non lue (`fen: null`).
   Pas encore : gras/italique/couleurs du livre, filets, numéros de page ; le fac-similé (scan en fond) n'est pas affiché.
+
+## Erreur de lecture p2_d5 (signalée par Laurent)
+- Pion noir b5 (case jaune + pointes de flèches) lu DAME à 98,7 % par fenify-ft (2e choix : fou ; le pion n'est pas dans le top 2) : seuil de
+  confiance inutile. Corrigé à la main dans `build_fabrice.py` (`CORRECTIONS`, `reviewed: true`). C'est l'erreur (0,0,1) connue du jeu de test (img-008 g4).
+- À faire : mécanisme de corrections dans le lecteur (`corrections.json`, clic droit : éditeur de position) ; et entraîner avec des flèches/surlignages
+  qui recouvrent la pièce (pointes rouges sur la case voisine) pour corriger la cause plutôt que le symptôme.
