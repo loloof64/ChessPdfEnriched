@@ -79,7 +79,7 @@ def replay(text, start=None):
             prev = board.copy()
             san = board.san(mv); board.push(mv)
             before_last = prev
-            moves.append({"raw": val, "san": san, "fen": board.fen(), "ok": True, "depth": len(stack), "ply": board.ply(), "span": [start, end]})
+            moves.append({"raw": val, "san": san, "fen": board.fen(), "ok": True, "depth": len(stack), "ply": board.ply(), "span": [start, end], "uci": mv.uci()})
     return moves
 
 

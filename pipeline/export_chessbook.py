@@ -33,7 +33,7 @@ def page_data(no, js, png, start=None, crops_dir=None):
             if a <= m["span"][0] and m["span"][1] <= e:
                 mid = f"p{no}_m{len(out_moves) + 1}"
                 out_moves.append({"id": mid, "block": out_blocks[i]["id"], "span": [m["span"][0] - a, m["span"][1] - a], "raw": m["raw"],
-                                  "san": m["san"], "fen": m["fen"], "ok": m["ok"], "variation_depth": m["depth"]})
+                                  "san": m["san"], "uci": m.get("uci"), "fen": m["fen"], "ok": m["ok"], "variation_depth": m["depth"]})
                 out_blocks[i]["moves"].append(mid)
                 break
     figures = []

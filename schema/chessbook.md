@@ -59,6 +59,7 @@ All boxes are `[x, y, w, h]` in page-image pixels. `width`/`height` give the pag
 }
 ```
 
+- `uci` (optional) is the move as `e2e4` so the reader can draw the last-move arrow; null when `ok` is false.
 - `span` is the `[start, end)` character range of the move inside the block `text`, so the reader can make it clickable.
 - `san` is always English SAN (French letters already converted). `ok: false` means the move was
   illegal from the last known position (probable OCR error); `san` and `fen` are then `null`.

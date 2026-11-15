@@ -144,12 +144,14 @@ class ReaderPage extends StatefulWidget {
 class _ReaderPageState extends State<ReaderPage> {
   late int page = widget.book.pages.keys.reduce((a, b) => a < b ? a : b);
   String fen = kInitialFEN;
-  String? selected, label;
+  String? selected, label, lastUci;
+  late final _pageCtl = TextEditingController(text: '$page');
   Map<String, dynamic>? selectedDiagram;
   final _taps = <TapGestureRecognizer>[];
 
   @override
   void dispose() {
+    _pageCtl.dispose();
     for (final t in _taps) {
       t.dispose();
     }
@@ -158,6 +160,8 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _pick(Map<String, dynamic> m) => setState(() {
         selected = m['id'] as String;
+        selectedDiagram = null;
+        lastUci = m['uci'] as String?;
         fen = (m['fen'] as String?) ?? fen;
         // FEN after a white move: black to move, fullmove = n ('3. Cf3'); after a black move: fullmove = n + 1 ('2... d5')
         final f = fen.split(' ');
@@ -168,10 +172,36 @@ class _ReaderPageState extends State<ReaderPage> {
   void _pickDiagram(Map<String, dynamic> d) => setState(() {
         selected = d['id'] as String;
         selectedDiagram = d;
+        lastUci = null;
         fen = widget.book.fenOf(d)!;
         label = 'Diagramme ${d['id']}${d['flipped'] == true ? ' (retourné : blancs en bas)' : ''}'
             '${widget.book.isCorrected(d) ? ' — corrigé' : ''}${widget.book.needsReview(d) ? ' — correction à revoir' : ''}';
       });
+
+  Move? get lastMove => lastUci == null ? null : Move.parse(lastUci!);
+
+  List<int> get _numbers => widget.book.pages.keys.toList()..sort();
+
+  void _goto(int p) {
+    if (!widget.book.pages.containsKey(p)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Page $p absente (pages ${_numbers.first} à ${_numbers.last})')));
+      _pageCtl.text = '$page';
+      return;
+    }
+    setState(() {
+      page = p;
+      fen = kInitialFEN;
+      selected = label = lastUci = null;
+      selectedDiagram = null;
+    });
+    _pageCtl.text = '$p';
+  }
+
+  void _step(int delta) {
+    final n = _numbers;
+    final i = n.indexOf(page) + delta;
+    if (i >= 0 && i < n.length) _goto(n[i]);
+  }
 
   Future<void> _editDiagram(Map<String, dynamic> d) async {
     final current = widget.book.fenOf(d);
@@ -275,16 +305,19 @@ class _ReaderPageState extends State<ReaderPage> {
         title: Text(widget.book.title),
         actions: [
           IconButton(icon: const Icon(Icons.folder_open), tooltip: 'Ouvrir un livre', onPressed: widget.onOpen),
-          DropdownButton<int>(
-            value: page,
-            items: [for (final p in widget.book.pages.keys.toList()..sort()) DropdownMenuItem(value: p, child: Text('Page $p'))],
-            onChanged: (p) => setState(() {
-              page = p!;
-              fen = kInitialFEN;
-              selected = label = null;
-              selectedDiagram = null;
-            }),
+          IconButton(icon: const Icon(Icons.chevron_left), tooltip: 'Page précédente', onPressed: page > _numbers.first ? () => _step(-1) : null),
+          SizedBox(
+            width: 56,
+            child: TextField(
+              controller: _pageCtl,
+              textAlign: TextAlign.center,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(isDense: true),
+              onSubmitted: (v) => _goto(int.tryParse(v.trim()) ?? page),
+            ),
           ),
+          Text(' / ${_numbers.last}'),
+          IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'Page suivante', onPressed: page < _numbers.last ? () => _step(1) : null),
           const SizedBox(width: 16),
         ],
       ),
@@ -317,7 +350,16 @@ class _ReaderPageState extends State<ReaderPage> {
           return Padding(
             padding: const EdgeInsets.all(16),
             child: Column(children: [
-              StaticChessboard(size: side, orientation: Side.white, fen: fen),
+              StaticChessboard(
+                size: side,
+                orientation: Side.white,
+                fen: fen,
+                lastMove: lastMove,
+                shapes: {
+                  if (lastMove is NormalMove)
+                    Arrow(color: const Color(0xB3E8A317), orig: (lastMove as NormalMove).from, dest: (lastMove as NormalMove).to),
+                },
+              ),
               const SizedBox(height: 8),
               Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
               if (selectedDiagram != null)
