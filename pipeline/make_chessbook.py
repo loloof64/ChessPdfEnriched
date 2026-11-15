@@ -23,7 +23,7 @@ import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
 from PIL import Image
 
-from autocrop import find_board
+from autocrop import candidate_boxes, find_board
 from export_chessbook import FIGURE, KEEP, joined_text, page_data
 from moves import replay, tokens
 from orientation import orient
@@ -55,13 +55,14 @@ def render(pdf, n, dpi, work):
 
 
 def text_layer_blocks(pdf, n, k):
-    """OCR-style blocks from the PDF's own text (pdftotext -bbox-layout), boxes in px (k = px per point).
+    """OCR-style blocks from the PDF's own text (pdftotext -bbox-layout), boxes in px (k = px per point): ONE BLOCK PER LINE,
+    because the text layer gives the exact box of every line, so the reader can reproduce the page's layout and font sizes
+    (a paragraph block would force one size on lines that differ: titles, bold lead-ins).
     The output is a regular XHTML subset, read with regexes: no XML parser on data derived from an untrusted PDF."""
     xml = subprocess.check_output(["pdftotext", "-bbox-layout", "-f", str(n), "-l", str(n), str(pdf), "-"], text=True)
     out = []
-    for m in re.finditer(r'<block xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</block>', xml, re.S):
-        lines = re.findall(r"<line .*?</line>", m.group(5), re.S)
-        text = " ".join(" ".join(html.unescape(w) for w in re.findall(r"<word [^>]*>(.*?)</word>", line, re.S)) for line in lines).strip()
+    for m in re.finditer(r'<line xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</line>', xml, re.S):
+        text = " ".join(html.unescape(w) for w in re.findall(r"<word [^>]*>(.*?)</word>", m.group(5), re.S)).strip()
         if text:
             out.append({"block_label": "text", "block_content": text, "block_bbox": [round(float(v) * k) for v in m.groups()[:4]]})
     return out
@@ -165,23 +166,42 @@ def onwhite(im):
     return Image.alpha_composite(bg, im).convert("RGB")
 
 
-def read_diagram(model, im):
-    """(oriented board, confidence, flipped, orientation sure, raw board) or None when the image is not a board."""
+def read_at(model, im, box):
+    """(raw board, confidence) of the board inside box (fenify, square 0 = a1)."""
     import torch
     from read_fen import prep
-    if not .8 <= im.width / im.height <= 1.25:  # banners, labels
-        return None
-    x0, y0, x1, y1, score = find_board(im)
-    if score < MIN_BOARD_SCORE:
-        return None
     with torch.no_grad():
-        p = model(prep(im.crop((x0, y0, x1, y1))).unsqueeze(0)).squeeze()  # (64, 13) probabilities, square 0 = a1
+        p = model(prep(im.crop(box)).unsqueeze(0)).squeeze()  # (64, 13) probabilities
     board = chess.Board(None)
     for i, c in enumerate(p.argmax(dim=1).tolist()):
         if c:
             board.set_piece_at(i, chess.Piece((c - 1) % 6 + 1, chess.BLACK if c > 6 else chess.WHITE))
-    oriented, flipped, sure = orient(board)
-    return oriented, p.max(dim=1).values.mean().item(), flipped, sure, board
+    return board, p.max(dim=1).values.mean().item()
+
+
+def read_diagram(model, im, known=frozenset()):
+    """(oriented board, confidence, flipped, orientation sure, raw board) or None when the image is not a board.
+    `known` = piece placements that occur in the book's games: among the crops tried (the best square and its one-cell shifts),
+    the first whose reading is a known position wins; otherwise the best square's reading is kept."""
+    if not .8 <= im.width / im.height <= 1.25:  # banners, labels
+        return None
+    if find_board(im)[4] < MIN_BOARD_SCORE:
+        return None
+    reads = [read_at(model, im, box) for box in candidate_boxes(im)]
+    best = reads[0]
+    for raw, conf in reads:
+        if orient(raw)[0].board_fen() in known:
+            best = (raw, conf)
+            break
+    raw, conf = best
+    oriented, flipped, sure = orient(raw)
+    return oriented, conf, flipped, sure, raw
+
+
+def has_moves(text, lang):
+    """True when the text has a move number directly followed by a move ('12.Cf3'), not only a numbered list ('1. Les Noirs')."""
+    toks = tokens(text, lang)
+    return any(t[0] == "num" and nxt[0] == "move" for t, nxt in zip(toks, toks[1:]))
 
 
 def infer_start(text, lang, others):
@@ -200,7 +220,7 @@ def infer_start(text, lang, others):
             if m["ok"] and m["depth"] == 0 and m["ply"] == ply:
                 r = replay(text, m["fen"], lang)
                 good, bad = sum(x["ok"] for x in r), sum(not x["ok"] for x in r)
-                if good >= 5 and bad <= max(1, good // 20) and good - 3 * bad > best[0]:
+                if good >= 5 and bad <= max(2, good // 8) and good - 3 * bad > best[0]:  # prose alternatives without brackets give a few illegal moves
                     best = (good - 3 * bad, m["fen"], f"position of page {page} at ply {ply}")
     return best[1], best[2]
 
@@ -249,7 +269,8 @@ def main():
             replays[n], starts[n], start_fens[n] = (replay(texts[n], fen, a.lang) if fen else []), src, fen
     data = {n: page_data(n, blocks[n], pngs[n], replays[n]) for n in pages}
 
-    # diagrams: read each figure, then look for its position in the page's game
+    # diagrams: read each figure, then look for its position in the games of the book
+    known = {mv["fen"].split()[0] for p in pages for mv in data[p]["moves"] if mv["ok"]} | {chess.Board(f).board_fen() for f in start_fens.values() if f}
     model = None
     for n in pages:
         page_img = None
@@ -261,7 +282,7 @@ def main():
             if model is None:
                 import torch
                 model = torch.jit.load(str(a.weights), map_location="cpu").eval()
-            r = read_diagram(model, onwhite(im))
+            r = read_diagram(model, onwhite(im), known)
             # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
             if r:
                 nb += 1
@@ -274,8 +295,11 @@ def main():
             if r:
                 board, conf, flipped, sure, raw = r
                 d.update(fen=board.board_fen() + " w - - 0 1", confidence=round(conf, 3), flipped=flipped, orientation_sure=sure, issues=issues(raw))
-                hit = next((m["id"] for m in data[n]["moves"] if m["ok"] and m["fen"].split()[0] == board.board_fen()), None)
-                if not hit and starts[n] and chess.Board(start_fens[n]).board_fen() == board.board_fen():
+                # the printed position should occur in a game of the book: the page's own moves first, then any other page's
+                # (a page often shows positions of the full game printed elsewhere)
+                fen_board = board.board_fen()
+                hit = next((m["id"] for p in [n] + [q for q in pages if q != n] for m in data[p]["moves"] if m["ok"] and m["fen"].split()[0] == fen_board), None)
+                if not hit and starts[n] and chess.Board(start_fens[n]).board_fen() == fen_board:
                     hit = "start"  # the diagram shows the position the page's text starts from
                 if hit:
                     d["matches_move"] = hit  # the printed position occurs in the page's game: a strong check of the reading
@@ -306,7 +330,7 @@ def main():
         bad = sum(not m["ok"] for m in ms)
         read = [d for d in ds if d["fen"]]
         print(f"  page {n}: {len(ms)} moves, {bad} illegal" + (f", start: {starts[n]}" if starts[n] and starts[n] != "start of game" else "")
-              + (", NO START POSITION" if not ms and re.search(r"\d+\.", texts[n]) and not starts[n] else "")
+              + (", NO START POSITION" if not ms and has_moves(texts[n], a.lang) and not starts[n] else "")
               + f"; diagrams: {len(read)}/{len(ds)} read, {sum('matches_move' in d for d in read)} match the game")
 
 

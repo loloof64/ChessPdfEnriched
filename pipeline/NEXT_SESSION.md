@@ -262,3 +262,20 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   que PaddleOCR-VL ne donne pas.
 - Revue de sécurité : images intégrées d'un PDF non fiable : taille lue AVANT décodage (`get_px_size`), plafond 40 Mpx et 60 images par page,
   miniature 4000 px, `Image.MAX_IMAGE_PIXELS` explicite. Non traité : page de dimensions énormes (pdftoppm) ; `--dpi` borné par l'utilisateur.
+
+## attaque_minorite_2.pdf (retours de Laurent, nov. 2026) : causes et correctifs
+- Pages 4-7 « aucun coup » : (1) p8 contient DEUX parties à la suite, traitées comme une seule -> la 2e perdue ; correctif : un « 1. » suivi d'un coup,
+  alors que des coups ont déjà été joués, démarre une nouvelle partie (`moves.replay`). (2) variante donnée SANS crochets dans le commentaire
+  (« Si 24.Fxd5 les Noirs ») : le rejeu mourait au 1er coup illégal ; correctif : après un coup numéroté illégal, reprise au prochain numéro de coup
+  attendu dont le coup est légal. (3) critère d'acceptation d'une position de départ trop strict (5 % d'erreurs) -> `max(2, bons // 8)`.
+- p8 « 26.Td2 » ambigu (deux tours peuvent y aller, le livre ne précise pas) : `_disambiguate` choisit le candidat après lequel les coups suivants
+  restent légaux (`Rdd2`). Résultat p8 : 168 coups, 0 illégal (2 parties complètes).
+- Pages 1-3 (couche texte) : un bloc par LIGNE (boîte exacte de chaque ligne, donc tailles et positions fidèles) au lieu d'un bloc par paragraphe ;
+  p2-p3 n'ont aucun coup (théorie numérotée « 1. Paralyser... ») : l'avertissement « NO START POSITION » était faux (`has_moves`).
+- Résultats : p4 43 coups (1 illégal = variante sans crochets), p5 56 (5 illégaux : colonne de droite qui reprend une variante ouverte sur l'autre
+  colonne), p6 19, p7 39, p4-p5 diagrammes confirmés par la partie (3/3 et 2/2) ; p6-p7 diagrammes lus mais non retrouvés dans la partie (à vérifier).
+- Diagrammes : un recadrage « anneau extérieur » (préférer le carré dont l'extérieur n'alterne pas) a été ESSAYÉ puis retiré : moins bon (confirmés 5 -> 4 sur
+  attaque_minorite_2). Retenu : `candidate_boxes` (meilleur carré + 8 décalages d'une case) et choix de celui dont la lecture est une position RÉELLE
+  de la partie (positions de tous les coups de toutes les pages). Confirmés : attaque_minorite_2 8/11 (p4 3/3, p5 2/2, p6 1/3, p7 2/3), attaque_minorite_1
+  p4 2/2, p5 2/2, p3 0/2 (positions peut-être absentes de la partie). Les non confirmés restent à vérifier à l'oeil (pas de `matches_move`).
+- Fichier produit : `pipeline/work/attaque_minorite_2.chessbook` (`make_chessbook.py ... -o work/attaque_minorite_2.chessbook`).

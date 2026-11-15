@@ -33,6 +33,48 @@ def plausible_lone(tok: str, pieces: str) -> bool:
     return "x" in tok or tok[0] in pieces or tok.startswith(("0-0", "O-O")) or tok[-1] in "!?"  # 'a6!?': an annotation marks a move
 
 
+def _legal(board, tok, table):
+    try:
+        board.parse_san(to_san(tok, table))
+        return True
+    except ValueError:
+        return False
+
+
+def _disambiguate(board, san, toks, idx, table, look=4):
+    """Pick among the legal moves a piece SAN could mean the one after which the next moves of the same run stay legal
+    (ties: the first). Returns None when nothing fits at all."""
+    head = san.rstrip("+#")
+    cands = []
+    for extra in ("abcdefgh12345678"):
+        try:
+            mv = board.parse_san(head[0] + extra + head[1:])
+        except ValueError:
+            continue
+        if mv not in cands:
+            cands.append(mv)
+    best, best_score = None, -1
+    for mv in cands:
+        b = board.copy()
+        b.push(mv)
+        score = 0
+        for kind, val, *_ in toks[idx + 1: idx + 1 + 3 * look]:
+            if kind != "move":
+                if kind == "num":
+                    continue
+                break
+            try:
+                b.push(b.parse_san(to_san(val, table)))
+                score += 1
+            except ValueError:
+                break
+            if score >= look:
+                break
+        if score > best_score:
+            best, best_score = mv, score
+    return best
+
+
 def tokens(text, lang="fr"):
     """[(kind, value, start, end)] in order; prose between tokens is recorded as ('prose', '')."""
     out, pos = [], 0
@@ -66,7 +108,15 @@ def replay(text, start=None, lang="fr"):
         i = j
     dead = False
     for idx, (kind, val, start, end) in enumerate(toks):
-        if kind == "open":
+        if kind == "num" and dead and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
+            # after an illegal move (often an alternative given in prose without brackets: 'Si 24.Fxd5 ...') resume at the next move
+            # number that is exactly the one the board expects and whose move is legal
+            n, black = int(val.rstrip(".")), val.endswith("...")
+            if n == board.fullmove_number and black == (board.turn == chess.BLACK) and _legal(board, toks[idx + 1][1], table):
+                dead = False
+        if kind == "num" and val == "1." and not stack and board.ply() > 0 and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
+            board, before_last, dead = chess.Board(), None, False  # "1." after moves have been played: a new game starts here
+        elif kind == "open":
             stack.append((board, before_last, dead)); board = (before_last or board).copy(); dead = False; branch = board.copy()
         elif kind == "semi" and stack:  # sibling variation: restart from the same branch point
             board = stack[-1][1].copy() if stack[-1][1] else board; dead = False
@@ -75,9 +125,14 @@ def replay(text, start=None, lang="fr"):
         elif kind == "move":
             if dead or not (run_ok.get(idx) or plausible_lone(val, pieces)):
                 continue
+            mv = None
             try:
                 mv = board.parse_san(to_san(val, table))
+            except chess.AmbiguousMoveError:  # two pieces can go there and the book does not say which ('26.Td2')
+                mv = _disambiguate(board, to_san(val, table), toks, idx, table)
             except ValueError:
+                pass
+            if mv is None:
                 if (idx > 0 and toks[idx - 1][0] == "num") or plausible_lone(val, pieces):  # a pawn square in prose is just skipped
                     moves.append({"raw": val, "san": None, "fen": None, "ok": False, "depth": len(stack), "span": [start, end]})
                     dead = True

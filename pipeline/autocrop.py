@@ -49,6 +49,21 @@ def find_board(img: Image.Image):
     return x, y, x + s, y + s, sc
 
 
+def candidate_boxes(img: Image.Image):
+    """The best square first, then the 8 squares shifted by one cell: a checkerboard is periodic, so the true board is often
+    one cell off. A caller that can check a reading (against the game) picks among them."""
+    x0, y0, x1, y1, _ = find_board(img)
+    c = (x1 - x0) / 8
+    out = [(x0, y0, x1, y1)]
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dx or dy:
+                b = (round(x0 + dx * c), round(y0 + dy * c), round(x1 + dx * c), round(y1 + dy * c))
+                if b[0] >= 0 and b[1] >= 0 and b[2] <= img.width and b[3] <= img.height:
+                    out.append(b)
+    return out
+
+
 if __name__ == "__main__":
     import glob
     for fn in sorted(glob.glob("work/am1/img-00[4-9].png")) + ["work/f60/b03.png", "work/f60/b13.png"]:
