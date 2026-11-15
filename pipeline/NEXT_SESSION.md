@@ -201,3 +201,10 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Lecteur Flutter (`lib/main.dart`, remplace le gabarit compteur) : `CHESSBOOK=chemin.chessbook flutter run -d linux` ; texte à
   gauche, coups cliquables (rouge = illégal), plateau `StaticChessboard` à droite. Pas de sélecteur de fichier, pas d'éditeur,
   pas de `corrections.json` ; non vérifié visuellement par Claude (pas d'accès à l'écran), seulement analyse + test + lancement.
+
+## Lecteur Flutter : affichage Linux (nov. 2026)
+- Après la mise à jour de Flutter 3.50 (même jour), la fenêtre Linux se dessinait décalée/réduite (coin 640x360, reste noir), y compris
+  pour une app minimale (un seul `Text`) : défaut du moteur, pas du lecteur. Corrigé côté Laurent (réglage/commande à préciser) ;
+  essais proposés : `--no-enable-impeller`, `--enable-software-rendering`, `flutter downgrade`.
+- Vérifié visuellement par Laurent : texte à gauche, coups cliquables, plateau à droite ; la position après `8...Cf8` est exacte.
+- À faire côté lecteur : étiquette du coup en français (C F T D R) au lieu de l'anglais, sélecteur de fichier, diagrammes, corrections.
