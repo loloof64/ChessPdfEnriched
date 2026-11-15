@@ -64,18 +64,25 @@ def text_layer_blocks(pdf, n, k):
     return out
 
 
-def image_blocks(doc, n, k):
-    """Embedded images of a text-layer page as figure blocks (page-sized backgrounds and duplicates dropped)."""
+def image_blocks(doc, n, k, work):
+    """Embedded images of a text-layer page as figure blocks (page-sized backgrounds and duplicates dropped). The image itself
+    is extracted from the PDF: a crop of the rendered page would also contain the page's text, drawn a second time by the reader."""
     page = doc[n - 1]
     w, h = page.get_size()
-    boxes = []
+    found = []
     for o in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE]):
         l, b, r, t = o.get_bounds()
         box = [round(l * k), round((h - t) * k), round(r * k), round((h - b) * k)]
-        if (r - l) * (t - b) < .8 * w * h and box not in boxes:
-            boxes.append(box)
-    boxes.sort(key=lambda b: (round(b[1] / 100), b[0]))  # top to bottom, then left to right
-    return [{"block_label": "image", "block_content": "", "block_bbox": b} for b in boxes]
+        if (r - l) * (t - b) < .8 * w * h and box not in [f[0] for f in found]:
+            found.append((box, o))
+    found.sort(key=lambda f: (round(f[0][1] / 100), f[0][0]))  # top to bottom, then left to right
+    out = []
+    (work / "embedded").mkdir(parents=True, exist_ok=True)
+    for i, (box, o) in enumerate(found, 1):
+        path = work / "embedded" / f"p{n}_{i}.png"
+        o.get_bitmap(render=True).to_pil().save(path)
+        out.append({"block_label": "image", "block_content": "", "block_bbox": box, "image_file": str(path.relative_to(work))})
+    return out
 
 
 class Ocr:
@@ -133,12 +140,20 @@ def page_blocks(pdf, doc, n, dpi, work, ocr, min_words):
     words = len(subprocess.check_output(["pdftotext", "-f", str(n), "-l", str(n), str(pdf), "-"], text=True).split())
     if words >= min_words:
         k = dpi / 72
-        blocks, how = text_layer_blocks(pdf, n, k) + image_blocks(doc, n, k), "text layer"
+        blocks, how = text_layer_blocks(pdf, n, k) + image_blocks(doc, n, k, work), "text layer"
     else:
         blocks, how = ocr.read_page(png), "OCR"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(blocks, ensure_ascii=False))
     return blocks, how
+
+
+def onwhite(im):
+    """RGB version of an image that may have transparency (embedded logos): composited on white."""
+    if im.mode != "RGBA":
+        return im.convert("RGB")
+    bg = Image.new("RGBA", im.size, "white")
+    return Image.alpha_composite(bg, im).convert("RGB")
 
 
 def read_diagram(model, im):
@@ -233,11 +248,11 @@ def main():
         for b in (b for b in blocks[n] if b["block_label"] in FIGURE):
             page_img = page_img or Image.open(pngs[n]).convert("RGB")
             x0, y0, x1, y1 = b["block_bbox"]
-            im = page_img.crop((x0, y0, x1, y1))
+            im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
             if model is None:
                 import torch
                 model = torch.jit.load(str(a.weights), map_location="cpu").eval()
-            r = read_diagram(model, im)
+            r = read_diagram(model, onwhite(im))
             # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
             if r:
                 nb += 1

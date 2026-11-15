@@ -18,7 +18,7 @@ def _lang(lang):
     """(token regex, translate table to English SAN, piece letters) for a book language."""
     p = PIECES[lang]
     san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}])?)[+#]?[!?]*"
-    tok = re.compile(rf"(?P<num>\d+\.(?:\.\.)?|\d+\.\.\.)|(?P<move>{san})(?![A-Za-z0-9=.])|(?P<semi>;)|(?P<open>\[)|(?P<close>\])|(?P<res>1-0|0-1|1/2-1/2)")
+    tok = re.compile(rf"(?P<num>\d+\.(?:\.\.)?|\d+\.\.\.)|(?P<move>{san})(?![A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>\[)|(?P<close>\])|(?P<res>1-0|0-1|1/2-1/2)")
     return tok, str.maketrans(p, "NBRQK"), p
 
 

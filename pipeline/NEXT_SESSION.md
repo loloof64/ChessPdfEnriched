@@ -247,3 +247,10 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Ids : plateaux `pN_dK`, autres images `pN_iK` (logos, chiffres) ; la numérotation des plateaux ne dépend pas des autres images.
 - Pas fait : figurines ; `uv.lock` n'a pas été régénéré (la résolution `uv lock` dépasse 2 min : lancer `uv sync` sur la machine, qui le fait) ;
   autocrop à améliorer (ambiguïté d'une case) ; PDF de Fabrice 2 et 3 non traités avec le programme générique.
+
+## Corrections de rendu (nov. 2026, retours de Laurent)
+- p1 de Fabrice : chevauchement = image recadrée dans le RENDU de la page (contient aussi le texte, redessiné par le lecteur). Pages à couche texte :
+  l'image intégrée est maintenant extraite du PDF (`image_blocks`, pypdfium2 `get_bitmap(render=True)`, RGBA).
+- p5 : `a3=` (signe `=` collé à un coup) n'était pas reconnu : le coup 30...a3 de la variante est lu (123 coups). Regex : `=` autorisé si non suivi d'une lettre/chiffre.
+- p5 bas droite : police mesurée avec les coups en GRAS (identique à l'affichage) pour que les blocs riches en coups ne débordent plus.
+- Zoom : « Page entière » existe (toute la page visible) ; pas de bouton pour masquer l'échiquier (Laurent : ok pour page entière).

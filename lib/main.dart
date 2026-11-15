@@ -239,28 +239,26 @@ class _ReaderPageState extends State<ReaderPage> {
 
   final _fonts = <String, double>{};
 
-  /// Largest font size (page px) at which the text, wrapped to the block's width, fits the block's height.
-  /// ponytail: measured on plain text (bold moves are a bit wider); the OCR gives no font information.
-  double _fit(Map<String, dynamic> block) => _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
-        final text = block['text'] as String;
+  /// Largest font size (page px) at which the block, wrapped to its width, fits its height. Measured with the same spans
+  /// as the display, bold moves included (they are wider than plain text).
+  double _fit(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) =>
+      _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
         final b = (block['bbox'] as List).cast<num>();
-        // start large and shrink to the largest size that fits (OCR boxes are tight, so this recovers the book's size)
         var f = 80.0;
         while (f > 8) {
           final tp = TextPainter(
-              text: TextSpan(text: text, style: TextStyle(fontSize: f, height: 1.25)), textDirection: TextDirection.ltr)
-            ..layout(maxWidth: b[2].toDouble() * 0.97); // bold moves are a bit wider than the plain text measured here
+              text: TextSpan(children: _spans(block, moves, null), style: TextStyle(fontSize: f, height: 1.25)),
+              textDirection: TextDirection.ltr)
+            ..layout(maxWidth: b[2].toDouble());
           if (tp.height <= b[3] * 1.02) break;
           f -= 0.5;
         }
         return f;
       });
 
-  /// Text of a block, positioned where the block sits on the original page (page px scaled by [k]).
-  Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, double k) {
+  /// Spans of a block: plain text with its moves in bold, clickable when [taps] is given (None when only measuring).
+  List<InlineSpan> _spans(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, List<TapGestureRecognizer>? taps) {
     final text = block['text'] as String;
-    final b = (block['bbox'] as List).cast<num>();
-    final font = _fit(block) * k;
     final spans = <InlineSpan>[];
     var pos = 0;
     for (final id in (block['moves'] as List).cast<String>()) {
@@ -269,8 +267,11 @@ class _ReaderPageState extends State<ReaderPage> {
       if (s[0] < pos) continue;
       spans.add(TextSpan(text: text.substring(pos, s[0])));
       final ok = m['ok'] as bool;
-      final tap = TapGestureRecognizer()..onTap = ok ? () => _pick(m) : null;
-      _taps.add(tap);
+      TapGestureRecognizer? tap;
+      if (taps != null) {
+        tap = TapGestureRecognizer()..onTap = ok ? () => _pick(m) : null;
+        taps.add(tap);
+      }
       spans.add(TextSpan(
         text: text.substring(s[0], s[1]),
         recognizer: tap,
@@ -283,11 +284,18 @@ class _ReaderPageState extends State<ReaderPage> {
       pos = s[1];
     }
     spans.add(TextSpan(text: text.substring(pos)));
+    return spans;
+  }
+
+  /// Text of a block, positioned where the block sits on the original page (page px scaled by [k]).
+  Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, double k) {
+    final b = (block['bbox'] as List).cast<num>();
     return Positioned(
       left: b[0] * k,
       top: b[1] * k,
       width: b[2] * k,
-      child: Text.rich(TextSpan(children: spans), style: TextStyle(fontSize: font, height: 1.25, color: Colors.black87)),
+      child: Text.rich(TextSpan(children: _spans(block, moves, _taps)),
+          style: TextStyle(fontSize: _fit(block, moves) * k, height: 1.25, color: Colors.black87)),
     );
   }
 
