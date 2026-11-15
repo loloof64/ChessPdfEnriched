@@ -15,7 +15,7 @@ from french_moves import replay
 KEEP = ("text", "paragraph_title", "header", "doc_title")
 
 
-def page_data(no, js, png, start=None):
+def page_data(no, js, png, start=None, crops_dir=None):
     blocks = [b for b in json.load(open(js)) if b["block_label"] in KEEP]
     texts = [b["block_content"] for b in blocks]
     joined = " ".join(texts)
@@ -36,7 +36,16 @@ def page_data(no, js, png, start=None):
                                   "san": m["san"], "fen": m["fen"], "ok": m["ok"], "variation_depth": m["depth"]})
                 out_blocks[i]["moves"].append(mid)
                 break
-    return {"page": no, "width": w, "height": h, "blocks": out_blocks, "moves": out_moves, "diagrams": []}
+    figures = []
+    if crops_dir:  # images found by the OCR (e.g. small boards in screenshots): kept at their place, FEN not read yet
+        page = Image.open(png).convert("RGB")
+        for i, b in enumerate(b for b in json.load(open(js)) if b["block_label"] == "image"):
+            x0, y0, x1, y1 = b["block_bbox"]
+            name = f"p{no}_f{i + 1}.png"
+            page.crop((x0, y0, x1, y1)).save(f"{crops_dir}/{name}")
+            figures.append({"id": f"p{no}_f{i + 1}", "bbox": [x0, y0, x1 - x0, y1 - y0], "image": f"diagrams/{name}", "fen": None,
+                            "confidence": 0, "reviewed": False})
+    return {"page": no, "width": w, "height": h, "blocks": out_blocks, "moves": out_moves, "diagrams": figures}
 
 
 if __name__ == "__main__":

@@ -216,3 +216,7 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Les petits diagrammes des captures p3-p6 ne sont PAS lus ; `attaque_minorite_2.pdf` (8 p.) et `_3.pdf` (13 p.) existent aussi.
 - Pièges : `pdftohtml` écrit des jpg à côté du PDF (jamais l'utiliser sans `-i`) ; `read_fen` : l'indice de case fenify 0 = a1.
 - Lecteur : étiquette `3. Cf3` / `2... d5` (numéro déduit du FEN, texte = coup imprimé), diagrammes cliquables sous le texte.
+- Mise en page fidèle (lecteur) : chaque bloc de texte et chaque image est positionné à son `bbox` d'origine (Stack à l'échelle de la page),
+  police estimée par l'aire du bloc et la longueur du texte (`sqrt(w*h/(len*0.62))`) : approximatif, peut déborder du cadre.
+  Les images vues par l'OCR (petits échiquiers des captures p3-p5, `pN_fK.png`) sont gardées à leur place, FEN non lue (`fen: null`).
+  Pas encore : gras/italique/couleurs du livre, filets, numéros de page ; le fac-similé (scan en fond) n'est pas affiché.

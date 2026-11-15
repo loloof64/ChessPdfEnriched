@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:io' as io;
 
@@ -122,8 +123,12 @@ class _ReaderPageState extends State<ReaderPage> {
         label = 'Diagramme ${d['id']}${d['flipped'] == true ? ' (retourné : blancs en bas)' : ''}';
       });
 
-  Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) {
+  /// Text of a block, positioned where the block sits on the original page (page px scaled by [k]).
+  Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, double k) {
     final text = block['text'] as String;
+    final b = (block['bbox'] as List).cast<num>();
+    // ponytail: font size from the box area and text length (OCR gives no font info); exact only for plain paragraphs
+    final font = sqrt(b[2] * b[3] / (text.length.clamp(1, 100000) * 0.62)).clamp(9.0, 60.0) * k;
     final spans = <InlineSpan>[];
     var pos = 0;
     for (final id in (block['moves'] as List).cast<String>()) {
@@ -146,9 +151,29 @@ class _ReaderPageState extends State<ReaderPage> {
       pos = s[1];
     }
     spans.add(TextSpan(text: text.substring(pos)));
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Text.rich(TextSpan(children: spans), style: const TextStyle(fontSize: 16, height: 1.4)),
+    return Positioned(
+      left: b[0] * k,
+      top: b[1] * k,
+      width: b[2] * k,
+      child: Text.rich(TextSpan(children: spans), style: TextStyle(fontSize: font, height: 1.25, color: Colors.black87)),
+    );
+  }
+
+  Widget _figure(Map<String, dynamic> d, double k) {
+    final b = (d['bbox'] as List).cast<num>();
+    final bytes = widget.book.images[d['image']];
+    return Positioned(
+      left: b[0] * k,
+      top: b[1] * k,
+      width: b[2] * k,
+      height: b[3] * k,
+      child: InkWell(
+        onTap: d['fen'] == null ? null : () => _pickDiagram(d),
+        child: Container(
+          decoration: BoxDecoration(border: Border.all(color: d['id'] == selected ? Colors.brown : Colors.transparent, width: 3)),
+          child: bytes == null ? null : Image.memory(bytes, fit: BoxFit.fill),
+        ),
+      ),
     );
   }
 
@@ -180,25 +205,26 @@ class _ReaderPageState extends State<ReaderPage> {
       ),
       body: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(
-          child: ListView(padding: const EdgeInsets.all(16), children: [
-            Text('${moves.length} coups, ${moves.length - nOk} illégaux (en rouge)', style: Theme.of(context).textTheme.labelMedium),
-            const SizedBox(height: 8),
-            for (final b in (data['blocks'] as List)) _block(b as Map<String, dynamic>, moves),
-            if ((data['diagrams'] as List).isNotEmpty)
-              Wrap(spacing: 12, runSpacing: 12, children: [
-                for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>())
-                  InkWell(
-                    onTap: () => _pickDiagram(d),
-                    child: Container(
-                      decoration: BoxDecoration(border: Border.all(color: d['id'] == selected ? Colors.brown : Colors.transparent, width: 3)),
-                      child: Column(children: [
-                        if (widget.book.images[d['image']] != null) Image.memory(widget.book.images[d['image']]!, width: 150),
-                        Text('${d['id']}  (confiance ${d['confidence']})', style: Theme.of(context).textTheme.labelSmall),
-                      ]),
-                    ),
-                  ),
+          child: LayoutBuilder(builder: (context, c) {
+            final w = c.maxWidth - 32;
+            final k = w / (data['width'] as num);
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${moves.length} coups, ${moves.length - nOk} illégaux (en rouge)', style: Theme.of(context).textTheme.labelMedium),
+                const SizedBox(height: 8),
+                Container(
+                  width: w,
+                  height: (data['height'] as num) * k,
+                  decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.black26)),
+                  child: Stack(children: [
+                    for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>()) _figure(d, k),
+                    for (final b in (data['blocks'] as List).cast<Map<String, dynamic>>()) _block(b, moves, k),
+                  ]),
+                ),
               ]),
-          ]),
+            );
+          }),
         ),
         LayoutBuilder(builder: (context, _) {
           // board fits the window: at most 400 px, at most the height left under the app bar minus the caption

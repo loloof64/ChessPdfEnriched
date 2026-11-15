@@ -4,6 +4,7 @@ Needs work/fab/page{3..6}.{png,json} (2x captures + PaddleOCR-VL blocks, see NEX
 (pdfimages), work/fenify-ft.pt. Usage: build_fabrice.py [OUT.chessbook]   (run from pipeline/)
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -58,6 +59,7 @@ if __name__ == "__main__":
     subprocess.run(["pdftoppm", "-r", str(DPI), "-png", "-f", "1", "-l", "2", PDF, "work/fab/pdf"], check=True)
     model = torch.jit.load("work/fenify-ft.pt", map_location="cpu").eval()
     pages, files = {}, {}
+    os.makedirs("work/fab/crops", exist_ok=True)
 
     for no in (1, 2):
         png = f"work/fab/pdf-{no}.png"
@@ -82,7 +84,9 @@ if __name__ == "__main__":
     text6 = " ".join(b["block_content"] for b in full[6] if b["block_label"] in ("text", "paragraph_title"))
     start4 = next(m["fen"] for m in replay(text6) if m["depth"] == 0 and m.get("ply") == 31)
     for no in (3, 4, 5, 6):
-        pages[no] = page_data(no, f"work/fab/page{no}.json", f"work/fab/page{no}.png", start4 if no == 4 else None)
+        pages[no] = page_data(no, f"work/fab/page{no}.json", f"work/fab/page{no}.png", start4 if no == 4 else None, "work/fab/crops")
+        for d in pages[no]["diagrams"]:
+            files[d["image"]] = f"work/fab/crops/{os.path.basename(d['image'])}"
         files[f"scans/p{no:04d}.png"] = f"work/fab/page{no}.png"
 
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
