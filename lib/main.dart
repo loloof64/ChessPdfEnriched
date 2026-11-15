@@ -258,11 +258,15 @@ class _ReaderPageState extends State<ReaderPage> {
         }
         // the OCR box itself tolerates 2 %; a limit set by a neighbour does not (it is where the overlap would start), with 2 % margin
         final limit = maxH < b[3] ? maxH * 0.98 : b[3] * 1.02;
+        final base = DefaultTextStyle.of(context).style;
+        final scaler = MediaQuery.textScalerOf(context);
         var f = 80.0;
         while (f > 8) {
+          // same effective style as the displayed Text.rich (theme font and letter spacing, text scale), or the measure is too narrow
           final tp = TextPainter(
-              text: TextSpan(children: _spans(block, moves, null), style: TextStyle(fontSize: f, height: 1.25)),
-              textDirection: TextDirection.ltr)
+              text: TextSpan(children: _spans(block, moves, null), style: base.merge(TextStyle(fontSize: f, height: 1.25))),
+              textDirection: TextDirection.ltr,
+              textScaler: scaler)
             ..layout(maxWidth: b[2].toDouble());
           if (tp.height <= limit) break;
           f -= 0.5;
