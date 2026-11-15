@@ -38,6 +38,7 @@ dependencies:
   dartchess: ^0.14.0
   archive: ^4.5.2
   material_ui: ^1.11.0
+  file_picker: ^13.3.3
 
 dev_dependencies:
   flutter_test:

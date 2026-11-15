@@ -207,7 +207,7 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   pour une app minimale (un seul `Text`) : défaut du moteur, pas du lecteur. Corrigé par `flutter downgrade` (version d'avant la mise à jour du jour ; ne pas remettre à jour sans vérifier) ;
   essais proposés : `--no-enable-impeller`, `--enable-software-rendering`, `flutter downgrade`.
 - Vérifié visuellement par Laurent : texte à gauche, coups cliquables, plateau à droite ; la position après `8...Cf8` est exacte.
-- À faire côté lecteur : étiquette du coup en français (C F T D R) au lieu de l'anglais, sélecteur de fichier, diagrammes, corrections.
+- Lecteur : bouton « Ouvrir » (file_picker, zenity sous Linux) ; plus de livre par défaut. Reste : corrections, éditeur, navigation clavier.
 
 ## Livre complet de Fabrice (`build_fabrice.py`, nov. 2026)
 - `cd pipeline && .venv/bin/python build_fabrice.py` écrit `work/fab/attaque_minorite.chessbook` : p1-2 texte réel (`pdftotext -bbox-layout`),

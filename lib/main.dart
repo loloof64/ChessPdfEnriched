@@ -5,16 +5,15 @@ import 'dart:io' as io;
 import 'package:archive/archive.dart';
 import 'package:chessground/chessground.dart';
 import 'package:dartchess/dartchess.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 
 /// Minimal .chessbook reader: text on the left with clickable moves, board on the right.
-/// Book path: first program argument, else CHESSBOOK, else the dev sample (no file picker yet).
+/// Book to open at start: first program argument, else CHESSBOOK; otherwise the "Ouvrir" screen.
 void main(List<String> args) {
-  // ponytail: dev default relative to the project root (what an IDE run uses); replace by a file picker
-  const sample = 'pipeline/work/fab/attaque_minorite.chessbook';
-  final path = args.firstOrNull ?? io.Platform.environment['CHESSBOOK'] ?? (io.File(sample).existsSync() ? sample : null);
-  runApp(ReaderApp(book: path == null ? null : Book.load(path)));
+  final path = args.firstOrNull ?? io.Platform.environment['CHESSBOOK'];
+  runApp(ReaderApp(initial: path == null ? null : Book.load(path)));
 }
 
 class Book {
@@ -38,25 +37,58 @@ class Book {
   }
 }
 
-class ReaderApp extends StatelessWidget {
-  const ReaderApp({super.key, required this.book});
+class ReaderApp extends StatefulWidget {
+  const ReaderApp({super.key, this.initial});
 
-  final Book? book;
+  final Book? initial;
+
+  @override
+  State<ReaderApp> createState() => _ReaderAppState();
+}
+
+class _ReaderAppState extends State<ReaderApp> {
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
+  late Book? book = widget.initial;
+
+  Future<void> _open() async {
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: 'Ouvrir un livre',
+      type: FileType.custom,
+      allowedExtensions: ['chessbook'],
+    );
+    final path = picked.firstOrNull?.path;
+    if (path == null) return;
+    try {
+      setState(() => book = Book.load(path));
+    } catch (e) {
+      _messenger.currentState?.showSnackBar(SnackBar(content: Text('Fichier illisible : $e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'ChessPdfEnriched',
+        scaffoldMessengerKey: _messenger,
         theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown)),
         home: book == null
-            ? const Scaffold(body: Center(child: Text('Aucun livre : passer le chemin du .chessbook en argument ou dans CHESSBOOK')))
-            : ReaderPage(book: book!),
+            ? Scaffold(
+                body: Center(
+                  child: FilledButton.icon(
+                    onPressed: _open,
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('Ouvrir un livre (.chessbook)'),
+                  ),
+                ),
+              )
+            : ReaderPage(key: ValueKey(book), book: book!, onOpen: _open),
       );
 }
 
 class ReaderPage extends StatefulWidget {
-  const ReaderPage({super.key, required this.book});
+  const ReaderPage({super.key, required this.book, required this.onOpen});
 
   final Book book;
+  final VoidCallback onOpen;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -134,6 +166,7 @@ class _ReaderPageState extends State<ReaderPage> {
       appBar: AppBar(
         title: Text(widget.book.title),
         actions: [
+          IconButton(icon: const Icon(Icons.folder_open), tooltip: 'Ouvrir un livre', onPressed: widget.onOpen),
           DropdownButton<int>(
             value: page,
             items: [for (final p in widget.book.pages.keys.toList()..sort()) DropdownMenuItem(value: p, child: Text('Page $p'))],
