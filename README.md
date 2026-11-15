@@ -74,6 +74,7 @@ Pour chaque page, le programme :
 2. nettoie les défauts connus de l'OCR : blocs de texte vides et passages répétés dans le bloc voisin ;
 3. repère les images, lit la position de celles qui sont des échiquiers et la compare à la partie de la page
    (`matches_move` dans le fichier : c'est un bon contrôle de la lecture) ;
+3b. localise chaque coup sur l'image de la page (pour le fac-similé) : par les boîtes des mots du PDF quand il a une couche texte, sinon avec un second OCR (PP-OCRv5, boîtes mot par mot) dont le texte est aligné caractère par caractère sur celui du modèle principal ;
 4. lit les coups, convertit en notation anglaise, les rejoue avec python-chess depuis la position de départ ; les variantes
    `[ ... ]` partent de la position avant le dernier coup. Un coup illégal est une erreur probable de l'OCR : il est marqué
    `ok: false` (en rouge dans le lecteur) et la ligne s'arrête là ;
@@ -112,8 +113,10 @@ flutter run -d linux
 
 - **Ouvrir un livre** : bouton « Ouvrir un livre » (ou l'icône dossier en haut) et choisir un fichier `.chessbook`. On peut aussi
   passer le chemin : `flutter run -d linux --dart-entrypoint-args chemin.chessbook`, ou la variable `CHESSBOOK=chemin.chessbook`.
-- **Lire** : la page est dessinée avec chaque bloc et chaque image à sa place d'origine. Cliquer sur un coup (en gras) affiche la
-  position, avec la flèche du dernier coup et son numéro (`3. Cf3`, `2... d5`). Un coup en rouge est illégal.
+- **Lire** : par défaut le **fac-similé** : la page d'origine telle quelle (image du PDF), avec des zones cliquables posées sur les coups et les
+  diagrammes. Cliquer sur un coup affiche la position, avec la flèche du dernier coup et son numéro (`3. Cf3`, `2... d5`). Un coup entouré de
+  rouge est illégal. L'icône page/image de la barre du haut bascule vers le **texte reconstitué** (blocs de texte replacés, utile si le livre n'a pas
+  les images des pages, option `--no-scans`).
 - **Pages** : boutons précédente et suivante, ou taper un numéro dans le champ puis valider.
 - **Zoom** : boutons − et +, ou le menu au milieu : « Page entière » (toute la page visible), « Largeur de page », ou un pourcentage
   (100 % = taille réelle de la page ; au-delà de la largeur du volet, la page défile aussi horizontalement).

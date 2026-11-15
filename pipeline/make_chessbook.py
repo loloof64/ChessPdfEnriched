@@ -26,8 +26,9 @@ import pypdfium2.raw as pdfium_c
 from PIL import Image
 
 from autocrop import candidate_boxes, find_board
-from export_chessbook import FIGURE, KEEP, joined_text, page_data
+from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
 from moves import replay, tokens
+from wordboxes import Classic, move_rects_ocr, move_rects_textlayer
 from orientation import orient
 from plausibility import issues
 
@@ -64,9 +65,15 @@ def text_layer_blocks(pdf, n, k):
     xml = subprocess.check_output(["pdftotext", "-bbox-layout", "-f", str(n), "-l", str(n), str(pdf), "-"], text=True)
     out = []
     for m in re.finditer(r'<line xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</line>', xml, re.S):
+        words, pos = [], 0
+        for wm in re.finditer(r'<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</word>', m.group(5), re.S):
+            wt = html.unescape(wm.group(5))
+            words.append([pos, pos + len(wt)] + [float(v) * k for v in wm.groups()[:4]])
+            pos += len(wt) + 1  # words are joined with one space
         text = " ".join(html.unescape(w) for w in re.findall(r"<word [^>]*>(.*?)</word>", m.group(5), re.S)).strip()
         if text:
-            out.append({"block_label": "text", "block_content": text, "block_bbox": [round(float(v) * k) for v in m.groups()[:4]]})
+            out.append({"block_label": "text", "block_content": text, "words": words,
+                        "block_bbox": [round(float(v) * k) for v in m.groups()[:4]]})
     return out
 
 
@@ -313,6 +320,27 @@ def main():
         if (work / "pages" / f"p{n}_bg.png").exists():
             data[n]["background"] = f"backgrounds/p{n}.png"
 
+    # where each move sits on the page image: lets the reader keep the ORIGINAL page and put clickable zones on it
+    classic = Classic()
+    for n in pages:
+        if not any(m["ok"] for m in data[n]["moves"]):
+            continue
+        scanned = not (work / "pages" / f"p{n}_bg.png").exists()  # no text layer: locate through a second, classic OCR
+        lines = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json") if scanned else None
+        by_id = {m["id"]: m for m in data[n]["moves"]}
+        for blk, src in zip(data[n]["blocks"], text_blocks(blocks[n])):
+            if not blk["moves"]:
+                continue
+            spans = [by_id[i]["span"] for i in blk["moves"]]
+            if scanned:
+                x, y, w, h = blk["bbox"]
+                rects = move_rects_ocr(src["block_content"], [x, y, x + w, y + h], spans, lines)
+            else:
+                rects = move_rects_textlayer(src.get("words", []), spans)
+            for i, r in zip(blk["moves"], rects):
+                if r:
+                    by_id[i]["rects"] = r
+
     # diagrams: read each figure, then look for its position in the games of the book
     known = {mv["fen"].split()[0] for p in pages for mv in data[p]["moves"] if mv["ok"]} | {chess.Board(f).board_fen() for f in start_fens.values() if f}
     model = None
@@ -375,7 +403,8 @@ def main():
         ms, ds = data[n]["moves"], data[n]["diagrams"]
         bad = sum(not m["ok"] for m in ms)
         read = [d for d in ds if d["fen"]]
-        print(f"  page {n}: {len(ms)} moves, {bad} illegal" + (f", start: {starts[n]}" if starts[n] and starts[n] != "start of game" else "")
+        located = sum(1 for m in ms if m.get("rects"))
+        print(f"  page {n}: {len(ms)} moves ({located} located on the page image), {bad} illegal" + (f", start: {starts[n]}" if starts[n] and starts[n] != "start of game" else "")
               + (", NO START POSITION" if not ms and has_moves(texts[n], a.lang) and not starts[n] else "")
               + f"; diagrams: {len(read)}/{len(ds)} read, {sum('matches_move' in d for d in read)} match the game")
 

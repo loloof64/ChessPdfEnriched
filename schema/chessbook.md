@@ -61,6 +61,8 @@ All boxes are `[x, y, w, h]` in page-image pixels. `width`/`height` give the pag
 }
 ```
 
+- `rects` (optional) lists `[x, y, w, h]` boxes of the move on the page image `scans/pNNNN.png`, one per text line it spans; the reader puts a clickable
+  zone there so the original page can be shown as is. Missing when the move could not be located.
 - `uci` (optional) is the move as `e2e4` so the reader can draw the last-move arrow; null when `ok` is false.
 - `span` is the `[start, end)` character range of the move inside the block `text`, so the reader can make it clickable.
 - `san` is always English SAN (French letters already converted). `ok: false` means the move was

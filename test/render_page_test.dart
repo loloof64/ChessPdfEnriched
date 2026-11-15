@@ -20,16 +20,18 @@ void main() {
     final loaded = Book.load(book!);
     await tester.pumpWidget(ReaderApp(initial: loaded));
     await tester.pumpAndSettle();
-    // widget tests do not decode images by themselves: decode them for real before drawing
-    final ctx = tester.element(find.byType(ReaderPage));
-    await tester.runAsync(() async {
-      for (final bytes in loaded.images.values) {
-        await precacheImage(MemoryImage(bytes), ctx);
-      }
-    });
     for (final p in (io.Platform.environment['PAGES'] ?? '1').split(',')) {
       await tester.enterText(find.byType(EditableText).first, p);
       await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      // widget tests do not decode images by themselves: decode this page's files for real, then draw again
+      final ctx = tester.element(find.byType(ReaderPage));
+      await tester.runAsync(() async {
+        final pad = int.parse(p).toString().padLeft(4, '0');
+        for (final n in loaded.names.where((n) => n == 'scans/p$pad.png' || n == 'backgrounds/p$p.png' || n.startsWith('diagrams/p${p}_'))) {
+          await precacheImage(MemoryImage(loaded.file(n)!), ctx);
+        }
+      });
       await tester.pumpAndSettle();
       await expectLater(find.byType(ReaderApp), matchesGoldenFile('render/page$p.png'));
     }

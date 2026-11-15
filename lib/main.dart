@@ -19,13 +19,26 @@ void main(List<String> args) {
 }
 
 class Book {
-  Book(this.path, this.title, this.pages, this.images, this.corrections, this.dpi);
+  Book(this.path, this.title, this.pages, this._zip, this.corrections, this.dpi);
 
   final String path;
   final double dpi; // resolution the page images were rendered at (manifest 'dpi', 200 when absent): 100 % zoom = 96 / dpi px per page px
   final String title;
   final Map<int, Map<String, dynamic>> pages;
-  final Map<String, Uint8List> images; // 'diagrams/p2_d1.png' -> bytes
+  final Archive _zip;
+  Iterable<String> get names => _zip.files.map((f) => f.name);
+  final _cache = <String, Uint8List>{}; // recently used files (page scans are big: decoded on demand, a few kept)
+
+  /// Bytes of a file of the book ('scans/p0003.png', 'diagrams/p2_d1.png', ...), or null when absent.
+  Uint8List? file(String? name) {
+    if (name == null) return null;
+    final hit = _cache.remove(name);
+    if (hit != null) return _cache[name] = hit;
+    final bytes = _zip.findFile(name)?.readBytes();
+    if (bytes == null) return null;
+    if (_cache.length >= 12) _cache.remove(_cache.keys.first);
+    return _cache[name] = Uint8List.fromList(bytes);
+  }
   final Map<String, Map<String, dynamic>> corrections; // target id -> entry of corrections.json
 
   static String hash(String s) => 'sha256:${sha256.convert(utf8.encode(s))}';
@@ -39,7 +52,6 @@ class Book {
       final m = RegExp(r'^pages/p(\d+)\.json$').firstMatch(f.name);
       if (m != null) pages[int.parse(m.group(1)!)] = json(f.name);
     }
-    final images = {for (final f in zip.files) if (f.name.startsWith('diagrams/') || f.name.startsWith('backgrounds/')) f.name: Uint8List.fromList(f.readBytes()!)};
     final corrections = <String, Map<String, dynamic>>{};
     if (zip.findFile('corrections.json') != null) {
       for (final c in json('corrections.json')['corrections'] as List) {
@@ -47,7 +59,7 @@ class Book {
       }
     }
     final manifest = json('manifest.json');
-    return Book(path, manifest['title'] as String, pages, images, corrections, ((manifest['dpi'] as num?) ?? 200).toDouble());
+    return Book(path, manifest['title'] as String, pages, zip, corrections, ((manifest['dpi'] as num?) ?? 200).toDouble());
   }
 
   /// FEN to show for a diagram: the reviewed value, unless the generated FEN changed since (then it needs review).
@@ -147,6 +159,7 @@ class _ReaderPageState extends State<ReaderPage> {
   late int page = widget.book.pages.keys.reduce((a, b) => a < b ? a : b);
   String fen = kInitialFEN;
   Side orientation = Side.white;
+  bool facsimile = true; // show the original page image (needs the scans in the book)
   // zoom: 'page' = whole page visible, 'width' = page width fills the pane, otherwise a percentage of the real page size
   String fit = 'width';
   double percent = 100;
@@ -227,7 +240,7 @@ class _ReaderPageState extends State<ReaderPage> {
     if (current == null) return;
     final edited = await showDialog<String>(
       context: context,
-      builder: (_) => DiagramEditor(placement: current.split(' ').first, image: widget.book.images[d['image']]),
+      builder: (_) => DiagramEditor(placement: current.split(' ').first, image: widget.book.file(d['image'] as String?)),
     );
     if (edited == null || edited == current.split(' ').first) return;
     try {
@@ -340,9 +353,34 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
+  /// Clickable zones of a move on the original page image (page px scaled by [k]); the selected move is highlighted.
+  List<Widget> _overlays(Map<String, dynamic> m, double k) {
+    final rects = (m['rects'] as List?)?.cast<List>() ?? const [];
+    final ok = m['ok'] as bool;
+    return [
+      for (final r in rects)
+        Positioned(
+          left: (r[0] as num) * k,
+          top: (r[1] as num) * k,
+          width: (r[2] as num) * k,
+          height: (r[3] as num) * k,
+          child: InkWell(
+            onTap: ok ? () => _pick(m) : null,
+            hoverColor: Colors.amber.withValues(alpha: .25),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: m['id'] == selected ? Colors.amber.withValues(alpha: .5) : null,
+                border: ok ? null : Border.all(color: Colors.red, width: 1.5),
+              ),
+            ),
+          ),
+        ),
+    ];
+  }
+
   Widget _figure(Map<String, dynamic> d, double k, bool drawImage) {
     final b = (d['bbox'] as List).cast<num>();
-    final bytes = widget.book.images[d['image']];
+    final bytes = widget.book.file(d['image'] as String?);
     return Positioned(
       left: b[0] * k,
       top: b[1] * k,
@@ -387,6 +425,11 @@ class _ReaderPageState extends State<ReaderPage> {
           Text(' / ${_numbers.last}'),
           IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'Page suivante', onPressed: page < _numbers.last ? () => _step(1) : null),
           const SizedBox(width: 8),
+          IconButton(
+            icon: Icon(facsimile ? Icons.article : Icons.image),
+            tooltip: facsimile ? 'Afficher le texte reconstitué' : 'Afficher la page d\'origine (fac-similé)',
+            onPressed: () => setState(() => facsimile = !facsimile),
+          ),
           IconButton(icon: const Icon(Icons.zoom_out), tooltip: 'Réduire la page', onPressed: () => _zoomBy(-1)),
           PopupMenuButton<String>(
             tooltip: 'Niveau de zoom',
@@ -416,8 +459,10 @@ class _ReaderPageState extends State<ReaderPage> {
             final k = fit == 'page' ? fitPage : fit == 'width' ? fitWidth : percent / 100 * _k100;
             _lastK = k;
             final w = pw * k;
-            final background = widget.book.images[data['background']];
-            final page = SingleChildScrollView(
+            final background = widget.book.file(data['background'] as String?);
+            // facsimile: the ORIGINAL page image, with clickable zones on the moves and diagrams (when the book embeds the scans)
+            final scan = facsimile ? widget.book.file('scans/p${page.toString().padLeft(4, '0')}.png') : null;
+            final pageView = SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('${moves.length} coups, ${moves.length - nOk} illégaux (en rouge)', style: Theme.of(context).textTheme.labelMedium),
@@ -427,18 +472,23 @@ class _ReaderPageState extends State<ReaderPage> {
                   height: (data['height'] as num) * k,
                   decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.black26)),
                   child: Stack(children: [
-                    // text-layer pages: the page without its text (shapes, colours, images) under the text
-                    if (background != null) Positioned.fill(child: Image.memory(background, fit: BoxFit.fill)),
-                    for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>()) _figure(d, k, background == null),
-                    for (final b in (data['blocks'] as List).cast<Map<String, dynamic>>()) _block(context, b, moves, k),
+                    if (scan != null)
+                      Positioned.fill(child: Image.memory(scan, fit: BoxFit.fill))
+                    else if (background != null) // text-layer pages: the page without its text (shapes, colours, images) under the text
+                      Positioned.fill(child: Image.memory(background, fit: BoxFit.fill)),
+                    for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>()) _figure(d, k, scan == null && background == null),
+                    if (scan != null)
+                      for (final m in moves.values) ..._overlays(m, k)
+                    else
+                      for (final b in (data['blocks'] as List).cast<Map<String, dynamic>>()) _block(context, b, moves, k),
                   ]),
                 ),
               ]),
             );
             // zoomed in: the page is wider than the pane, so it also scrolls sideways
             return w + 32 <= c.maxWidth
-                ? page
-                : SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(width: w + 32, height: c.maxHeight, child: page));
+                ? pageView
+                : SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(width: w + 32, height: c.maxHeight, child: pageView));
           }),
         ),
         LayoutBuilder(builder: (context, _) {

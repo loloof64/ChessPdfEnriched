@@ -24,7 +24,8 @@ void main() {
     final e1 = (again.pages[2]!['diagrams'] as List).cast<Map<String, dynamic>>().firstWhere((d) => d['id'] == 'p2_d1');
     expect(again.fenOf(e1), fixed);
     expect(again.pages.keys, book.pages.keys);
-    expect(again.images.length, book.images.length);
+    expect(again.file('diagrams/p2_d1.png'), isNotNull);
+    expect(again.file('scans/p0002.png'), isNotNull);
     expect(again.corrections.keys, containsAll(['p2_d5', 'p2_d1']));
     // a generated FEN that changes after a rebuild turns the correction into "needs review", never applied silently
     final changed = Map<String, dynamic>.of(e1)..['fen'] = '8/8/8/8/8/8/8/K6k b - - 0 1';

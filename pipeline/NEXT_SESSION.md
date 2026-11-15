@@ -289,3 +289,13 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Deux bugs de mesure corrigés au passage : (1) la police était mesurée avec le style du contexte AU-DESSUS du Material (pas celui de l'affichage) ;
   (2) `letterSpacing` du thème (0,25 px, non proportionnel) -> mis à 0, plus 2 % de marge de largeur.
 - Pages OCR (captures) : pas de fond (le texte est dans l'image) ; rendu = texte repositionné, sans gras/filets du livre.
+
+## Fac-similé : la page d'origine + zones cliquables (nov. 2026, demande de Laurent : « les livres diffèrent trop des originaux »)
+- Chaque coup du `.chessbook` a `rects` = [x, y, w, h] sur `scans/pNNNN.png` (une par ligne couverte). `wordboxes.py` : pages à couche texte = boîtes des mots de
+  `pdftotext -bbox-layout` (stockées par ligne : `words`) ; pages scannées = 2e OCR classique (PP-OCRv5, `return_word_box=True`, cache `work/<pdf>/ppocr/pN.json`) dont
+  le texte, par bloc, est aligné caractère par caractère (difflib) sur celui de PaddleOCR-VL ; un coup n'a de zone que si >= 60 % de ses caractères sont alignés.
+- Mesure : attaque_minorite_2 p4 43/43, p5 49/56, p6 19/19, p7 39/39, p8 168/168 ; attaque_minorite_1 p3 77/77, p4 42/42, p5 123/123, p6 66/66.
+  Vérifié à l'oeil sur p4 (rectangles dessinés sur l'image) : exact, y compris variantes entre crochets.
+- Lecteur : fac-similé par défaut (bouton page/image pour basculer vers le texte reconstitué) ; fichiers du zip lus à la demande (`Book.file`, cache de 12).
+- Reste : coups non localisés (p5 de _2 : 7) restent non cliquables en fac-similé (cliquables en mode texte) ; seule la hauteur d'une ligne est couverte, les
+  coups coupés en fin de ligne n'ont pas de zone de continuation précise.
