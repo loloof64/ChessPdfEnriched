@@ -17,6 +17,20 @@ SAN_CHARS = re.compile(r"[a-h1-8xO0=+#!?-]")  # chars that count as glyphs of th
 feat = lambda g: cv2.resize(g, (40, 48), interpolation=cv2.INTER_AREA).astype(np.float64).ravel() / 255
 
 
+def first_blob(g):
+    """Keep only the leftmost ink blob of a window (columns up to the first blank gap), so a neighbouring letter
+    does not shift the distance. Ink is bright in g."""
+    ink = (g > 127).sum(axis=0) > 0
+    start = int(np.argmax(ink))
+    gap = 0
+    for x in range(start, g.shape[1]):
+        gap = 0 if ink[x] else gap + 1
+        if gap >= 2:
+            out = g.copy(); out[:, x:] = 0
+            return out
+    return g
+
+
 def table_cells(page, block):
     """[(ocr_text, first_glyph_image_or_None, n_components)] for each non-empty move cell, in reading order."""
     x0, y0, x1, y1 = block["block_bbox"]
@@ -42,43 +56,37 @@ def table_cells(page, block):
         cells.append(cur)
         for t, cell in zip(texts, cells):
             x = min(s[0] for s in cell); ytop = min(s[1] for s in cell); ybot = max(s[1] + s[3] for s in cell)
-            out.append((t, 255 - c[max(0, ytop - 3):ybot + 3, max(0, x - 2):x + 38], len(cell)))  # ~one figurine wide
+            out.append((t, first_blob(255 - c[max(0, ytop - 3):ybot + 3, max(0, x - 2):x + 38]), len(cell)))  # ~one figurine wide
     return out
 
 
 def is_figurine_like(g):
     """Tall, line-art glyph (letters and digits are bold and dense)."""
-    return g.shape[0] >= 30 and (g > 127).mean() < .30
+    return g.shape[0] >= 30 and (g > 127).mean() < .42
 
 
-def calibrate(cells, k=10):
-    """k-means over the figurine-like first glyphs of all cells; returns (model, reject distance)."""
-    X = np.array([feat(g) for _, g, _ in cells if is_figurine_like(g)])
-    km = KMeans(k, n_init=10, random_state=0).fit(X)
-    d = km.transform(X).min(axis=1)
-    return km, float(np.percentile(d, 80) * 1.5)  # ponytail: 80th pct x 1.5 as outlier cut; tune with more books
+def calibrate(cells, picks):
+    """Exemplar set from a few human-picked cells: picks = {"Q": [(page, ocr_text), ...], ...} -> [(letter, features)].
+    ponytail: unsupervised k-means mixed rare classes (bishop with king) on ~45 samples; exemplars are robust and cost
+    one pick per class per book (a reader dialog: "click the bishop")."""
+    return [(letter, feat(g)) for letter, keys in picks.items() for p, t, g, _ in cells if (p, t) in set(map(tuple, keys))]
 
 
-def piece_of(km, cut, g, names):
-    """Letter of a figurine glyph, '' if it is not one (pawn move, letter that slipped through)."""
-    if not is_figurine_like(g):
-        return ""
-    d = km.transform([feat(g)])[0]
-    return names[int(d.argmin())] if d.min() <= cut else ""
+def piece_of(exemplars, g, cut=11):
+    """Letter of the nearest exemplar, '' if too far (pawn move, castling, letter)."""
+    f = feat(g)
+    d, letter = min((np.linalg.norm(f - e), l) for l, e in exemplars)
+    return letter if d <= cut else ""
 
 
 if __name__ == "__main__":
+    # args: picks.json then PAGE.png PAGE.json pairs ; picks.json = {"Q": [[3, "d3"]], ...}
+    picks = json.load(open(sys.argv[1]))
     cells = []
-    for png, js in zip(sys.argv[1::2], sys.argv[2::2]):
+    for png, js in zip(sys.argv[2::2], sys.argv[3::2]):
         page = cv2.imread(png, 0)
-        cells += [(png, *c) for b in json.load(open(js)) if b["block_label"] == "table" for c in table_cells(page, b)]
-    km, cut = calibrate([c[1:] for c in cells])
-    names = json.load(open("work/fig_names.json")) if len(sys.argv) > 0 and __import__("os").path.exists("work/fig_names.json") else None
-    if names is None:  # first run: dump one sheet per cluster so a human can name them
-        for k in range(km.n_clusters):
-            tiles = [cv2.resize(255 - g, (48, 56)) for _, t, g, n in cells if is_figurine_like(g) and km.predict([feat(g)])[0] == k][:8]
-            cv2.imwrite(f"work/name{k}.png", np.hstack(tiles))
-        print("wrote work/name*.png; create work/fig_names.json as [letter per cluster]")
-    else:
-        for png, t, g, n in cells:
-            print(png[-7:], f"{t!r:10}", piece_of(km, cut, g, names) + "".join(SAN_CHARS.findall(t)))
+        p = int(re.search(r"p-(\d+)", png).group(1))
+        cells += [(p, *c) for b in json.load(open(js)) if b["block_label"] == "table" for c in table_cells(page, b)]
+    ex = calibrate(cells, picks)
+    for p, t, g, n in cells:
+        print(p, f"{t!r:10}", piece_of(ex, g) + "".join(SAN_CHARS.findall(t)))

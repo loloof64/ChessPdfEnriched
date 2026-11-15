@@ -136,13 +136,15 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   (intrus) ; (3) étiqueter chaque cluster K/Q/R/B/N par vote de légalité (rejeu depuis le diagramme) ; (4) injecter dans le SAN.
 
 ## Figurines dans les tableaux (`figurines.py`, fait pour les blocs `table`)
-- `table_cells` : fenêtre de 40 px à gauche de chaque cellule de coup (pas de composante connexe : trop fragile quand
-  la figurine touche la lettre). `calibrate` : k-means k=10 sur ces fenêtres (K/Q/R/B/N + pions + roques en vrac) ;
-  un humain nomme les 10 clusters UNE fois par livre (`work/fig_names.json`, ex. `["R","","R","N","K","","","","Q","B"]`,
-  planches `work/name*.png` produites au 1er passage). Ensuite `piece_of` donne la lettre, `""` pour les pions/roques.
-- Mesure sur PartiesFischer (8 pages) : p3 = 12 coups sur 12 justes (Qd3 Bb7 Bg5 Rfe1 Re8 Rc8 Rac1 Nd5 Ne4 + pions) ;
-  p1 `Nf6 Nc3` justes ; p2 : `Nc6` juste mais `7 Bd3` lu `d3` (fou manquant, distance de rejet trop serrée pour la classe rare) ;
-  p5 `Rxa7 Ne4 Ra6 Rd8 Rd3 Rxb6` plausibles, non vérifiés.
-- Pièges : zsh ne découpe pas `$args` (utiliser bash -c) ; k-means exige du float64 pour `predict`.
-- À faire : (1) assouplir le rejet (distance) ou le remplacer par une classe « lettre » ; (2) blocs `text` (coups en ligne,
-  variantes) ; (3) rejeu python-chess pour valider/corriger (un `d3` illégal comme pion => fou) ; (4) intégrer dans le format.
+- `table_cells` : fenêtre de 40 px à gauche de chaque cellule de coup, tronquée au premier blob d'encre (`first_blob`, pour
+  qu'une lettre voisine ne décale pas la distance). Pas de composante connexe seule : fragile si figurine collée à la lettre.
+- Classification par EXEMPLES choisis par un humain une fois par livre (`work/picks.json` : `{"Q": [[page, "texte OCR"]], ...,
+  "": [exemples de coups de pion/roque]}`), plus proche exemplaire (distance euclidienne sur pixels 40x48), refus > 11.
+  Le k-means non supervisé a été abandonné : mélange les classes rares (fou avec roi) sur ~45 échantillons.
+  Les pions sont des exemples négatifs : sans eux, les `d` ressemblent à des fous.
+- Mesure sur PartiesFischer (8 pages, 45 cellules) : p1 `Nf6 Nc3`, p2 `Nc6 Bd3`, p3 (12/12 : Qd3 Bb7 Bg5 Rfe1 Re8 Rc8 Rac1 Nd5
+  Ne4), p5 `Rxa7 Ne4 Ra6 Rd8 Rd3 Rxb6` plausibles. Seul manque connu : p8 `d2+` (Qd2+ lu comme pion, distance 13,5 ; les autres
+  `Qd3+ Qc3+ Qb2+` sont justes). Pas d'exemple de ROI dans les tableaux : classe K jamais testée.
+- Pièges : zsh ne découpe pas `$args` (utiliser bash -c). Usage : `figurines.py picks.json p-1.png p-1.json ...`.
+- À faire : (1) rejeu python-chess qui corrige les cas comme `d2+` (pion illégal => pièce qui peut aller en d2 avec échec) ;
+  (2) assembler la partie principale (tableaux + titres + texte courant) ; (3) blocs `text` (variantes en ligne) ; (4) `.chessbook`.
