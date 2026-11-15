@@ -243,7 +243,7 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   sont maintenant lus : p4 2/2 et p5 2/2 retrouvés dans la partie (`matches_move`), p3 : d1 à 1 case près (tour a8 lue dame), d2 faux (cadre mal
   aligné par `autocrop` : ambiguïté d'une case sur un damier périodique) : signalés par l'absence de `matches_move`.
 - Nettoyage OCR généralisé (`dedupe`) : un bloc qui répète à sa fin le début d'un bloc suivant est coupé ; vu sur p3 à 200 dpi (22.Tb6...33.Txc6 lus
-  deux fois -> 2 illégaux) et p5. Blocs `text` vides : ré-OCR sur recorte.
+  deux fois -> 2 illégaux) et p5. Blocs `text` vides : ré-OCR sur un recadrage.
 - Ids : plateaux `pN_dK`, autres images `pN_iK` (logos, chiffres) ; la numérotation des plateaux ne dépend pas des autres images.
 - Pas fait : figurines ; `uv.lock` n'a pas été régénéré (la résolution `uv lock` dépasse 2 min : lancer `uv sync` sur la machine, qui le fait) ;
   autocrop à améliorer (ambiguïté d'une case) ; PDF de Fabrice 2 et 3 non traités avec le programme générique.
