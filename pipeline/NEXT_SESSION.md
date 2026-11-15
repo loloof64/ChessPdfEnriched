@@ -309,3 +309,14 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   Limite : un diagramme qui montre une position absente de toute partie (variante) garde la lecture du meilleur carré, sans confirmation.
 - Zones cliquables trop étroites (retour de Laurent) : (1) `span` d'un coup inclut maintenant le numéro de coup collé (`23...Fxd5`, `29.axb3`), comme le gras du livre ;
   (2) le lecteur élargit chaque zone de 0,22 x la hauteur de ligne de chaque côté. Vérifié sur p4 de attaque_minorite_2 (rectangles dessinés sur l'image).
+
+## Page 5 de attaque_minorite_2 : variantes qui ne vont pas au bout (retour de Laurent) + trait des diagrammes (nov. 2026)
+- Cause des 5 coups rouges de p5 : (1) l'OCR répétait la fin de la colonne de gauche au début de la colonne de droite avec des espaces différents (« 42.Txc3 » /
+  « 42. Txc3 ») : `dedupe` compare maintenant SANS aucun espace ; (2) mentions de coups dans le commentaire (« par Th1 ») : un coup isolé illégal est ignoré, pas rouge ;
+  (3) crochet fermant mal placé par l'OCR (« [42.Dd1??] Txe2+ 43.Dxe2 Dxb1 ] ») : un coup illégal juste après un `]` mais légal dans la variante qu'on vient de fermer la rouvre.
+  Rouge = coup directement numéroté, ou coup de pièce/prise dans une suite numérotée ; jamais un simple mot de case (« c6 se trouve sous tension »).
+  Régression évitée de peu : p3 de attaque_minorite_1 était tombée à 37 coups/4 rouges (règle trop large) ; revenue à 77/0.
+- Résultats : am2 p4 43/1, p5 54/0, p6 18/0, p7 39/0, p8 168/0 ; am1 p3 77/0, p4 42/0, p5 123/1, p6 66/0 ; tous les diagrammes d'une partie confirmés par elle.
+- Trait des diagrammes : `trait.py`, rond à côté du plateau (hors du cadre OCR : cherché sur la page entière) ; EN HAUT (rang 1) = Blancs, EN BAS (rang 8) = Noirs, creux/plein
+  sans importance (anneau fin et pâle). Validé 17/17 sur les diagrammes dont le trait est donné par la partie. La partie prime ; le rond sert pour les autres
+  (`side_source`: game | dot). Le lecteur affiche « Trait aux Blancs/Noirs » sous l'échiquier.

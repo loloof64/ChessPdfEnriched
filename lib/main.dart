@@ -165,7 +165,7 @@ class _ReaderPageState extends State<ReaderPage> {
   double percent = 100;
   double _lastK = 1, _k100 = 1; // scale actually drawn / scale of 100 %, kept to step the zoom from where it is
   static const _presets = [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 300.0];
-  String? selected, label, lastUci;
+  String? selected, label, lastUci, trait; // trait: whose turn it is in the position shown (null when unknown)
   late final _pageCtl = TextEditingController(text: '$page');
   Map<String, dynamic>? selectedDiagram;
   final _taps = <TapGestureRecognizer>[];
@@ -188,6 +188,7 @@ class _ReaderPageState extends State<ReaderPage> {
         final f = fen.split(' ');
         final n = int.parse(f[5]);
         label = f[1] == 'b' ? '$n. ${m['raw']}' : '${n - 1}... ${m['raw']}';
+        trait = f[1] == 'w' ? 'Trait aux Blancs' : 'Trait aux Noirs';
       });
 
   void _pickDiagram(Map<String, dynamic> d) => setState(() {
@@ -195,6 +196,8 @@ class _ReaderPageState extends State<ReaderPage> {
         selectedDiagram = d;
         lastUci = null;
         fen = widget.book.fenOf(d)!;
+        // the side to move is only known when the diagram was matched with a game position (the book prints it as a dot beside the board)
+        trait = d['side_known'] == true ? (fen.split(' ')[1] == 'w' ? 'Trait aux Blancs' : 'Trait aux Noirs') : null;
         label = 'Diagramme ${d['id']}${d['flipped'] == true ? ' (retourné : blancs en bas)' : ''}'
             '${widget.book.isCorrected(d) ? ' — corrigé' : ''}${widget.book.needsReview(d) ? ' — correction à revoir' : ''}';
       });
@@ -223,7 +226,7 @@ class _ReaderPageState extends State<ReaderPage> {
     setState(() {
       page = p;
       fen = kInitialFEN;
-      selected = label = lastUci = null;
+      selected = label = lastUci = trait = null;
       selectedDiagram = null;
     });
     _pageCtl.text = '$p';
@@ -510,6 +513,7 @@ class _ReaderPageState extends State<ReaderPage> {
               ),
               const SizedBox(height: 8),
               Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
+              if (trait != null) Text(trait!, style: Theme.of(context).textTheme.bodyMedium),
               TextButton.icon(
                 onPressed: () => setState(() => orientation = orientation.opposite),
                 icon: const Icon(Icons.swap_vert),

@@ -28,6 +28,7 @@ from PIL import Image
 from autocrop import candidate_boxes, find_board
 from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
 from moves import replay, tokens
+from trait import dot_turn
 from wordboxes import Classic, move_rects_ocr, move_rects_textlayer
 from orientation import orient
 from plausibility import issues
@@ -170,17 +171,22 @@ class Ocr:
 
 def dedupe(blocks):
     """The OCR sometimes runs past its box and repeats the text of the NEXT blocks at the end of a block: cut each block at
-    the start of any later block's text it contains (otherwise those moves are read twice). Idempotent."""
-    keep = [b for b in blocks if b["block_label"] in KEEP and len(b["block_content"].strip()) >= 12]
+    the start of any later block's text it contains (otherwise those moves are read twice). The comparison ignores ALL whitespace
+    ('42.Txc3' and '42. Txc3' are the same text). Idempotent."""
+    squash = lambda t: re.sub(r"\s+", "", t)
+    keep = [b for b in blocks if b["block_label"] in KEEP and len(squash(b["block_content"])) >= 12]
     for i, a in enumerate(blocks):
         if a["block_label"] not in KEEP:
             continue
         for b in blocks[i + 1:]:
-            head = re.sub(r"\s+", " ", b["block_content"]).strip()[:25]
-            flat = re.sub(r"\s+", " ", a["block_content"])  # line breaks differ between the two copies
-            at = flat.find(head) if b in keep and head else -1
+            if b not in keep:
+                continue
+            head = squash(b["block_content"])[:25]
+            idx = [k for k, ch in enumerate(a["block_content"]) if not ch.isspace()]  # position in the original of each non-space char
+            flat = "".join(a["block_content"][k] for k in idx)
+            at = flat.find(head)
             if at > 0:
-                a["block_content"] = flat[:at].rstrip()
+                a["block_content"] = a["block_content"][:idx[at]].rstrip()
     return blocks
 
 
@@ -371,6 +377,7 @@ def main():
 
     # diagrams: read each figure, then look for its position in the games of the book
     known = {mv["fen"].split()[0] for p in pages for mv in data[p]["moves"] if mv["ok"]} | {chess.Board(f).board_fen() for f in start_fens.values() if f}
+    fen_of = {mv["id"]: mv["fen"] for p in pages for mv in data[p]["moves"] if mv["ok"]}
     model = None
     for n in pages:
         page_img = None
@@ -403,6 +410,15 @@ def main():
                     hit = "start"  # the diagram shows the position the page's text starts from
                 if hit:
                     d["matches_move"] = hit  # the printed position occurs in the page's game: a strong check of the reading
+                    # and the game tells whose turn it is (the book prints it as a dot beside the board): use the game's full FEN
+                    full = start_fens[n] if hit == "start" else fen_of[hit]
+                    d["fen"] = " ".join(full.split()[:4]) + " 0 1"
+                    d["side_known"], d["side_source"] = True, "game"
+                # whose turn the printed dot says (hollow, level with the top rank: White; filled, bottom rank: Black); the game wins
+                turn = dot_turn(page_img, [x0, y0, x1 - x0, y1 - y0])
+                if turn and not d.get("side_known"):
+                    d["fen"] = board.board_fen() + f" {turn} - - 0 1"
+                    d["side_known"], d["side_source"] = True, "dot"
             data[n]["diagrams"].append(d)
 
     # write the book; the reader's corrections.json survives a rebuild

@@ -107,6 +107,7 @@ def replay(text, start=None, lang="fr"):
             run_ok[k] = has_num
         i = j
     dead = False
+    closed = None  # (board of the variation just closed, index of its ']'): the OCR sometimes closes a variation too early
     for idx, (kind, val, start, end) in enumerate(toks):
         if kind == "num" and dead and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             # after an illegal move (often an alternative given in prose without brackets: 'Si 24.Fxd5 ...') resume at the next move
@@ -121,6 +122,7 @@ def replay(text, start=None, lang="fr"):
         elif kind == "semi" and stack:  # sibling variation: restart from the same branch point
             board = stack[-1][1].copy() if stack[-1][1] else board; dead = False
         elif kind == "close" and stack:
+            closed = (board.copy(), idx)
             board, before_last, dead = stack.pop()
         elif kind == "move":
             # a move number glued to the move ('23...Fxd5') is part of what the book prints in bold: include it in the span
@@ -135,14 +137,26 @@ def replay(text, start=None, lang="fr"):
                 mv = _disambiguate(board, to_san(val, table), toks, idx, table)
             except ValueError:
                 pass
+            if mv is None and closed is not None and all(toks[k][0] in ("move", "num") for k in range(closed[1] + 1, idx)):
+                # a move right after a ']' that is illegal here but legal in the variation just closed: the OCR put the ']' too early
+                try:
+                    mv = closed[0].parse_san(to_san(val, table))
+                    stack.append((board, before_last, dead))
+                    board, dead = closed[0], False
+                except ValueError:
+                    pass
             if mv is None:
-                if (idx > 0 and toks[idx - 1][0] == "num") or plausible_lone(val, pieces):  # a pawn square in prose is just skipped
+                # an illegal move that carries its own number, or a piece move / capture inside a numbered sequence, is an error (red,
+                # the line stops). A bare pawn square in prose ('c6 se trouve sous tension') or a lone move-looking word ('...par Th1')
+                # is just a mention: ignored
+                if (idx > 0 and toks[idx - 1][0] == "num") or (plausible_lone(val, pieces) and run_ok.get(idx)):
                     moves.append({"raw": val, "san": None, "fen": None, "ok": False, "depth": len(stack), "span": [start, end]})
                     dead = True
                 continue
             prev = board.copy()
             san = board.san(mv); board.push(mv)
             before_last = prev
+            closed = None
             moves.append({"raw": val, "san": san, "fen": board.fen(), "ok": True, "depth": len(stack), "ply": board.ply(), "span": [start, end], "uci": mv.uci()})
     return moves
 
