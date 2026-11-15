@@ -175,3 +175,15 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Pistes : auto-apprentissage des exemplaires en ligne à partir des blocs OK ; rejeter les capitales par le contexte
   (un coup suit un numéro de coup) ; alignement par mot plutôt que par bloc ; filtre de légalité python-chess (le plus
   discriminant : `Bb6` illégal si aucun fou ne peut aller en b6).
+
+## Filtre de légalité (`legality.py`, fait, testé sur cas synthétiques + 3 séquences réelles de PartiesFischer)
+- `decode(board, [(lettre, texte)])` : lettre = classe devinée par le classifieur (`KQRBN`), `?` = figurine vue, classe inconnue,
+  `""` = pas de figurine. Statuts : `ok`, `fixed` (lettre illégale, une seule autre pièce légale), `ambiguous` (plusieurs lectures
+  légales : la plus fréquente N>B>R>Q>K est jouée, les autres listées), `illegal` (arrêt de la séquence). Un `+` imprimé doit
+  réellement donner échec (`Kd2+` écarté devant `Qd2+`).
+- Mesure : avec les lettres exactes du classifieur, les 3 séquences réelles (début de partie 1-10 du livre, variante `5 e4 Nxc3 ...
+  Bb4+` de p1, variante `7 Bc4 ... 10 Re1` de p2) passent `ok`. Avec la classe INCONNUE (`?`) la légalité seule ne tranche pas :
+  `xd5` = Nxd5/Qxd5, `e7` = Be7/Ne7/Qe7 -> `ambiguous`. La légalité sert donc de VETO/réparation sur les lettres du classifieur, pas
+  de substitut. Et `f3` sans figurine vue reste pion : un cavalier oublié (`7 f3` = Nf3) n'est détectable que par l'image.
+- Il manque encore : assembler les jetons (tableaux + blocs texte + fragments de colonnes) en séquences avec leur position de
+  départ (diagrammes ou début de partie) ; c'est le travail suivant (`mainline.py`).
