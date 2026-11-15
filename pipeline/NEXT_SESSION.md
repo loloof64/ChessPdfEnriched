@@ -71,7 +71,15 @@
 - Limites : les 4 diagrammes de test (006-009) sont du même livre et contiennent seulement pions et rois ;
   fous/cavaliers/tours/dames de CE livre ne sont pas testés (ni vus à l'entraînement). Le gain réel hors livre est inconnu.
   Fonds pris sur 004/005 uniquement ; `neutralize.py` n'est plus nécessaire avec ce modèle (non mesuré ensemble).
-- À faire : brancher `fenify-ft.pt` dans `read_fen.py`, tester sur d'autres livres/diagrammes avec toutes les pièces.
+- `read_fen.py` prend déjà le modèle en argument : rien à brancher, passer `work/fenify-ft.pt`.
+- Test hors livre : `PartiesFischer.pdf` p3 (noir et blanc scanné, toutes les pièces, crop manuel (225,1275,545,1595)
+  sur `pdfimages -png -f 3 -l 3`) : base ET fine-tuné donnent 0 erreur. Pas de régression, mais un seul diagramme.
+- `My 60 Memorable Games - Bobby Fischer.pdf` (scan, pages 12-40 : `pdfimages -png -f 12 -l 40`, pages entières) :
+  `work/find_boards.py` (contours carrés ~320 px) trouve 15 diagrammes, `work/f60_run.py` les lit avec base et ft.
+  Les deux modèles donnent la MÊME FEN sur les 15 ; 3 vérifiés à l'oeil (b03, b04, b13) : exacts, toutes pièces.
+  Ces diagrammes sont propres (pas de surlignage), donc ne départagent pas base et ft : les deux marchent.
+- Faux positif corrigé : `opposite_check` (b03, trait aux noirs) est maintenant ignoré, le trait étant inconnu.
+- Laurent n'a pas d'autre livre : le gain hors livre du fine-tuning restera non mesuré tant qu'il n'y a pas de diagrammes surlignés.
 
 ## Régénérer `work/fenify-ft.pt` (poids ignorés par git, tout est reproductible)
 Depuis `pipeline/`, avec `.venv/bin/python` :

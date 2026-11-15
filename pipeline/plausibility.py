@@ -4,7 +4,7 @@ import chess
 
 def issues(board: chess.Board) -> list[str]:
     """Empty list = plausible. Uses python-chess status flags plus a promotion-aware piece count."""
-    found = [f.name.lower() for f in chess.Status if f in board.status() and f != chess.STATUS_VALID]
+    found = [f.name.lower() for f in chess.Status if f in board.status() and f not in (chess.STATUS_VALID, chess.STATUS_OPPOSITE_CHECK)]  # side to move is unknown
     for color, name in ((chess.WHITE, "white"), (chess.BLACK, "black")):
         n = lambda t: len(board.pieces(t, color))
         # every piece beyond the starting set must come from a promoted pawn
@@ -21,5 +21,6 @@ if __name__ == "__main__":
     assert "too_many_kings" in ok("6k1/pp6/2p4K/3p4/1P1P4/8/P7/6K1")
     assert "pawns_on_backrank" in ok("P5k1/8/8/8/8/8/8/6K1")
     assert "no_black_king" in ok("8/8/8/8/8/8/8/6K1")
+    assert ok("2b1kr2/p6r/1pB1pQ2/5p2/2pP4/2P5/PP3P2/R5K1") == []  # black in check, black to move
     assert ok("6k1/8/8/8/8/8/PPPPPPPP/QQ4K1") != []  # 8 pawns + 2 queens
     print("ok")
