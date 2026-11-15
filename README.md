@@ -115,6 +115,8 @@ flutter run -d linux
 - **Lire** : la page est dessinée avec chaque bloc et chaque image à sa place d'origine. Cliquer sur un coup (en gras) affiche la
   position, avec la flèche du dernier coup et son numéro (`3. Cf3`, `2... d5`). Un coup en rouge est illégal.
 - **Pages** : boutons précédente et suivante, ou taper un numéro dans le champ puis valider.
+- **Zoom** : boutons − et +, ou le menu au milieu : « Page entière » (toute la page visible), « Largeur de page », ou un pourcentage
+  (100 % = taille réelle de la page ; au-delà de la largeur du volet, la page défile aussi horizontalement).
 - **Échiquier** : le bouton « Retourner l'échiquier » inverse la vue.
 - **Corriger un diagramme** : clic droit sur le diagramme, ou le bouton « Corriger ce diagramme » après l'avoir sélectionné.
   Glisser une pièce de la palette sur une case, la sortir du plateau pour la supprimer, puis Enregistrer. La correction est

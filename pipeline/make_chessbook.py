@@ -266,7 +266,7 @@ def main():
     tmp = out.with_name(out.name + ".tmp")
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("manifest.json", json.dumps({"schema_version": 1, "title": title, "language": a.lang, "figurine_notation": False,
-                                                "page_count": len(pages), "has_scans": not a.no_scans}, ensure_ascii=False, indent=1))
+                                                "page_count": len(pages), "has_scans": not a.no_scans, "dpi": a.dpi}, ensure_ascii=False, indent=1))
         z.writestr("corrections.json", corrections)
         for n in pages:
             z.writestr(f"pages/p{n:04d}.json", json.dumps(data[n], ensure_ascii=False, indent=1))

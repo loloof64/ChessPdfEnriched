@@ -28,11 +28,13 @@ diagram `p42_d1`, move `p42_m7`, text block `p42_t3`.
   "language": "fr",
   "figurine_notation": false,
   "page_count": 312,
-  "has_scans": false
+  "has_scans": false,
+  "dpi": 200
 }
 ```
 
 `language` is `"fr"` or `"en"`, chosen by the user before processing.
+`dpi` (optional, default 200) is the resolution the page images were rendered at; the reader uses it to make 100 % zoom the real page size.
 
 ## pages/pNNNN.json
 

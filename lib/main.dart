@@ -18,9 +18,10 @@ void main(List<String> args) {
 }
 
 class Book {
-  Book(this.path, this.title, this.pages, this.images, this.corrections);
+  Book(this.path, this.title, this.pages, this.images, this.corrections, this.dpi);
 
   final String path;
+  final double dpi; // resolution the page images were rendered at (manifest 'dpi', 200 when absent): 100 % zoom = 96 / dpi px per page px
   final String title;
   final Map<int, Map<String, dynamic>> pages;
   final Map<String, Uint8List> images; // 'diagrams/p2_d1.png' -> bytes
@@ -44,7 +45,8 @@ class Book {
         corrections[(c as Map<String, dynamic>)['target'] as String] = c;
       }
     }
-    return Book(path, json('manifest.json')['title'] as String, pages, images, corrections);
+    final manifest = json('manifest.json');
+    return Book(path, manifest['title'] as String, pages, images, corrections, ((manifest['dpi'] as num?) ?? 200).toDouble());
   }
 
   /// FEN to show for a diagram: the reviewed value, unless the generated FEN changed since (then it needs review).
@@ -144,6 +146,11 @@ class _ReaderPageState extends State<ReaderPage> {
   late int page = widget.book.pages.keys.reduce((a, b) => a < b ? a : b);
   String fen = kInitialFEN;
   Side orientation = Side.white;
+  // zoom: 'page' = whole page visible, 'width' = page width fills the pane, otherwise a percentage of the real page size
+  String fit = 'width';
+  double percent = 100;
+  double _lastK = 1, _k100 = 1; // scale actually drawn / scale of 100 %, kept to step the zoom from where it is
+  static const _presets = [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 300.0];
   String? selected, label, lastUci;
   late final _pageCtl = TextEditingController(text: '$page');
   Map<String, dynamic>? selectedDiagram;
@@ -179,6 +186,17 @@ class _ReaderPageState extends State<ReaderPage> {
       });
 
   Move? get lastMove => lastUci == null ? null : Move.parse(lastUci!);
+
+  void _zoomBy(int d) {
+    final now = _lastK / _k100 * 100;
+    final next = d > 0 ? _presets.firstWhere((p) => p > now + 0.5, orElse: () => _presets.last) : _presets.lastWhere((p) => p < now - 0.5, orElse: () => _presets.first);
+    setState(() {
+      fit = '';
+      percent = next;
+    });
+  }
+
+  String get _zoomLabel => fit == 'page' ? 'Page entière' : fit == 'width' ? 'Largeur de page' : '${percent.round()} %';
 
   List<int> get _numbers => widget.book.pages.keys.toList()..sort();
 
@@ -319,15 +337,37 @@ class _ReaderPageState extends State<ReaderPage> {
           ),
           Text(' / ${_numbers.last}'),
           IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'Page suivante', onPressed: page < _numbers.last ? () => _step(1) : null),
+          const SizedBox(width: 8),
+          IconButton(icon: const Icon(Icons.zoom_out), tooltip: 'Réduire la page', onPressed: () => _zoomBy(-1)),
+          PopupMenuButton<String>(
+            tooltip: 'Niveau de zoom',
+            onSelected: (v) => setState(() {
+              fit = (v == 'page' || v == 'width') ? v : '';
+              if (fit.isEmpty) percent = double.parse(v);
+            }),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'page', child: Text('Page entière')),
+              const PopupMenuItem(value: 'width', child: Text('Largeur de page')),
+              const PopupMenuDivider(),
+              for (final p in _presets) PopupMenuItem(value: '$p', child: Text('${p.round()} %')),
+            ],
+            child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Center(child: Text(_zoomLabel))),
+          ),
+          IconButton(icon: const Icon(Icons.zoom_in), tooltip: 'Agrandir la page', onPressed: () => _zoomBy(1)),
           const SizedBox(width: 16),
         ],
       ),
       body: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(
           child: LayoutBuilder(builder: (context, c) {
-            final w = c.maxWidth - 32;
-            final k = w / (data['width'] as num);
-            return SingleChildScrollView(
+            final pw = (data['width'] as num).toDouble(), ph = (data['height'] as num).toDouble();
+            _k100 = 96 / widget.book.dpi;
+            final fitWidth = (c.maxWidth - 32) / pw;
+            final fitPage = ((c.maxHeight - 72) / ph).clamp(0.05, fitWidth); // 72 = padding + the line above the page
+            final k = fit == 'page' ? fitPage : fit == 'width' ? fitWidth : percent / 100 * _k100;
+            _lastK = k;
+            final w = pw * k;
+            final page = SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text('${moves.length} coups, ${moves.length - nOk} illégaux (en rouge)', style: Theme.of(context).textTheme.labelMedium),
@@ -343,6 +383,10 @@ class _ReaderPageState extends State<ReaderPage> {
                 ),
               ]),
             );
+            // zoomed in: the page is wider than the pane, so it also scrolls sideways
+            return w + 32 <= c.maxWidth
+                ? page
+                : SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(width: w + 32, height: c.maxHeight, child: page));
           }),
         ),
         LayoutBuilder(builder: (context, _) {
