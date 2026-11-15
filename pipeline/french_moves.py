@@ -40,10 +40,10 @@ def tokens(text):
     return out
 
 
-def replay(text):
+def replay(text, start=None):
     """[{san, fen, ok, depth, ply, raw}] ; mainline + variations. Stops a line at its first illegal move."""
     toks = tokens(text)
-    board, before_last = chess.Board(), None
+    board, before_last = chess.Board(start) if start else chess.Board(), None
     stack, moves = [], []
     # runs of tokens without prose between them: a run is trusted if it holds a move number
     i = 0

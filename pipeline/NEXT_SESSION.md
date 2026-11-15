@@ -208,3 +208,11 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   essais proposés : `--no-enable-impeller`, `--enable-software-rendering`, `flutter downgrade`.
 - Vérifié visuellement par Laurent : texte à gauche, coups cliquables, plateau à droite ; la position après `8...Cf8` est exacte.
 - À faire côté lecteur : étiquette du coup en français (C F T D R) au lieu de l'anglais, sélecteur de fichier, diagrammes, corrections.
+
+## Livre complet de Fabrice (`build_fabrice.py`, nov. 2026)
+- `cd pipeline && .venv/bin/python build_fabrice.py` écrit `work/fab/attaque_minorite.chessbook` : p1-2 texte réel (`pdftotext -bbox-layout`),
+  p2 : 6 diagrammes lus (autocrop + fenify-ft + orientation, confiance 0,999 ; d1-d2 identiques aux FEN vérifiées, d3-d6 retournés
+  car noirs en bas), p3 77 coups, p4 42 coups (départ = position après 16.Te3 de la partie de p6 : même partie), p5 122 (1 illégal), p6 66.
+- Les petits diagrammes des captures p3-p6 ne sont PAS lus ; `attaque_minorite_2.pdf` (8 p.) et `_3.pdf` (13 p.) existent aussi.
+- Pièges : `pdftohtml` écrit des jpg à côté du PDF (jamais l'utiliser sans `-i`) ; `read_fen` : l'indice de case fenify 0 = a1.
+- Lecteur : étiquette `3. Cf3` / `2... d5` (numéro déduit du FEN, texte = coup imprimé), diagrammes cliquables sous le texte.

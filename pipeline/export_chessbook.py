@@ -15,12 +15,12 @@ from french_moves import replay
 KEEP = ("text", "paragraph_title", "header", "doc_title")
 
 
-def page_data(no, js, png):
+def page_data(no, js, png, start=None):
     blocks = [b for b in json.load(open(js)) if b["block_label"] in KEEP]
     texts = [b["block_content"] for b in blocks]
     joined = " ".join(texts)
     starts_at_one = re.search(r"\b1\.\s?[a-hCFTDR]", joined) is not None
-    moves = replay(joined) if starts_at_one else []
+    moves = replay(joined, start) if starts_at_one or start else []
     offs, o = [], 0
     for t in texts:
         offs.append((o, o + len(t))); o += len(t) + 1

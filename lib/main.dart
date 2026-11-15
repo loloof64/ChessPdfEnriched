@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:io' as io;
 
 import 'package:archive/archive.dart';
@@ -17,10 +18,11 @@ void main(List<String> args) {
 }
 
 class Book {
-  Book(this.title, this.pages);
+  Book(this.title, this.pages, this.images);
 
   final String title;
   final Map<int, Map<String, dynamic>> pages;
+  final Map<String, Uint8List> images; // 'diagrams/p2_d1.png' -> bytes
 
   factory Book.load(String path) {
     final zip = ZipDecoder().decodeBytes(io.File(path).readAsBytesSync());
@@ -31,7 +33,8 @@ class Book {
       final m = RegExp(r'^pages/p(\d+)\.json$').firstMatch(f.name);
       if (m != null) pages[int.parse(m.group(1)!)] = json(f.name);
     }
-    return Book(json('manifest.json')['title'] as String, pages);
+    final images = {for (final f in zip.files) if (f.name.startsWith('diagrams/')) f.name: Uint8List.fromList(f.readBytes()!)};
+    return Book(json('manifest.json')['title'] as String, pages, images);
   }
 }
 
@@ -75,8 +78,17 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _pick(Map<String, dynamic> m) => setState(() {
         selected = m['id'] as String;
-        label = m['san'] as String?;
         fen = (m['fen'] as String?) ?? fen;
+        // FEN after a white move: black to move, fullmove = n ('3. Cf3'); after a black move: fullmove = n + 1 ('2... d5')
+        final f = fen.split(' ');
+        final n = int.parse(f[5]);
+        label = f[1] == 'b' ? '$n. ${m['raw']}' : '${n - 1}... ${m['raw']}';
+      });
+
+  void _pickDiagram(Map<String, dynamic> d) => setState(() {
+        selected = d['id'] as String;
+        fen = d['fen'] as String;
+        label = 'Diagramme ${d['id']}${d['flipped'] == true ? ' (retourné : blancs en bas)' : ''}';
       });
 
   Widget _block(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) {
@@ -140,6 +152,20 @@ class _ReaderPageState extends State<ReaderPage> {
             Text('${moves.length} coups, ${moves.length - nOk} illégaux (en rouge)', style: Theme.of(context).textTheme.labelMedium),
             const SizedBox(height: 8),
             for (final b in (data['blocks'] as List)) _block(b as Map<String, dynamic>, moves),
+            if ((data['diagrams'] as List).isNotEmpty)
+              Wrap(spacing: 12, runSpacing: 12, children: [
+                for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>())
+                  InkWell(
+                    onTap: () => _pickDiagram(d),
+                    child: Container(
+                      decoration: BoxDecoration(border: Border.all(color: d['id'] == selected ? Colors.brown : Colors.transparent, width: 3)),
+                      child: Column(children: [
+                        if (widget.book.images[d['image']] != null) Image.memory(widget.book.images[d['image']]!, width: 150),
+                        Text('${d['id']}  (confiance ${d['confidence']})', style: Theme.of(context).textTheme.labelSmall),
+                      ]),
+                    ),
+                  ),
+              ]),
           ]),
         ),
         LayoutBuilder(builder: (context, _) {
