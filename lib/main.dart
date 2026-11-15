@@ -256,13 +256,15 @@ class _ReaderPageState extends State<ReaderPage> {
           final below = c[1] > b[1] + b[3] * 0.6 && c[1] < b[1] + b[3];
           if (o['id'] != block['id'] && sideBySide && below) maxH = min(maxH, c[1] - b[1] - 2.0);
         }
+        // the OCR box itself tolerates 2 %; a limit set by a neighbour does not (it is where the overlap would start), with 2 % margin
+        final limit = maxH < b[3] ? maxH * 0.98 : b[3] * 1.02;
         var f = 80.0;
         while (f > 8) {
           final tp = TextPainter(
               text: TextSpan(children: _spans(block, moves, null), style: TextStyle(fontSize: f, height: 1.25)),
               textDirection: TextDirection.ltr)
             ..layout(maxWidth: b[2].toDouble());
-          if (tp.height <= maxH * 1.02) break;
+          if (tp.height <= limit) break;
           f -= 0.5;
         }
         return f;
