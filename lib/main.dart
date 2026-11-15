@@ -242,7 +242,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
   /// Largest font size (page px) at which the block, wrapped to its width, fits its height. Measured with the same spans
   /// as the display, bold moves included (they are wider than plain text).
-  double _fit(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) =>
+  double _fitOne(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) =>
       _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
         final b = (block['bbox'] as List).cast<num>();
         // Generic no-overlap rule: a block may not extend past the top of any block or figure that starts below its own top
@@ -273,6 +273,18 @@ class _ReaderPageState extends State<ReaderPage> {
         }
         return f;
       });
+
+  /// Paragraphs (150+ characters) of a page share ONE size, the smallest that fits any of them, so the text looks uniform like
+  /// the book's and cannot overflow (each is drawn at most at its own fit). Titles and short blocks keep their own size.
+  double _fit(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) {
+    final own = _fitOne(block, moves);
+    if ((block['text'] as String).length < 150) return own;
+    var body = own;
+    for (final o in (widget.book.pages[page]!['blocks'] as List).cast<Map<String, dynamic>>()) {
+      if ((o['text'] as String).length >= 150) body = min(body, _fitOne(o, moves));
+    }
+    return body;
+  }
 
   /// Spans of a block: plain text with its moves in bold, clickable when [taps] is given (None when only measuring).
   List<InlineSpan> _spans(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, List<TapGestureRecognizer>? taps) {
