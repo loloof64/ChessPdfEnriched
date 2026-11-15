@@ -148,3 +148,14 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Pièges : zsh ne découpe pas `$args` (utiliser bash -c). Usage : `figurines.py picks.json p-1.png p-1.json ...`.
 - À faire : (1) rejeu python-chess qui corrige les cas comme `d2+` (pion illégal => pièce qui peut aller en d2 avec échec) ;
   (2) assembler la partie principale (tableaux + titres + texte courant) ; (3) blocs `text` (variantes en ligne) ; (4) `.chessbook`.
+
+## Assemblage de la partie principale : constat (PartiesFischer, pages 1-8), rien d'implémenté
+- Les coups de la ligne principale sont répartis entre : blocs `table` (coups bien alignés), blocs `text` en 2 colonnes
+  (x~500 : numéros + coups blancs, x~1020 : coups noirs, ex. p4 `22 fx e3 23 xg2 24 e4!` / `xg2! d4 dis.+`), `paragraph_title`
+  (`29 ©7+`) et fragments isolés (`xd5`, `e7`, `f6`, `c5`). Les figurines y sont perdues ou garbled, et il n'y a pas de cellules.
+- Les variantes en ligne (`7...cxd4 8 exd4 ☠e7 ...`) forment la majorité des coups du livre : c'est là que la valeur se joue.
+- Il faut donc un lecteur de lignes au niveau glyphe, indépendant de la structure `table` : (1) segmenter les lignes d'un bloc
+  (projection horizontale), (2) segmenter les mots (écarts), (3) classer le premier glyphe de chaque mot par exemplaires
+  (figurine / lettre / chiffre), (4) aligner avec les mots SAN du texte OCR, (5) rejeu python-chess. Les glyphes
+  `~/Documents/Programmation/entrainement_ocr_echecs/glyphs/{digit,lowercase,uppercase,punctuation}` pourraient servir à lire
+  les coups sans l'OCR (non testé).
