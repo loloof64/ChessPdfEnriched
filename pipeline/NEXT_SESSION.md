@@ -116,3 +116,12 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   table/text de l'OCR) ; (2) classer en K/Q/R/B/N, soit classifieur entraîné (`~/Documents/Programmation/entrainement_ocr_echecs/
   {6class,glyphs}` existe), soit clustering par livre + vote de légalité (rejeu des coups depuis le diagramme) ;
   (3) injecter la lettre dans le SAN, valider par rejeu python-chess.
+
+## Test du classifieur `6class` sur les figurines de PartiesFischer p3 (sonde `work/fig_probe.py`, jetable)
+- Jeu `entrainement_ocr_echecs/6class` (6 classes K Q R B N NotAFigurine, ~10 000 glyphes 20x22 par classe) + RandomForest
+  sur pixels 20x24 : sur les 13 premières figurines de la page (cellules des 4 tableaux) il répond NotAFigurine (0,5-0,9) pour
+  12 sur 13 ; une seule dame trouvée. Il ne transfère donc PAS à ce livre (polices de figurines différentes).
+- Les figurines sont des composantes connexes uniques (~28-36 px de large, 33-35 de haut, la tour est plus étroite : 20x29),
+  donc la localisation par composantes à gauche d'un mot SAN est faisable ; seule la classification pose problème.
+- Décision : regroupement par livre (k-means sur les glyphes candidats, 5 classes) + étiquetage par légalité des coups
+  rejoués. Pas d'entraînement global.
