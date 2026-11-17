@@ -28,6 +28,16 @@ Tagged releases (`X.Y.Z`) on GitHub provide the reader for Windows (x64 zip) and
   - **`cpu`**: any other machine (no NVIDIA GPU, or no GPU at all). **Not tested yet**: the diagram reader falls back to the CPU by
     itself, but the OCR of scanned pages (PaddleOCR-VL, 0.9B parameters) will be much slower; PDFs with a text layer avoid most of it.
 
+Disk space and download (sizes of the locked wheels for Linux x86-64; "on disk" for `cuda` is measured, for `cpu` it is an estimate):
+
+| | Download | On disk (`pipeline/.venv`) |
+|---|---|---|
+| `cuda` | about 5 GB (Paddle GPU 2 GB, PyTorch 0.8 GB, NVIDIA libraries about 2 GB) | about 8.5 GB |
+| `cpu` | about 0.6 GB | about 1.5 GB (estimate) |
+
+Add to either profile: about 2 GB of OCR models downloaded at the first OCR run (`~/.paddlex`) and 122 MB for the diagram weights.
+`uv` also keeps its own cache in `~/.cache/uv`, which grows with every version installed: `uv cache prune` removes what is unused.
+
 ### Install the venv
 
 ```bash
