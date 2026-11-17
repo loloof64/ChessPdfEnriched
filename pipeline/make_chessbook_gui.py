@@ -5,6 +5,7 @@
 
 Pick the PDF, pick where to write the .chessbook, press Start. make_chessbook_cli.py runs as a child process; its progress lines
 drive the two progress bars (current step, whole job)."""
+import json
 import queue
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 HERE = Path(__file__).parent
+SETTINGS = HERE / "work" / "gui_settings.json"  # last folders and language, kept between runs (work/ is ignored by git)
 # steps in the order make_chessbook_cli.py runs them, with their share of the whole job (a rough guess: only the bar's pace depends on it)
 STEPS = [("Reading pages (OCR)", 25), ("Moves from diagrams", 15), ("Locating moves", 20), ("Reading diagrams", 40)]
 
@@ -25,7 +27,8 @@ class App(tk.Tk):
         self.title("Chess PDF Enriched : make chessbook")
         self.minsize(640, 420)
         self.proc, self.lines, self.t0 = None, queue.Queue(), 0
-        self.pdf, self.out, self.lang = tk.StringVar(), tk.StringVar(), tk.StringVar(value="fr")
+        self.settings = self.load_settings()
+        self.pdf, self.out, self.lang = tk.StringVar(), tk.StringVar(), tk.StringVar(value=self.settings.get("lang", "fr"))
         f = ttk.Frame(self, padding=12)
         f.pack(fill="both", expand=True)
         f.columnconfigure(1, weight=1)
@@ -55,18 +58,43 @@ class App(tk.Tk):
         f.rowconfigure(8, weight=1)
         self.after(100, self.poll)
 
+    def load_settings(self):
+        try:
+            return json.loads(SETTINGS.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def remember(self, **values):
+        self.settings.update(values)
+        try:
+            SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+            SETTINGS.write_text(json.dumps(self.settings, indent=1))
+        except OSError:
+            pass  # a read-only folder only costs the memory of the folders
+
+    def folder(self, key, current=""):
+        """Where a file dialog should open: the folder of the file already chosen, else the last one used, else the default."""
+        for d in (Path(current).parent if current else None, Path(self.settings[key]) if key in self.settings else None):
+            if d and d.is_dir():
+                return str(d)
+        return None
+
     def pick_pdf(self):
-        path = filedialog.askopenfilename(title="Choose the PDF", filetypes=[("PDF", "*.pdf")])
+        path = filedialog.askopenfilename(title="Choose the PDF", filetypes=[("PDF", "*.pdf")], initialdir=self.folder("pdf_dir", self.pdf.get()))
         if path:
             self.pdf.set(path)
-            if not self.out.get():
-                self.out.set(str(Path(path).with_suffix(".chessbook")))
+            self.remember(pdf_dir=str(Path(path).parent))
+            if not self.out.get():  # propose the output in the last output folder, else next to the PDF
+                out_dir = self.folder("out_dir") or str(Path(path).parent)
+                self.out.set(str(Path(out_dir) / (Path(path).stem + ".chessbook")))
 
     def pick_out(self):
         path = filedialog.asksaveasfilename(title="Write the .chessbook to", defaultextension=".chessbook", filetypes=[("chessbook", "*.chessbook")],
+                                            initialdir=self.folder("out_dir", self.out.get()),
                                             initialfile=Path(self.out.get()).name if self.out.get() else "")
         if path:
             self.out.set(path)
+            self.remember(out_dir=str(Path(path).parent))
 
     def say(self, text):
         self.log.configure(state="normal")
@@ -85,6 +113,7 @@ class App(tk.Tk):
         cmd = [sys.executable, str(HERE / "make_chessbook_cli.py"), self.pdf.get(), "-o", self.out.get(), "--lang", self.lang.get(), "--progress-lines"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=HERE)
         threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
+        self.remember(lang=self.lang.get(), pdf_dir=str(Path(self.pdf.get()).parent), out_dir=str(Path(self.out.get()).parent))
         self.t0 = time.time()
         self.start.configure(state="disabled")
         self.stop.configure(state="normal")
