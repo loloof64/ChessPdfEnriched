@@ -3,8 +3,16 @@
 Searches the square (x, y, size) whose 64 cells best follow a checkerboard luminance pattern, measured on
 cell-corner patches only (pieces sit in the cell centre). Works for wood, flat and hatched-scan boards.
 """
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 from PIL import Image
+
+CACHE_DIR = None  # set to a folder to keep results between runs (the slow search is deterministic: same pixels, same answer)
+_MEMORY = {}
+_VERSION = hashlib.sha1(Path(__file__).read_bytes()).hexdigest()[:10]  # editing this file invalidates the disk cache
 
 
 def _score(ii, x, y, s, p):
@@ -37,6 +45,27 @@ def _search(g, xs, ys, ss, p=.22):
 
 
 def find_board(img: Image.Image, min_frac: float = .55):
+    """Cached `_find_board`: the search takes seconds and a diagram is looked at several times (checks, candidates, second pass)."""
+    g = img.convert("L")
+    key = hashlib.sha1(g.tobytes() + repr((g.size, min_frac)).encode()).hexdigest()
+    if key not in _MEMORY:
+        path = CACHE_DIR / f"{_VERSION}_{key}.json" if CACHE_DIR else None
+        try:
+            _MEMORY[key] = tuple(json.loads(path.read_text())) if path else None
+        except (OSError, ValueError):
+            _MEMORY[key] = None
+        if _MEMORY[key] is None:
+            _MEMORY[key] = _find_board(img, min_frac)
+            if path:
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(_MEMORY[key]))
+                except OSError:
+                    pass  # a read-only work folder only costs the speed-up
+    return _MEMORY[key]
+
+
+def _find_board(img: Image.Image, min_frac: float = .55):
     """(x0, y0, x1, y1, score) of the playing area in img pixels. Low score = no clear board found.
     A checkerboard looks alike at every scale: the best score can be a 6x6 sub-board; min_frac (smallest board / image side) rules that out."""
     g0 = np.asarray(img.convert("L"), dtype=float)

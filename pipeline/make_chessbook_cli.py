@@ -26,6 +26,7 @@ import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
 from PIL import Image
 
+import autocrop
 from autocrop import candidate_boxes, find_board
 from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
 from moves import replay, tokens
@@ -377,6 +378,7 @@ def main():
     out = a.output or Path(a.pdf.stem + ".chessbook")
     work = a.work or HERE / "work" / a.pdf.stem
     (work / "diagrams").mkdir(parents=True, exist_ok=True)
+    autocrop.CACHE_DIR = work / "autocrop"
     doc = pdfium.PdfDocument(str(a.pdf))
     title = a.title or doc.get_metadata_dict().get("Title") or a.pdf.stem
     pages = page_numbers(a.pages, len(doc))
