@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<rect width="512" height="512" rx="96" fill="#1f3a5f"/>
+<!-- open book -->
+<path d="M256 340 C200 310 130 310 60 330 L60 450 C130 430 200 430 256 460 Z" fill="#f4ead2" stroke="#0d1b2e" stroke-width="8" stroke-linejoin="round"/>
+<path d="M256 340 C312 310 382 310 452 330 L452 450 C382 430 312 430 256 460 Z" fill="#fbf6e6" stroke="#0d1b2e" stroke-width="8" stroke-linejoin="round"/>
+<g stroke="#9a8a62" stroke-width="5" stroke-linecap="round" fill="none"><path d="M95 360 C140 350 190 355 230 375"/><path d="M95 395 C140 385 190 390 230 410"/><path d="M282 375 C322 355 372 350 417 360"/><path d="M282 410 C322 390 372 385 417 395"/></g>
+<g transform="translate(256 196) scale(9.5) translate(-22 -23)"><g id="white-knight" class="white knight" fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M 22,10 C 32.5,11 38.5,18 38,39 L 15,39 C 15,30 25,32.5 23,18" style="fill:#ffffff; stroke:#000000;"/><path d="M 24,18 C 24.38,20.91 18.45,25.37 16,27 C 13,29 13.18,31.34 11,31 C 9.958,30.06 12.41,27.96 11,28 C 10,28 11.19,29.23 10,30 C 9,30 5.997,31 6,26 C 6,24 12,14 12,14 C 12,14 13.89,12.1 14,10.5 C 13.27,9.506 13.5,8.5 13.5,7.5 C 14.5,6.5 16.5,10 16.5,10 L 18.5,10 C 18.5,10 19.28,8.008 21,7 C 22,7 22,10 22,10" style="fill:#ffffff; stroke:#000000;"/><path d="M 9.5 25.5 A 0.5 0.5 0 1 1 8.5,25.5 A 0.5 0.5 0 1 1 9.5 25.5 z" style="fill:#000000; stroke:#000000;"/><path d="M 15 15.5 A 0.5 1.5 0 1 1 14,15.5 A 0.5 1.5 0 1 1 15 15.5 z" transform="matrix(0.866,0.5,-0.5,0.866,9.693,-5.173)" style="fill:#000000; stroke:#000000;"/></g></g>
+</svg>

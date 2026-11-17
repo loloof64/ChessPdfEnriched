@@ -1,0 +1,95 @@
+name: Release
+
+# Push a tag like 0.1.0 (must match pubspec version) to build and publish.
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: |
+          v=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
+          [ "$v" = "${GITHUB_REF_NAME}" ] || { echo "pubspec $v != tag ${GITHUB_REF_NAME}"; exit 1; }
+
+  linux:
+    needs: check-version
+    runs-on: ubuntu-22.04 # old glibc => AppImage runs on more distros
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libfuse2 libblkid-dev liblzma-dev
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: Build AppImage
+        run: |
+          APP=chess_pdf_enriched
+          mkdir -p AppDir/usr/bin
+          cp -r build/linux/x64/release/bundle/* AppDir/usr/bin/
+          cat > AppDir/$APP.desktop <<D
+          [Desktop Entry]
+          Type=Application
+          Name=Chess PDF Enriched
+          Exec=$APP
+          Icon=$APP
+          Categories=Game;BoardGame;
+          D
+          cp assets/icon.png AppDir/$APP.png
+          printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/%s" "$@"\n' $APP > AppDir/AppRun
+          chmod +x AppDir/AppRun
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir ChessPdfEnriched-${GITHUB_REF_NAME}-x86_64.AppImage
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux
+          path: "*.AppImage"
+
+  windows:
+    needs: check-version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath "ChessPdfEnriched-${env:GITHUB_REF_NAME}-windows-x64.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows
+          path: "*.zip"
+
+  release:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Pipeline archive (scripts + dependency files for the venv)
+        run: git archive --format=zip --prefix=pipeline/ -o "ChessPdfEnriched-pipeline-${GITHUB_REF_NAME}.zip" HEAD:pipeline
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            *.AppImage
+            *.zip

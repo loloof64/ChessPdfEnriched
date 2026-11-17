@@ -128,7 +128,7 @@ class _ReaderAppState extends State<ReaderApp> {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'ChessPdfEnriched',
+        title: 'Chess PDF Enriched',
         scaffoldMessengerKey: _messenger,
         theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown)),
         home: book == null
