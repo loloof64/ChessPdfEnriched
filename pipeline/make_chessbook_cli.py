@@ -374,7 +374,7 @@ def main():
     MACHINE = a.progress_lines
 
     if not a.weights.exists():  # fail now, not after minutes of OCR
-        sys.exit(f"Poids des diagrammes introuvables : {a.weights}\nVoir la section « Poids des diagrammes » du README.")
+        sys.exit(f"Diagram weights not found: {a.weights}\nDownload them with: .venv/bin/python fetch_weights.py   (see \"Diagram weights\" in the README)")
     out = a.output or Path(a.pdf.stem + ".chessbook")
     work = a.work or HERE / "work" / a.pdf.stem
     (work / "diagrams").mkdir(parents=True, exist_ok=True)

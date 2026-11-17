@@ -23,7 +23,7 @@ uv sync --extra "$profile"
 if [ ! -f work/fenify-ft.pt ]; then
   echo
   echo "Warning: the diagram reader weights (work/fenify-ft.pt) are missing."
-  echo "See the \"Diagram weights\" section of the README (a download command is given there)."
+  echo "Download them with: .venv/bin/python fetch_weights.py   (see \"Diagram weights\" in the README)."
 fi
 echo
 echo "OK. Graphical interface: .venv/bin/python make_chessbook_gui.py   (command line: make_chessbook_cli.py --help)"
