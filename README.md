@@ -20,7 +20,8 @@ Tagged releases (`X.Y.Z`) on GitHub provide the reader for Windows (x64 zip) and
 ### Requirements
 
 - Linux (tested on Ubuntu 26.04).
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) (Python venv and dependency manager).
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) (Python venv and dependency manager). It is not in the Ubuntu
+  repositories (`apt install uv` does not work): install it with `curl -LsSf https://astral.sh/uv/install.sh | sh` (or `pipx install uv`).
 - `poppler-utils`: `sudo apt install poppler-utils` (provides `pdftoppm` and `pdftotext`).
 - A GPU is optional but strongly recommended for scanned books. Two install profiles exist:
   - **`cuda`**: NVIDIA GPU with a recent driver (CUDA 12.6 wheels of PyTorch and Paddle; an RTX 3060 12 GB is enough). This is

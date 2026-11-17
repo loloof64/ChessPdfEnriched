@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/getting-started/installation/" >&2; exit 1; }
+command -v uv >/dev/null || { echo "uv is required (not available through apt). Install it with: curl -LsSf https://astral.sh/uv/install.sh | sh   (docs: https://docs.astral.sh/uv/getting-started/installation/)" >&2; exit 1; }
 for tool in pdftoppm pdftotext; do
   command -v "$tool" >/dev/null || { echo "$tool is missing: sudo apt install poppler-utils" >&2; exit 1; }
 done
