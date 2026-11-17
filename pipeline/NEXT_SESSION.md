@@ -1,5 +1,33 @@
 # Prochaine session : lecture des diagrammes (étape 4)
 
+# État au 17 nov. 2026 (fin de session) : à lire en premier
+
+## Fait cette session
+- Livre 3 (`attaque_minorite_3`) : validé à la main par Laurent. Corrections génériques dans `moves.py` / `make_chessbook_cli.py` :
+  rejeu depuis le diagramme voisin (livres d'exercices), `(...)` = variante, coup sans numéro accepté seulement comme réponse des Noirs,
+  blocs OCR en tableau HTML remis en texte, recadrage des diagrammes plus fin (confiance < 0,95 ou lecture invraisemblable, y compris à plus grande échelle).
+- Cache de `find_board` (mémoire + `work/<livre>/autocrop/`) : résultats identiques, le calcul dominait le temps (11,7 s sur 13,5 s par diagramme).
+- Points d'entrée : `make_chessbook_gui.py` (tkinter, retient dossiers et langue dans `work/gui_settings.json`) et `make_chessbook_cli.py`.
+- Profils d'installation `cuda` / `cpu` (`pyproject.toml`, `setup_venv.sh`), `fetch_weights.py` (poids depuis la release GitHub `weights-1`, `--base` = modèle fenify d'origine).
+- Release : workflow `.github/workflows/release.yml` (tag `X.Y.Z` = version du `pubspec.yaml`) : zip Windows x64, AppImage Linux x64, zip du pipeline. Icône et titre de fenêtre faits.
+
+## En attente
+- **Pousser le tag `0.1.0`** (créé en local sur `6fa04b8`, pas poussé : `git push origin 0.1.0`), puis surveiller le 1er run du workflow (jamais exécuté).
+- Livres 1 et 2 **non régénérés** avec le nouveau code. Relecture hors ligne de leurs diagrammes : 44 sur 44 identiques à l'ancienne lecture
+  (mais la nouvelle recherche de recadrage ne s'y déclenche pas : tout y est lu à >= 0,99). À faire par Laurent : régénérer et vérifier.
+- Profil `cpu` **non testé** (installation, vitesse de l'OCR PaddleOCR-VL sans GPU). Tailles du README : cuda ~5 Go (8,5 Go sur disque, mesuré), cpu ~0,6 Go (estimation).
+- Le cache `~/.cache/uv` fait 42 Go chez Laurent (disque `/home` à 96 %) : `uv cache prune` en libère jusqu'à ~28 Go (non lancé, à sa demande).
+
+## Limites connues, pas traitées
+- Départ des passages : seulement depuis les diagrammes à +-2 pages ; un passage d'un seul coup exige qu'un seul diagramme de la page le rende légal.
+- Erreurs du modèle de lecture lui-même (pièce fantôme, ex. pion g4 de `img-008` lu dame) ; notation en figurines non gérée.
+- Les coups cliquables au bon endroit n'ont été vérifiés que par Laurent dans le lecteur (le test hors ligne ne contrôle que la légalité).
+
+## Consignes de travail de Laurent
+- Corriger à la racine pour tous les livres (il ne fait pas de rapport livre par livre) ; ne pas régénérer un livre ni lancer de gros calculs sans demande ; ne jamais lancer tous les livres.
+- Commiter quand il le demande, sans tag (le tag `0.1.0` se pousse à sa demande) ; code et commentaires en anglais, discussion en français.
+
+
 ## État
 - OCR : `ocr_page.py` (PaddleOCR-VL-1.6, GPU OK) donne type de bloc + bbox. Diagramme = bloc `image`.
 - FEN : `read_fen.py` + poids fenify (`work/fenify-gpu.pt`, release v2023-07-10 de notnil/fenify, MIT,
