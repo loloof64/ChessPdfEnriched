@@ -41,6 +41,7 @@ CONFIDENT = 0.95  # mean per-square probability above which a diagram reading is
 MIN_BOARD_SCORE = 2.5  # autocrop checkerboard score: logos < 1, small screenshot boards 3-5, real diagrams 6+
 HERE = Path(__file__).parent
 T0 = time.time()  # program start, for the total time
+MACHINE = False  # --progress-lines: progress as '@@PROGRESS<TAB>label<TAB>i<TAB>n<TAB>note' lines (read by make_chessbook_gui.py)
 
 
 def mmss(seconds):
@@ -54,6 +55,9 @@ class bar:
         self.items, self.label, self.width, self.i, self.t0, self.tty = list(items), label, width, 0, time.time(), sys.stderr.isatty()
 
     def note(self, text=""):
+        if MACHINE:
+            print(f"@@PROGRESS\t{self.label}\t{self.i}\t{len(self.items)}\t{text}", file=sys.stderr, flush=True)
+            return
         k = self.width * self.i // max(1, len(self.items))
         line = f"{self.label:<22}[{'#' * k}{'.' * (self.width - k)}] {self.i}/{len(self.items)} {mmss(time.time() - self.t0)} {text}"
         if self.tty:
@@ -362,8 +366,11 @@ def main():
     ap.add_argument("--work", type=Path, help="cache folder, default work/<pdf name>/")
     ap.add_argument("--no-scans", action="store_true", help="do not embed the page images (smaller file, no facsimile)")
     ap.add_argument("--min-text-words", type=int, default=60, help="pages with fewer words in the PDF text layer are OCRed")
+    ap.add_argument("--progress-lines", action="store_true", help="machine-readable progress lines (used by make_chessbook_gui.py)")
     ap.add_argument("--weights", type=Path, default=HERE / "work" / "fenify-ft.pt", help="diagram reader weights (TorchScript)")
     a = ap.parse_args()
+    global MACHINE
+    MACHINE = a.progress_lines
 
     if not a.weights.exists():  # fail now, not after minutes of OCR
         sys.exit(f"Poids des diagrammes introuvables : {a.weights}\nVoir la section « Poids des diagrammes » du README.")
