@@ -18,7 +18,7 @@ def _lang(lang):
     """(token regex, translate table to English SAN, piece letters) for a book language."""
     p = PIECES[lang]
     san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}])?)[+#]?[!?]*"
-    tok = re.compile(rf"(?P<num>\d+\.(?:\.\.)?|\d+\.\.\.)|(?P<move>{san})(?![A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>\[)|(?P<close>\])|(?P<res>1-0|0-1|1/2-1/2)")
+    tok = re.compile(rf"(?P<num>\d+\.(?:\.\.)?|\d+\.\.\.)|(?P<move>{san})(?![A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
     return tok, str.maketrans(p, "NBRQK"), p
 
 
@@ -104,17 +104,25 @@ def replay(text, start=None, lang="fr", anchors=(), own=0):
         j = i
         while j < len(toks) and toks[j][0] != "prose":
             j += 1
-        has_num = any(k == "num" for k, *_ in toks[i:j])
-        for k in range(i, j):
-            run_ok[k] = has_num
+        seen = False
+        for k in range(i, j):  # a bare move BEFORE the run's first number is prose ('la case c4! 1...b5!'), not a numbered move
+            seen = seen or toks[k][0] == "num"
+            run_ok[k] = seen
         i = j
     dead = False
     closed = None  # (board of the variation just closed, index of its ']'): the OCR sometimes closes a variation too early
     def lookahead(b, idx, cap=8):
         """How many of the moves after token idx are legal in a row from board b (prose between them is skipped)."""
         b, n = b.copy(), 0
+        depth = 0
         for k in range(idx + 1, len(toks)):
-            if toks[k][0] != "move":
+            if toks[k][0] == "open":
+                depth += 1  # a variation does not continue the game: skip its content
+            elif toks[k][0] == "close":
+                if depth == 0:
+                    break
+                depth -= 1
+            if toks[k][0] != "move" or depth:
                 continue
             numbered = run_ok.get(k)
             if not (numbered or (plausible_lone(toks[k][1], pieces) and b.turn == chess.BLACK)):
