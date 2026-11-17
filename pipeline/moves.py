@@ -87,8 +87,10 @@ def tokens(text, lang="fr"):
     return out
 
 
-def replay(text, start=None, lang="fr"):
-    """[{san, fen, ok, depth, ply, raw}] ; mainline + variations. Stops a line at its first illegal move."""
+def replay(text, start=None, lang="fr", anchors=(), own=0):
+    """[{san, fen, ok, depth, ply, raw}] ; mainline + variations. Stops a line at its first illegal move.
+    `anchors`: piece placements of diagrams. A move number that does not follow the board (or follows a dead line) may restart
+    the game from one of them (the first `own` are the page's own diagrams, preferred on ties; side to move and move number come from the printed number) when that makes the next moves legal."""
     toks = tokens(text, lang)
     _, table, pieces = _lang(lang)
     board, before_last = chess.Board(start) if start else chess.Board(), None
@@ -108,7 +110,47 @@ def replay(text, start=None, lang="fr"):
         i = j
     dead = False
     closed = None  # (board of the variation just closed, index of its ']'): the OCR sometimes closes a variation too early
+    def lookahead(b, idx, cap=8):
+        """How many of the moves after token idx are legal in a row from board b (prose between them is skipped)."""
+        b, n = b.copy(), 0
+        for k in range(idx + 1, len(toks)):
+            if toks[k][0] != "move":
+                continue
+            numbered = run_ok.get(k)
+            if not (numbered or (plausible_lone(toks[k][1], pieces) and b.turn == chess.BLACK)):
+                continue  # prose mention, as in the main loop
+            try:
+                b.push(b.parse_san(to_san(toks[k][1], table)))
+            except ValueError:
+                if numbered:
+                    break
+                continue
+            n += 1
+            if n >= cap:
+                break
+        return n
+
     for idx, (kind, val, start, end) in enumerate(toks):
+        if anchors and kind == "num" and not stack and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
+            n, black = int(val.rstrip(".")), val.endswith("...")
+            if dead or (board.fullmove_number, board.turn == chess.BLACK) != (n, black) or not _legal(board, toks[idx + 1][1], table):
+                cur = 0 if dead else lookahead(board, idx)
+                found, found_idx = [], []  # (score, board) of every candidate start that beats the current board, and its anchor index
+                starts = ([chess.STARTING_BOARD_FEN] if n == 1 and not black else [])
+                for ai, fen in enumerate(starts + list(anchors)):
+                    cand = chess.Board(fen + (" b" if black else " w") + f" KQkq - 0 {n}")
+                    cand.clean_castling_rights()
+                    if (score := lookahead(cand, idx)) > cur:
+                        found.append((score, cand)); found_idx.append(ai - len(starts))
+                if found:
+                    top = max(sc for sc, _ in found)
+                    best = next(c for sc, c in found if sc == top)
+                    # a single legal move proves little (many diagrams allow it): believe it only when exactly one diagram does
+                    tops = [i for i, (sc, _) in enumerate(found) if sc == top]
+                    if top >= 2 or len(tops) == 1 or sum(found_idx[i] < own for i in tops) == 1:
+                        if top < 2 and len(tops) > 1:
+                            best = next(found[i][1] for i in tops if found_idx[i] < own)
+                        board, before_last, dead, stack = best, None, False, []
         if kind == "num" and dead and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             # after an illegal move (often an alternative given in prose without brackets: 'Si 24.Fxd5 ...') resume at the next move
             # number that is exactly the one the board expects and whose move is legal
@@ -128,7 +170,9 @@ def replay(text, start=None, lang="fr"):
             # a move number glued to the move ('23...Fxd5') is part of what the book prints in bold: include it in the span
             if idx > 0 and toks[idx - 1][0] == "num" and toks[idx - 1][3] == start:
                 start = toks[idx - 1][2]
-            if dead or not (run_ok.get(idx) or plausible_lone(val, pieces)):
+            # a bare move (no number in its run) is only a Black reply printed without its number ('13.b4 ... Ce4'): White's moves always carry
+            # theirs, so a bare White-looking move is prose ('répliquer à Db3 par Db6')
+            if dead or not (run_ok.get(idx) or (plausible_lone(val, pieces) and board.turn == chess.BLACK)):
                 continue
             mv = None
             try:

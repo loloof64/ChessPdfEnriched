@@ -36,13 +36,14 @@ def _search(g, xs, ys, ss, p=.22):
     return int(X[k]), int(Y[k]), int(S[k]), float(sc[k])
 
 
-def find_board(img: Image.Image):
-    """(x0, y0, x1, y1, score) of the playing area in img pixels. Low score = no clear board found."""
+def find_board(img: Image.Image, min_frac: float = .55):
+    """(x0, y0, x1, y1, score) of the playing area in img pixels. Low score = no clear board found.
+    A checkerboard looks alike at every scale: the best score can be a 6x6 sub-board; min_frac (smallest board / image side) rules that out."""
     g0 = np.asarray(img.convert("L"), dtype=float)
     f = max(1, round(max(g0.shape) / 220))
     small = np.asarray(img.convert("L").resize((g0.shape[1] // f, g0.shape[0] // f), Image.BILINEAR), dtype=float)
     h, w = small.shape
-    x, y, s, _ = _search(small, range(0, w // 3), range(0, h // 3), range(int(min(w, h) * .55), min(w, h) + 1))
+    x, y, s, _ = _search(small, range(0, w // 3), range(0, h // 3), range(int(min(w, h) * min_frac), min(w, h) + 1))
     x, y, s = x * f, y * f, s * f
     r = f + 1
     x, y, s, sc = _search(g0, range(max(0, x - r), x + r + 1), range(max(0, y - r), y + r + 1), range(max(8, s - r), s + r + 1))

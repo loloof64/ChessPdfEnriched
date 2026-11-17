@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -36,8 +37,38 @@ from plausibility import issues
 MAX_EMBEDDED_PX = 40_000_000  # an embedded image bigger than this (width x height) is not extracted: PDFs can be hostile
 MAX_EMBEDDED_PER_PAGE = 60
 Image.MAX_IMAGE_PIXELS = 100_000_000  # explicit PIL limit (it raises above twice this) for rendered pages and extracted images
+CONFIDENT = 0.95  # mean per-square probability above which a diagram reading is not second-guessed by a finer crop search
 MIN_BOARD_SCORE = 2.5  # autocrop checkerboard score: logos < 1, small screenshot boards 3-5, real diagrams 6+
 HERE = Path(__file__).parent
+T0 = time.time()  # program start, for the total time
+
+
+def mmss(seconds):
+    return f"{int(seconds) // 60:02d}:{int(seconds) % 60:02d}"
+
+
+class bar:
+    """Iterate over items while drawing a one-line progress bar on stderr. `note(text)` adds what is being done inside the current
+    item (e.g. which diagram); on a terminal the line is redrawn, otherwise one plain line is printed per item."""
+    def __init__(self, items, label, width=30):
+        self.items, self.label, self.width, self.i, self.t0, self.tty = list(items), label, width, 0, time.time(), sys.stderr.isatty()
+
+    def note(self, text=""):
+        k = self.width * self.i // max(1, len(self.items))
+        line = f"{self.label:<22}[{'#' * k}{'.' * (self.width - k)}] {self.i}/{len(self.items)} {mmss(time.time() - self.t0)} {text}"
+        if self.tty:
+            print("\r\033[K" + line, end="", file=sys.stderr, flush=True)
+        elif not text:
+            print(line, file=sys.stderr, flush=True)
+
+    def __iter__(self):
+        for self.i, it in enumerate(self.items):
+            self.note()
+            yield it
+        self.i = len(self.items)
+        self.note()
+        if self.tty:
+            print(file=sys.stderr)
 
 
 def page_numbers(spec, count):
@@ -174,6 +205,9 @@ def dedupe(blocks):
     the start of any later block's text it contains (otherwise those moves are read twice). The comparison ignores ALL whitespace
     ('42.Txc3' and '42. Txc3' are the same text). Idempotent."""
     squash = lambda t: re.sub(r"\s+", "", t)
+    for b in blocks:  # the OCR sometimes returns a text block as an HTML table: plain text, or its repeated text is not recognised
+        if b["block_label"] in KEEP and "<t" in b["block_content"]:
+            b["block_content"] = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", b["block_content"]))).strip()
     keep = [b for b in blocks if b["block_label"] in KEEP and len(squash(b["block_content"])) >= 12]
     for i, a in enumerate(blocks):
         if a["block_label"] not in KEEP:
@@ -275,6 +309,16 @@ def read_diagram(model, im, known=frozenset()):
             hit = next((r for r in read_boxes(model, im, dense[i:i + 64]) if orient(r[0])[0].board_fen() in known), None)
             if hit:
                 break
+    if hit is None and (issues(best[0]) or best[1] < CONFIDENT):
+        # no game confirms a reading and the best square's one is not a legal-looking position (no king, pawns on the back rank...) or
+        # is not a confident one: the autocrop is probably off by a few pixels. Take the most confident plausible reading around it.
+        # (also around a board found with a larger minimum size: the checker pattern can lock onto a 6x6 sub-board)
+        pool, bases = [], [first[0], find_board(im, .8)[:4]]
+        for base in dict.fromkeys(bases):
+            for i in range(0, len(dense := dense_boxes(im, base)), 64):
+                pool += [r for r in read_boxes(model, im, dense[i:i + 64]) if not issues(r[0])]
+        if pool and (issues(best[0]) or max(r[1] for r in pool) > best[1]):
+            hit = max(pool, key=lambda r: r[1])
     raw, conf = hit or best
     oriented, flipped, sure = orient(raw)
     return oriented, conf, flipped, sure, raw
@@ -332,11 +376,10 @@ def main():
     ocr, k = Ocr(), a.dpi / 72
 
     blocks, pngs = {}, {}
-    for n in pages:
+    for n in bar(pages, "Reading pages (OCR)"):
         blocks[n], how = page_blocks(a.pdf, doc, n, a.dpi, work, ocr, a.min_text_words)
         blocks[n] = dedupe(blocks[n])
         pngs[n] = render(a.pdf, n, a.dpi, work)
-        print(f"page {n}: {how}, {len(blocks[n])} blocks", flush=True)
 
     # moves: pages whose text starts at move 1 first, the others from a position of another page's game
     texts = {n: joined_text(blocks[n]) for n in pages}
@@ -349,6 +392,34 @@ def main():
         if n not in replays:
             fen, src = infer_start(texts[n], a.lang, [(p, replays[p]) for p in sorted(replays, key=lambda p: abs(p - n))])
             replays[n], starts[n], start_fens[n] = (replay(texts[n], fen, a.lang) if fen else []), src, fen
+    # exercise-style pages: each passage starts from a diagram of the book, not from the initial position. Pages whose replay fails
+    # (or finds nothing) are replayed with the boards of the nearby diagrams as candidate restart positions (see moves.replay)
+    model, boards = None, {}
+    def boards_of(p, pb):
+        nonlocal model
+        if p not in boards:
+            boards[p], page_img = [], Image.open(pngs[p]).convert("RGB")
+            figs = [b for b in blocks[p] if b["block_label"] in FIGURE]
+            for k, b in enumerate(figs, 1):
+                pb.note(f"page {p}: diagram {k}/{len(figs)}")
+                x0, y0, x1, y1 = b["block_bbox"]
+                im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
+                if model is None:
+                    import torch
+                    model = torch.jit.load(str(a.weights), map_location="cuda" if torch.cuda.is_available() else "cpu").eval()
+                r = read_diagram(model, onwhite(im))
+                if r:
+                    boards[p].append(r[0].board_fen())
+        return boards[p]
+    pb = bar([n for n in pages if has_moves(texts[n], a.lang) and (not replays[n] or not all(m["ok"] for m in replays[n]))], "Moves from diagrams")
+    for n in pb:
+        if has_moves(texts[n], a.lang) and (not replays[n] or not all(m["ok"] for m in replays[n])):
+            anchors = [f for p in sorted((q for q in pages if abs(q - n) <= 2), key=lambda q: abs(q - n)) for f in boards_of(p, pb)]
+            if anchors:
+                better = replay(texts[n], start_fens[n], a.lang, anchors, own=len(boards_of(n, pb)))
+                if sum(m["ok"] for m in better) > sum(m["ok"] for m in replays[n]):
+                    replays[n] = better
+                    starts[n] = starts[n] or "diagram positions"
     data = {n: page_data(n, blocks[n], pngs[n], replays[n]) for n in pages}
     for n in pages:  # text-layer pages: the page without its text, drawn under the text by the reader
         if (work / "pages" / f"p{n}_bg.png").exists():
@@ -356,7 +427,7 @@ def main():
 
     # where each move sits on the page image: lets the reader keep the ORIGINAL page and put clickable zones on it
     classic = Classic()
-    for n in pages:
+    for n in bar(pages, "Locating moves"):
         if not any(m["ok"] for m in data[n]["moves"]):
             continue
         scanned = not (work / "pages" / f"p{n}_bg.png").exists()  # no text layer: locate through a second, classic OCR
@@ -378,11 +449,13 @@ def main():
     # diagrams: read each figure, then look for its position in the games of the book
     known = {mv["fen"].split()[0] for p in pages for mv in data[p]["moves"] if mv["ok"]} | {chess.Board(f).board_fen() for f in start_fens.values() if f}
     fen_of = {mv["id"]: mv["fen"] for p in pages for mv in data[p]["moves"] if mv["ok"]}
-    model = None
-    for n in pages:
+    pb = bar(pages, "Reading diagrams")
+    for n in pb:
         page_img = None
         nb = ni = 0
-        for b in (b for b in blocks[n] if b["block_label"] in FIGURE):
+        figs = [b for b in blocks[n] if b["block_label"] in FIGURE]
+        for k, b in enumerate(figs, 1):
+            pb.note(f"page {n}: diagram {k}/{len(figs)}")
             page_img = page_img or Image.open(pngs[n]).convert("RGB")
             x0, y0, x1, y1 = b["block_bbox"]
             im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
@@ -442,7 +515,7 @@ def main():
                 z.write(work / d["image"], d["image"])
     tmp.replace(out)
 
-    print(f"\n{out}: {len(pages)} pages")
+    print(f"\n{out}: {len(pages)} pages, total time {mmss(time.time() - T0)}")
     for n in pages:
         ms, ds = data[n]["moves"], data[n]["diagrams"]
         bad = sum(not m["ok"] for m in ms)
