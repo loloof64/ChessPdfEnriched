@@ -78,6 +78,10 @@ class App(tk.Tk):
         if not Path(self.pdf.get()).is_file() or not self.out.get():
             messagebox.showerror("Missing file", "Choose an existing PDF and an output file.")
             return
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")  # a new run starts with an empty log
+        self.log.configure(state="disabled")
+        self.all_text.set("Whole job")
         cmd = [sys.executable, str(HERE / "make_chessbook_cli.py"), self.pdf.get(), "-o", self.out.get(), "--lang", self.lang.get(), "--progress-lines"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=HERE)
         threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
