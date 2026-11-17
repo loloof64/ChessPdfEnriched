@@ -1,138 +1,147 @@
 # ChessPdfEnriched
 
-Lire des livres d'échecs scannés comme des livres interactifs : les coups et les diagrammes sont cliquables, un clic
-affiche la position sur un échiquier.
+Read scanned chess books as interactive books: moves and diagrams are clickable, and a click shows the position on a board.
 
-Deux programmes :
+Two programs:
 
-| Programme | Dossier | Rôle |
+| Program | Folder | Role |
 |---|---|---|
-| **Pipeline** (Python) | `pipeline/` | transforme un PDF en fichier `.chessbook` (OCR, diagrammes, coups) |
-| **Lecteur** (Flutter) | racine, `lib/` | ouvre un `.chessbook` : texte, coups cliquables, échiquier, correction des diagrammes |
+| **Pipeline** (Python) | `pipeline/` | turns a PDF into a `.chessbook` file (OCR, diagrams, moves) |
+| **Reader** (Flutter) | repository root, `lib/` | opens a `.chessbook`: text, clickable moves, board, diagram correction |
 
-Le format du `.chessbook` est décrit dans [schema/chessbook.md](schema/chessbook.md). Le point d'avancement détaillé
-(mesures, limites, pièges) est dans [pipeline/NEXT_SESSION.md](pipeline/NEXT_SESSION.md).
+The `.chessbook` format is described in [schema/chessbook.md](schema/chessbook.md). Detailed progress notes (measurements,
+limits, pitfalls) are in [pipeline/NEXT_SESSION.md](pipeline/NEXT_SESSION.md) (in French).
 
-## 1. Pipeline : générer un `.chessbook` à partir d'un PDF
+Tagged releases (`X.Y.Z`) on GitHub provide the reader for Windows (x64 zip) and Linux (x64 AppImage), and a zip of the pipeline
+(Python scripts and the dependency files needed to build its venv).
 
-### Prérequis
+## 1. Pipeline: generate a `.chessbook` from a PDF
 
-- Linux (testé sous Ubuntu 26.04), carte NVIDIA avec pilote récent (le projet installe les roues CUDA 12.6 de PyTorch et
-  de Paddle ; la RTX 3060 12 Go suffit).
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) (gestionnaire de venv et de dépendances Python).
-- `poppler-utils` : `sudo apt install poppler-utils` (fournit `pdftoppm` et `pdftotext`).
+### Requirements
 
-### Installer le venv
+- Linux (tested on Ubuntu 26.04).
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) (Python venv and dependency manager).
+- `poppler-utils`: `sudo apt install poppler-utils` (provides `pdftoppm` and `pdftotext`).
+- A GPU is optional but strongly recommended for scanned books. Two install profiles exist:
+  - **`cuda`**: NVIDIA GPU with a recent driver (CUDA 12.6 wheels of PyTorch and Paddle; an RTX 3060 12 GB is enough). This is
+    the tested configuration.
+  - **`cpu`**: any other machine (no NVIDIA GPU, or no GPU at all). **Not tested yet**: the diagram reader falls back to the CPU by
+    itself, but the OCR of scanned pages (PaddleOCR-VL, 0.9B parameters) will be much slower; PDFs with a text layer avoid most of it.
+
+### Install the venv
 
 ```bash
 cd pipeline
-./setup_venv.sh
+./setup_venv.sh            # picks cuda when nvidia-smi finds a GPU, cpu otherwise
+./setup_venv.sh --cpu      # or force a profile: --cuda / --cpu
 ```
 
-Le script vérifie `uv` et poppler, puis lance `uv sync` : il crée `pipeline/.venv` (Python 3.13) et installe toutes les
-dépendances déclarées dans `pyproject.toml` (PyTorch, Paddle/PaddleOCR-VL, python-chess, OpenCV, scikit-learn, etc.). Le
-premier passage télécharge plusieurs Go, et le premier lancement de l'OCR télécharge aussi son modèle.
+The script checks `uv` and poppler, then runs `uv sync --extra <profile>`: it creates `pipeline/.venv` (Python 3.13) and installs
+every dependency declared in `pyproject.toml` (PyTorch, Paddle/PaddleOCR-VL, python-chess, OpenCV, scikit-learn, etc.). The first
+run downloads several GB, and the first OCR run also downloads its model. Without the script, always pass a profile:
+`uv sync --extra cuda` or `uv sync --extra cpu` (a bare `uv sync` installs neither PyTorch nor Paddle).
 
-Sans `uv` : `python3.13 -m venv .venv`, puis installer à la main PyTorch (`--index-url https://download.pytorch.org/whl/cu126`),
-`paddlepaddle-gpu` (index Paddle CUDA 12.6) et `pip install -e .` pour le reste. Ce chemin n'est pas testé.
+Without `uv`: `python3.13 -m venv .venv`, then install PyTorch and Paddle by hand (`--index-url https://download.pytorch.org/whl/cu126`
+and the Paddle CUDA 12.6 index, or the CPU builds) and `pip install -e .` for the rest. This path is untested.
 
-### Poids des diagrammes
+### Diagram weights
 
-La lecture des diagrammes utilise un modèle [fenify](https://github.com/notnil/fenify) (licence MIT) affiné sur des
-échiquiers synthétiques. Le fichier `pipeline/work/fenify-ft.pt` n'est **pas** dans git (127 Mo, dossier `work/` ignoré).
-Pour l'obtenir sur une nouvelle machine :
+Diagram reading uses a [fenify](https://github.com/notnil/fenify) model (MIT license) fine-tuned on synthetic boards. The file
+`pipeline/work/fenify-ft.pt` is **not** in git (127 MB, the `work/` folder is ignored). To get it on a new machine:
 
-1. soit copier `pipeline/work/fenify-ft.pt` depuis une machine qui l'a ;
-2. soit le régénérer : télécharger les poids de base `fenify-gpu.pt` (release `v2023-07-10` de notnil/fenify) dans `pipeline/work/`,
-   puis suivre « Régénérer `work/fenify-ft.pt` » dans [pipeline/NEXT_SESSION.md](pipeline/NEXT_SESSION.md) (`finetune.py`, environ 10 minutes
-   sur GPU).
+1. either copy `pipeline/work/fenify-ft.pt` from a machine that has it;
+2. or regenerate it: download the base weights `fenify-gpu.pt` (release `v2023-07-10` of notnil/fenify) into `pipeline/work/`, then
+   follow "Régénérer `work/fenify-ft.pt`" in [pipeline/NEXT_SESSION.md](pipeline/NEXT_SESSION.md) (`finetune.py`, about 10 minutes on a GPU).
 
-Le programme s'arrête tout de suite, avant l'OCR, si le fichier est absent (option `--weights` pour un autre chemin).
+The program stops immediately, before any OCR, if the file is missing (option `--weights` for another path).
 
-### Lancer
+### Run
 
-Interface graphique (choix du PDF, du fichier de sortie, barres de progression) :
+Graphical interface (pick the PDF, pick the output file, start, progress bars with elapsed time):
 
 ```bash
 cd pipeline
 .venv/bin/python make_chessbook_gui.py
 ```
 
-Ou en ligne de commande :
+Or the command line:
 
 ```bash
 cd pipeline
 .venv/bin/python make_chessbook_cli.py ~/Documents/Echecs/Ebooks/DeFabrice/attaque_minorite_1.pdf --lang fr -o attaque.chessbook
 ```
 
-| Option | Rôle |
+| Option | Role |
 |---|---|
-| `--lang fr` ou `en` | notation des coups imprimée dans le livre : `fr` = C F T D R (Cavalier, Fou, Tour, Dame, Roi), `en` = N B R Q K |
-| `-o fichier.chessbook` | fichier produit (défaut : `<nom du pdf>.chessbook` dans le dossier courant) |
-| `--pages 1-40` ou `3,5,8-10` | ne traiter que ces pages (numéros du PDF ; défaut : toutes) |
-| `--title "Titre"` | titre affiché (défaut : titre du PDF, sinon nom du fichier) |
-| `--dpi 200` | résolution du rendu des pages |
-| `--no-scans` | n'embarque pas les images des pages (fichier plus petit) |
-| `--work dossier` | dossier de cache (défaut : `pipeline/work/<nom du pdf>/`) |
-| `--weights fichier.pt` | poids du lecteur de diagrammes |
+| `--lang fr` or `en` | move notation printed in the book: `fr` = C F T D R (Cavalier, Fou, Tour, Dame, Roi), `en` = N B R Q K |
+| `-o file.chessbook` | output file (default: `<pdf name>.chessbook` in the current folder) |
+| `--pages 1-40` or `3,5,8-10` | only process these pages (PDF page numbers; default: all) |
+| `--title "Title"` | displayed title (default: the PDF title, else the file name) |
+| `--dpi 200` | page rendering resolution |
+| `--no-scans` | do not embed the page images (smaller file, no facsimile) |
+| `--work folder` | cache folder (default: `pipeline/work/<pdf name>/`) |
+| `--weights file.pt` | diagram reader weights |
+| `--progress-lines` | machine-readable progress lines (used by the graphical interface) |
 
-Pour chaque page, le programme :
+For each page, the program:
 
-1. rend la page en image ; lit le texte dans la couche texte du PDF s'il y en a une (au moins 60 mots), sinon fait l'OCR
-   avec PaddleOCR-VL (environ une minute par page sur une RTX 3060) ;
-2. nettoie les défauts connus de l'OCR : blocs de texte vides et passages répétés dans le bloc voisin ;
-3. repère les images, lit la position de celles qui sont des échiquiers et la compare à la partie de la page
-   (`matches_move` dans le fichier : c'est un bon contrôle de la lecture) ;
-3b. localise chaque coup sur l'image de la page (pour le fac-similé) : par les boîtes des mots du PDF quand il a une couche texte, sinon avec un second OCR (PP-OCRv5, boîtes mot par mot) dont le texte est aligné caractère par caractère sur celui du modèle principal ;
-4. lit les coups, convertit en notation anglaise, les rejoue avec python-chess depuis la position de départ ; les variantes
-   `[ ... ]` partent de la position avant le dernier coup. Un coup illégal est une erreur probable de l'OCR : il est marqué
-   `ok: false` (en rouge dans le lecteur) et la ligne s'arrête là ;
-5. pour une page qui ne commence pas au coup 1, cherche dans les autres pages la position d'où le texte se rejoue sans erreur
-   (ex. : page 4 du PDF de Fabrice, qui reprend la partie de la page 6 au coup 16).
+1. renders the page as an image; reads the text from the PDF text layer when there is one (at least 60 words), otherwise runs the
+   OCR with PaddleOCR-VL (about one minute per page on an RTX 3060);
+2. cleans known OCR defects: empty text blocks, passages repeated in the neighbouring block, text blocks returned as HTML tables;
+3. finds the images and reads the position of those that are boards (fenify). A reading that is not confident or not plausible
+   (no king, pawns on the back rank...) triggers a finer search for the board's crop, including larger sizes. The reading is
+   compared with the game of the page (`matches_move` in the file: a good check of the reading);
+3b. locates every move on the page image (for the facsimile): with the word boxes of the PDF when it has a text layer, otherwise with
+   a second OCR (PP-OCRv5, word boxes) whose text is aligned character by character with the main model's;
+4. reads the moves, converts them to English notation and replays them with python-chess. Variations written `[ ... ]` or `( ... )`
+   start from the position before the last move. An illegal move is a probable OCR error: it is marked `ok: false` (red in the
+   reader) and the line stops there. A move without a number is only believed as a Black reply; anything else is prose;
+5. chooses where a passage starts from: the initial position, a position of another page's game (a page that does not begin at
+   move 1), or, in exercise-style books, the position of a nearby diagram (the one after which the next moves are legal).
 
-Un résumé par page est affiché à la fin : nombre de coups, de coups illégaux, de diagrammes lus et confirmés par la partie.
+A summary per page is printed at the end: number of moves, of illegal moves, of diagrams read and confirmed by the game, and the total time.
 
-**Reprise** : les étapes lentes (rendu, OCR) sont gardées dans le dossier de cache. Si le programme est interrompu, relancer la
-même commande reprend où il s'était arrêté. Pour refaire l'OCR d'une page, supprimer `work/<pdf>/blocks/p<N>.json`.
+**Speed**: the board search is cached in memory and in `work/<pdf>/autocrop/`, so a re-run of a book does not repeat it.
 
-**Corrections** : relancer le programme sur un livre déjà généré remplace tout sauf `corrections.json`, le fichier où le lecteur
-enregistre vos corrections de diagrammes. Une correction n'est appliquée que si le diagramme généré est resté identique ; sinon
-elle est signalée « à revoir ».
+**Resuming**: slow steps (rendering, OCR) are kept in the cache folder. If the program is interrupted, running the same command
+resumes where it stopped. To redo the OCR of a page, delete `work/<pdf>/blocks/p<N>.json`.
 
-### Limites connues
+**Corrections**: running the program again on an already generated book replaces everything except `corrections.json`, the file where
+the reader stores your diagram corrections. A correction is only applied if the generated diagram is unchanged; otherwise it is
+flagged "to review".
 
-- **Notation en figurines (♘f3) : non gérée** par `make_chessbook_cli.py`. Des essais existent (`figurines.py`, `inline.py`,
-  `legality.py`) mais ils ne sont pas intégrés ; voir `pipeline/NEXT_SESSION.md`.
-- La lecture des diagrammes n'est **pas fiable à 100 %** : un pion noir sous une case surlignée a été lu comme une dame avec 98,7 %
-  de confiance. Vérifier les diagrammes à l'œil et corriger dans le lecteur (clic droit).
-- Les diagrammes ne sont lus que s'ils sont à peu près carrés et ressemblent à un échiquier ; les petits plateaux des captures
-  d'écran sont parfois mal recadrés (signalés par l'absence de `matches_move`).
-- Notation descriptive des livres anciens, deux colonnes de coups dans un tableau, etc. : non gérés.
-- Les tests des modules sont des auto-vérifications : `.venv/bin/python legality.py`, `orientation.py`, `plausibility.py`.
+### Known limits
 
-## 2. Lecteur Flutter
+- **Figurine notation (♘f3) is not handled** by `make_chessbook_cli.py`. Experiments exist (`figurines.py`, `inline.py`,
+  `legality.py`) but they are not integrated; see `pipeline/NEXT_SESSION.md`.
+- Diagram reading is **not 100 % reliable**: a black pawn under a highlighted square was once read as a queen with 98.7 % confidence.
+  Check diagrams by eye and correct them in the reader (right click).
+- Diagrams are only read if they are roughly square and look like a board; small screenshot boards are sometimes badly cropped
+  (shown by the absence of `matches_move`).
+- Descriptive notation of old books, two columns of moves in a table, etc.: not handled.
+- Module tests are self-checks: `.venv/bin/python legality.py`, `orientation.py`, `plausibility.py`.
 
-Prérequis : Flutter 3.47.x sous Linux (`flutter doctor`) et `zenity` pour la boîte de dialogue d'ouverture de fichier.
-**Ne pas passer à Flutter 3.50** pour l'instant : sur cette configuration la fenêtre Linux s'y affiche décalée et rognée.
+## 2. Flutter reader
+
+Requirements: Flutter 3.47.x on Linux (`flutter doctor`) and `zenity` for the file-open dialog.
+**Do not move to Flutter 3.50** for now: on this setup the Linux window is displayed shifted and cropped there.
 
 ```bash
 flutter pub get
 flutter run -d linux
 ```
 
-- **Ouvrir un livre** : bouton « Ouvrir un livre » (ou l'icône dossier en haut) et choisir un fichier `.chessbook`. On peut aussi
-  passer le chemin : `flutter run -d linux --dart-entrypoint-args chemin.chessbook`, ou la variable `CHESSBOOK=chemin.chessbook`.
-- **Lire** : par défaut le **fac-similé** : la page d'origine telle quelle (image du PDF), avec des zones cliquables posées sur les coups et les
-  diagrammes. Cliquer sur un coup affiche la position, avec la flèche du dernier coup et son numéro (`3. Cf3`, `2... d5`). Un coup entouré de
-  rouge est illégal. L'icône page/image de la barre du haut bascule vers le **texte reconstitué** (blocs de texte replacés, utile si le livre n'a pas
-  les images des pages, option `--no-scans`).
-- **Pages** : boutons précédente et suivante, ou taper un numéro dans le champ puis valider.
-- **Zoom** : boutons − et +, ou le menu au milieu : « Page entière » (toute la page visible), « Largeur de page », ou un pourcentage
-  (100 % = taille réelle de la page ; au-delà de la largeur du volet, la page défile aussi horizontalement).
-- **Échiquier** : le bouton « Retourner l'échiquier » inverse la vue.
-- **Corriger un diagramme** : clic droit sur le diagramme, ou le bouton « Corriger ce diagramme » après l'avoir sélectionné.
-  Glisser une pièce de la palette sur une case, la sortir du plateau pour la supprimer, puis Enregistrer. La correction est
-  écrite dans `corrections.json` à l'intérieur du `.chessbook`.
+- **Open a book**: "Ouvrir un livre" button (or the folder icon at the top) and choose a `.chessbook` file. You can also pass the
+  path: `flutter run -d linux --dart-entrypoint-args path.chessbook`, or the `CHESSBOOK=path.chessbook` variable.
+- **Read**: by default the **facsimile**: the original page as is (the PDF image), with clickable zones on the moves and the
+  diagrams. Clicking a move shows the position, with the last-move arrow and its number (`3. Cf3`, `2... d5`). A move circled in
+  red is illegal. The page/image icon in the top bar switches to the **rebuilt text** (text blocks laid out again, useful if the
+  book has no page images, option `--no-scans`).
+- **Pages**: previous and next buttons, or type a number in the field and confirm.
+- **Zoom**: − and + buttons, or the menu in the middle: "Page entière" (whole page visible), "Largeur de page", or a percentage
+  (100 % = real page size; beyond the pane width the page also scrolls horizontally).
+- **Board**: the "Retourner l'échiquier" button flips the view.
+- **Correct a diagram**: right click on the diagram, or the "Corriger ce diagramme" button after selecting it. Drag a piece from the
+  palette onto a square, drag it off the board to remove it, then save. The correction is written to `corrections.json` inside the `.chessbook`.
 
-Tests : `flutter test` (le test d'enregistrement des corrections a besoin d'un livre généré dans `pipeline/work/fab/` et est
-ignoré sinon).
+Tests: `flutter test` (the corrections-saving test needs a generated book in `pipeline/work/fab/` and is skipped otherwise).

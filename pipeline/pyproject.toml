@@ -3,9 +3,6 @@ name = "chess-pipeline"
 version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "torch",
-    "torchvision",
-    "paddlepaddle-gpu",
     "paddleocr[doc-parser]",
     "chess",
     # used directly by the pipeline (previously only present through paddleocr's dependencies)
@@ -17,18 +14,29 @@ dependencies = [
     "pypdfium2>=4.30",
 ]
 
+# One of the two profiles is required: `uv sync --extra cuda` (NVIDIA GPU) or `uv sync --extra cpu` (any other machine); setup_venv.sh picks one.
+[project.optional-dependencies]
+cuda = ["torch", "torchvision", "paddlepaddle-gpu"]
+cpu = ["torch", "torchvision", "paddlepaddle"]
+
 [tool.uv]
 # Both frameworks must share the CUDA 12.6 libraries, otherwise torch crashes on NCCL symbols.
 index-strategy = "unsafe-best-match"
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu126" }
-torchvision = { index = "pytorch-cu126" }
+torch = [{ index = "pytorch-cu126", extra = "cuda" }, { index = "pytorch-cpu", extra = "cpu" }]
+torchvision = [{ index = "pytorch-cu126", extra = "cuda" }, { index = "pytorch-cpu", extra = "cpu" }]
 paddlepaddle-gpu = { index = "paddle-cu126" }
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
 url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
