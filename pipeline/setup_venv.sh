@@ -16,4 +16,4 @@ if [ ! -f work/fenify-ft.pt ]; then
   echo "Voir la section « Poids des diagrammes » du README."
 fi
 echo
-echo "OK. Essayer : .venv/bin/python make_chessbook.py --help"
+echo "OK. Interface graphique : .venv/bin/python make_chessbook_gui.py   (ligne de commande : make_chessbook_cli.py --help)"

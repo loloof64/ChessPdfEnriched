@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Graphical front end of make_chessbook.py (tkinter, nothing to install beyond the venv).
+"""Graphical front end of make_chessbook_cli.py (tkinter, nothing to install beyond the venv).
 
     .venv/bin/python make_chessbook_gui.py
 
-Pick the PDF, pick where to write the .chessbook, press Start. make_chessbook.py runs as a child process; its progress lines
+Pick the PDF, pick where to write the .chessbook, press Start. make_chessbook_cli.py runs as a child process; its progress lines
 drive the two progress bars (current step, whole job)."""
 import queue
 import subprocess
@@ -15,7 +15,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 HERE = Path(__file__).parent
-# steps in the order make_chessbook.py runs them, with their share of the whole job (a rough guess: only the bar's pace depends on it)
+# steps in the order make_chessbook_cli.py runs them, with their share of the whole job (a rough guess: only the bar's pace depends on it)
 STEPS = [("Reading pages (OCR)", 25), ("Moves from diagrams", 15), ("Locating moves", 20), ("Reading diagrams", 40)]
 
 
@@ -78,7 +78,7 @@ class App(tk.Tk):
         if not Path(self.pdf.get()).is_file() or not self.out.get():
             messagebox.showerror("Missing file", "Choose an existing PDF and an output file.")
             return
-        cmd = [sys.executable, str(HERE / "make_chessbook.py"), self.pdf.get(), "-o", self.out.get(), "--lang", self.lang.get(), "--progress-lines"]
+        cmd = [sys.executable, str(HERE / "make_chessbook_cli.py"), self.pdf.get(), "-o", self.out.get(), "--lang", self.lang.get(), "--progress-lines"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=HERE)
         threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
         self.t0 = time.time()

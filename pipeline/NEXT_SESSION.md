@@ -235,7 +235,7 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
 - Police du lecteur : démarre à 80 px et réduit jusqu'à tenir dans le cadre (l'ancienne estimation ne faisait que réduire, d'où un texte trop petit).
 - À surveiller sur les autres livres : bloc vide = texte déplacé dans le bloc voisin.
 
-## `make_chessbook.py` : programme générique PDF -> .chessbook (nov. 2026)
+## `make_chessbook_cli.py` : programme générique PDF -> .chessbook (nov. 2026)
 - Remplace `build_fabrice.py` (supprimé : positions en dur) ; `french_moves.py` renommé `moves.py` (option de langue fr/en). Voir le README
   (installation du venv par `pipeline/setup_venv.sh`, options, reprise, corrections conservées).
 - Vérifié sur `attaque_minorite_1.pdf` : coups IDENTIQUES au livre fait à la main sur les 6 pages (p3 77/0 illégal, p4 42 avec départ trouvé seul
@@ -278,7 +278,7 @@ Dépendances non déclarées dans `pyproject.toml` (venues avec paddleocr) : num
   attaque_minorite_2). Retenu : `candidate_boxes` (meilleur carré + 8 décalages d'une case) et choix de celui dont la lecture est une position RÉELLE
   de la partie (positions de tous les coups de toutes les pages). Confirmés : attaque_minorite_2 8/11 (p4 3/3, p5 2/2, p6 1/3, p7 2/3), attaque_minorite_1
   p4 2/2, p5 2/2, p3 0/2 (positions peut-être absentes de la partie). Les non confirmés restent à vérifier à l'oeil (pas de `matches_move`).
-- Fichier produit : `pipeline/work/attaque_minorite_2.chessbook` (`make_chessbook.py ... -o work/attaque_minorite_2.chessbook`).
+- Fichier produit : `pipeline/work/attaque_minorite_2.chessbook` (`make_chessbook_cli.py ... -o work/attaque_minorite_2.chessbook`).
 
 ## Fidélité de mise en page des pages à couche texte (nov. 2026, retour de Laurent sur attaque_minorite_2 p1-p3)
 - Constat (rendu réel obtenu par `test/render_page_test.dart`, polices Noto chargées : `BOOK=... PAGES=1,2,3 flutter test test/render_page_test.dart --update-goldens`

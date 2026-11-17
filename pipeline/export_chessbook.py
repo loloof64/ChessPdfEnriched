@@ -1,4 +1,4 @@
-"""Page records of a .chessbook (schema/chessbook.md) from OCR-style blocks and replayed moves. Library, see make_chessbook.py."""
+"""Page records of a .chessbook (schema/chessbook.md) from OCR-style blocks and replayed moves. Library, see make_chessbook_cli.py."""
 from PIL import Image
 
 KEEP = ("text", "paragraph_title", "header", "doc_title")  # block labels that carry book text

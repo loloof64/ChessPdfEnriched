@@ -51,9 +51,18 @@ Le programme s'arrête tout de suite, avant l'OCR, si le fichier est absent (opt
 
 ### Lancer
 
+Interface graphique (choix du PDF, du fichier de sortie, barres de progression) :
+
 ```bash
 cd pipeline
-.venv/bin/python make_chessbook.py ~/Documents/Echecs/Ebooks/DeFabrice/attaque_minorite_1.pdf --lang fr -o attaque.chessbook
+.venv/bin/python make_chessbook_gui.py
+```
+
+Ou en ligne de commande :
+
+```bash
+cd pipeline
+.venv/bin/python make_chessbook_cli.py ~/Documents/Echecs/Ebooks/DeFabrice/attaque_minorite_1.pdf --lang fr -o attaque.chessbook
 ```
 
 | Option | Rôle |
@@ -92,7 +101,7 @@ elle est signalée « à revoir ».
 
 ### Limites connues
 
-- **Notation en figurines (♘f3) : non gérée** par `make_chessbook.py`. Des essais existent (`figurines.py`, `inline.py`,
+- **Notation en figurines (♘f3) : non gérée** par `make_chessbook_cli.py`. Des essais existent (`figurines.py`, `inline.py`,
   `legality.py`) mais ils ne sont pas intégrés ; voir `pipeline/NEXT_SESSION.md`.
 - La lecture des diagrammes n'est **pas fiable à 100 %** : un pion noir sous une case surlignée a été lu comme une dame avec 98,7 %
   de confiance. Vérifier les diagrammes à l'œil et corriger dans le lecteur (clic droit).

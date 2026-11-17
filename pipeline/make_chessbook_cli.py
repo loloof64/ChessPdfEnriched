@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Generate a .chessbook (schema/chessbook.md) from a chess-book PDF.
 
-    .venv/bin/python make_chessbook.py livre.pdf --lang fr -o livre.chessbook [--pages 1-40] [--title "..."]
+    .venv/bin/python make_chessbook_cli.py livre.pdf --lang fr -o livre.chessbook [--pages 1-40] [--title "..."]
 
 Per page: render it; read the text from the PDF text layer when there is one, otherwise run PaddleOCR-VL; find the
 diagrams, read their position (fenify) and check it against the game; read the moves and replay them with python-chess.
