@@ -39,6 +39,7 @@ MAX_EMBEDDED_PX = 40_000_000  # an embedded image bigger than this (width x heig
 MAX_EMBEDDED_PER_PAGE = 60
 Image.MAX_IMAGE_PIXELS = 100_000_000  # explicit PIL limit (it raises above twice this) for rendered pages and extracted images
 CONFIDENT = 0.95  # mean per-square probability above which a diagram reading is not second-guessed by a finer crop search
+TRUSTED = 0.975  # fine-tuned reading below this mean confidence is double-checked with the base model
 MIN_BOARD_SCORE = 2.5  # autocrop checkerboard score: logos < 1, small screenshot boards 3-5, real diagrams 6+
 HERE = Path(__file__).parent
 T0 = time.time()  # program start, for the total time
@@ -295,7 +296,27 @@ def dense_boxes(im, base):
     return [b for _, b in sorted(out)]
 
 
-def read_diagram(model, im, known=frozenset()):
+def load_models(weights, base_weights):
+    """(fine-tuned model, original fenify model or None when its file is absent)."""
+    import torch
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    load = lambda p: torch.jit.load(str(p), map_location=dev).eval()
+    return load(weights), (load(base_weights) if base_weights and Path(base_weights).exists() else None)
+
+
+def read_diagram(model, im, known=frozenset(), base=None):
+    """Double reading: the fine-tuned `model` first; when it is not sure of itself (confidence < TRUSTED, e.g. a print style it was
+    not fine-tuned on: hatched squares make it invent queens) the original `base` model also reads, and its reading wins if it is
+    more confident and plausible (never over a reading that a game of the book confirms)."""
+    r = _read_diagram(model, im, known)
+    if r and base is not None and r[1] < TRUSTED and r[0].board_fen() not in known:  # a reading confirmed by the game stays
+        r2 = _read_diagram(base, im, known)
+        if r2 and r2[1] > r[1] and not issues(r2[4]):
+            return r2
+    return r
+
+
+def _read_diagram(model, im, known=frozenset()):
     """(oriented board, confidence, flipped, orientation sure, raw board) or None when the image is not a board.
     `known` = piece placements that occur in the book's games. Tries the best square and its one-cell shifts; if none reads as a
     known position, searches more finely around it (batched). The first reading that IS a known position wins, otherwise the
@@ -369,6 +390,8 @@ def main():
     ap.add_argument("--min-text-words", type=int, default=60, help="pages with fewer words in the PDF text layer are OCRed")
     ap.add_argument("--progress-lines", action="store_true", help="machine-readable progress lines (used by make_chessbook_gui.py)")
     ap.add_argument("--weights", type=Path, default=HERE / "work" / "fenify-ft.pt", help="diagram reader weights (TorchScript)")
+    ap.add_argument("--base-weights", type=Path, default=HERE / "work" / "fenify-base.pt",
+                    help="original fenify weights for the double reading (optional: used only when the file exists)")
     a = ap.parse_args()
     global MACHINE
     MACHINE = a.progress_lines
@@ -403,9 +426,9 @@ def main():
             replays[n], starts[n], start_fens[n] = (replay(texts[n], fen, a.lang) if fen else []), src, fen
     # exercise-style pages: each passage starts from a diagram of the book, not from the initial position. Pages whose replay fails
     # (or finds nothing) are replayed with the boards of the nearby diagrams as candidate restart positions (see moves.replay)
-    model, boards = None, {}
+    model, base, boards = None, None, {}
     def boards_of(p, pb):
-        nonlocal model
+        nonlocal model, base
         if p not in boards:
             boards[p], page_img = [], Image.open(pngs[p]).convert("RGB")
             figs = [b for b in blocks[p] if b["block_label"] in FIGURE]
@@ -414,9 +437,8 @@ def main():
                 x0, y0, x1, y1 = b["block_bbox"]
                 im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
                 if model is None:
-                    import torch
-                    model = torch.jit.load(str(a.weights), map_location="cuda" if torch.cuda.is_available() else "cpu").eval()
-                r = read_diagram(model, onwhite(im))
+                    model, base = load_models(a.weights, a.base_weights)
+                r = read_diagram(model, onwhite(im), base=base)
                 if r:
                     boards[p].append(r[0].board_fen())
         return boards[p]
@@ -469,9 +491,8 @@ def main():
             x0, y0, x1, y1 = b["block_bbox"]
             im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
             if model is None:
-                import torch
-                model = torch.jit.load(str(a.weights), map_location="cuda" if torch.cuda.is_available() else "cpu").eval()
-            r = read_diagram(model, onwhite(im), known)
+                model, base = load_models(a.weights, a.base_weights)
+            r = read_diagram(model, onwhite(im), known, base)
             # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
             if r:
                 nb += 1

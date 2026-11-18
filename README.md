@@ -57,25 +57,27 @@ and the Paddle CUDA 12.6 index, or the CPU builds) and `pip install -e .` for th
 
 ### Diagram weights
 
-The program reads chessboard diagrams with a neural network and needs one weights file, **`pipeline/work/fenify-ft.pt`** (127 MB).
-It is not in git (the `work/` folder is ignored), so on a new machine you must download it. The program stops immediately, before
-any OCR, if it is missing. One command does it (it checks the SHA-256 of the download and never overwrites an existing file):
+The program reads chessboard diagrams with two neural networks, both in `pipeline/work/` (not in git, so on a new machine you must
+download them): **`fenify-ft.pt`** (127 MB, required) and **`fenify-base.pt`** (122 MB, optional). The program stops immediately, before
+any OCR, if the first is missing. One command downloads both (it checks the SHA-256 and never overwrites an existing file):
 
 ```bash
 cd pipeline
-.venv/bin/python fetch_weights.py          # the fine-tuned weights, from this project's GitHub release "weights-1"
-.venv/bin/python fetch_weights.py --base   # or the original fenify model (see below)
+.venv/bin/python fetch_weights.py          # fenify-ft.pt and fenify-base.pt
+.venv/bin/python fetch_weights.py --base   # only fenify-base.pt (see below)
 ```
 
-- **Fine-tuned weights** (best quality): the original model fine-tuned on synthetic boards with the author's reference diagrams.
-  They are attached to the release named `weights-1` of this repository. They cannot be rebuilt from the repository alone (`finetune.py`
-  needs reference images, `work/am1/*.png`, extracted from a book that is not in the repository).
-- **Original fenify model** (`--base`, [notnil/fenify](https://github.com/notnil/fenify), MIT license, downloaded from its own release): it reads clean
-  diagrams as well as the fine-tuned one (identical results on the 15 Fischer diagrams we compared), but it sometimes sees "ghost"
-  pieces on highlighted squares or under arrows (on our 6 hand-checked diagrams: 7 ghost pieces and 1 wrong piece, against 1
-  error after fine-tuning).
+- **Fine-tuned weights** (`fenify-ft.pt`, release `weights-1` of this repository): the original model fine-tuned on synthetic boards with
+  the author's reference diagrams. Best on highlighted squares and arrows. They cannot be rebuilt from the repository alone
+  (`finetune.py` needs reference images, `work/am1/*.png`, extracted from a book that is not in the repository).
+- **Original fenify model** (`fenify-base.pt`, [notnil/fenify](https://github.com/notnil/fenify), MIT license, downloaded from its own
+  release): reads clean diagrams as well as the fine-tuned one, and other print styles better (hatched squares, coloured boards), but
+  it sometimes sees "ghost" pieces on highlighted squares or under arrows.
+- **Double reading**: when the fine-tuned reading has a mean confidence below 0.975, the base model reads the diagram too and its
+  reading is kept if it is more confident and plausible. Without `fenify-base.pt` only the fine-tuned model is used. To use the base
+  model alone: `--weights work/fenify-base.pt`.
 
-Another file can be selected with `--weights path.pt` on the command line.
+Other files can be selected with `--weights path.pt` and `--base-weights path.pt`.
 
 ### Run
 
@@ -102,7 +104,8 @@ cd pipeline
 | `--dpi 200` | page rendering resolution |
 | `--no-scans` | do not embed the page images (smaller file, no facsimile) |
 | `--work folder` | cache folder (default: `pipeline/work/<pdf name>/`) |
-| `--weights file.pt` | diagram reader weights |
+| `--weights file.pt` | diagram reader weights (fine-tuned) |
+| `--base-weights file.pt` | original fenify weights for the double reading (default `work/fenify-base.pt`, optional) |
 | `--progress-lines` | machine-readable progress lines (used by the graphical interface) |
 
 For each page, the program:

@@ -7,6 +7,12 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+### Pipeline
+- Diagrams: double reading. When the fine-tuned model is unsure (mean confidence < 0.975) the original fenify model reads too and wins if
+  it is more confident and plausible. Fixes books printed in another style (hatched squares were read as queens). Run
+  `fetch_weights.py` again to get `fenify-base.pt`; without it nothing changes.
+- Moves: text glued by the OCR (`e62.d4`), a dropped `]`, bare Black moves in prose and `e5.h3` no longer break the replay.
+
 ## [0.1.0] - 2026-11-17
 
 First release.
