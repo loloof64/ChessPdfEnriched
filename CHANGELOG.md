@@ -15,6 +15,9 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
   a bare move that is an alternative to the previous one (`4.Kd6 Ke6 (...) d3`) is a variation, and the main line resumes after the comment.
 - Moves: a new exercise whose first move was also legal before the last move of the previous one (`1.Da3#` then `1.Bd5+`) restarts from its own diagram
   when the other reading dies at once.
+- Moves: a page that begins with a variation of the previous page's last move (`[19...Ff6!?] 20.exf5`) starts from the position after that move.
+- Moves: a bare Black capture followed by a comment that mentions another move of that number (`dxe4 ... contrairement à 12...e5. [12...0-0? ...]`) is kept;
+  `1..Te8` (two dots) is not a move number; a stray `]` goes with the last `]` before it, not with a `)`.
 - Diagrams: a board the OCR labels `seal` is read like any other diagram (the first diagram of page 9 of Calcul de variantes 1 was missing).
 
 ## [0.2.1] - 2026-11-18

@@ -451,24 +451,28 @@ def has_moves(text, lang):
 
 
 def infer_start(text, lang, others):
-    """FEN to replay a page from when its first move number is not 1: a position of another page's mainline at that ply
-    after which the text replays (almost) without illegal moves. Returns (fen, source) or (None, None)."""
+    """(FEN, source, previous FEN) to replay a page from when its first move number is not 1: a position of another page's mainline at that ply
+    after which the text replays (almost) without illegal moves. A page may also begin with a variation of the previous page's last move
+    ('[19...Ff6!?] 20.exf5'): the start is then the position after that move, and the one before it is returned too. (None, None, None) when nothing fits."""
     toks = tokens(text, lang)
     num = next((t[1] for t, nxt in zip(toks, toks[1:]) if t[0] == "num" and nxt[0] == "move"), None)
     if num is None:
-        return None, None
+        return None, None, None
     ply = 2 * int(num.rstrip(".")) - (1 if num.endswith("...") else 2)
     if ply == 0:
-        return chess.STARTING_FEN, "start of game"
-    best = (0, None, None)
+        return chess.STARTING_FEN, "start of game", None
+    best = (0, None, None, None)
     for page, ms in others:
-        for m in ms:
+        for i, m in enumerate(ms):
             if m["ok"] and m["depth"] == 0 and m["ply"] == ply:
-                r = replay(text, m["fen"], lang)
-                good, bad = sum(x["ok"] for x in r), sum(not x["ok"] for x in r)
-                if good >= 5 and bad <= max(2, good // 8) and good - 3 * bad > best[0]:  # prose alternatives without brackets give a few illegal moves
-                    best = (good - 3 * bad, m["fen"], f"position of page {page} at ply {ply}")
-    return best[1], best[2]
+                nxt = next((x for x in ms[i + 1:] if x["depth"] == 0), None)
+                for fen, prev, src in [(m["fen"], None, f"position of page {page} at ply {ply}")] + (
+                        [(nxt["fen"], m["fen"], f"position of page {page} at ply {ply + 1}")] if nxt and nxt["ok"] and nxt["ply"] == ply + 1 else []):
+                    r = replay(text, fen, lang, prev=prev)
+                    good, bad = sum(x["ok"] for x in r), sum(not x["ok"] for x in r)
+                    if good >= 5 and bad <= max(2, good // 8) and good - 3 * bad > best[0]:  # prose alternatives without brackets give a few illegal moves
+                        best = (good - 3 * bad, fen, src, prev)
+    return best[1], best[2], best[3]
 
 
 def selfcheck():
@@ -554,15 +558,15 @@ def main():
 
     # moves: pages whose text starts at move 1 first, the others from a position of another page's game
     texts = {n: joined_text(blocks[n]) for n in pages}
-    replays, starts, start_fens = {}, {}, {}
+    replays, starts, start_fens, prevs = {}, {}, {}, {}
     for n in pages:
-        fen, src = infer_start(texts[n], a.lang, [])
+        fen, src, prev = infer_start(texts[n], a.lang, [])
         if fen:
-            replays[n], starts[n], start_fens[n] = replay(texts[n], fen, a.lang), src, fen
+            replays[n], starts[n], start_fens[n], prevs[n] = replay(texts[n], fen, a.lang, prev=prev), src, fen, prev
     for n in pages:
         if n not in replays:
-            fen, src = infer_start(texts[n], a.lang, [(p, replays[p]) for p in sorted(replays, key=lambda p: abs(p - n))])
-            replays[n], starts[n], start_fens[n] = (replay(texts[n], fen, a.lang) if fen else []), src, fen
+            fen, src, prev = infer_start(texts[n], a.lang, [(p, replays[p]) for p in sorted(replays, key=lambda p: abs(p - n))])
+            replays[n], starts[n], start_fens[n], prevs[n] = (replay(texts[n], fen, a.lang, prev=prev) if fen else []), src, fen, prev
     # exercise-style pages: each passage starts from a diagram of the book, not from the initial position. Pages whose replay fails
     # (or finds nothing) are replayed with the boards of the nearby diagrams as candidate restart positions (see moves.replay)
     model, base, boards = None, None, {}
@@ -588,7 +592,7 @@ def main():
         if has_moves(texts[n], a.lang) and (not replays[n] or not all(m["ok"] for m in replays[n])):
             anchors = [f for p in sorted((q for q in pages if abs(q - n) <= 2), key=lambda q: abs(q - n)) for f in boards_of(p, pb)]
             if anchors:
-                better = replay(texts[n], start_fens[n], a.lang, anchors, own=len(boards_of(n, pb)))
+                better = replay(texts[n], start_fens[n], a.lang, anchors, own=len(boards_of(n, pb)), prev=prevs[n])
                 if sum(m["ok"] for m in better) > sum(m["ok"] for m in replays[n]):
                     replays[n] = better
                     starts[n] = starts[n] or "diagram positions"
