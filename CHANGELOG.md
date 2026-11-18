@@ -11,6 +11,8 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 - The board next to the page shows its coordinates (a-h, 1-8).
 
 ### Pipeline
+- Diagrams: the orientation is read from the printed coordinates (digits 8..1 and letters a..h read by the classic OCR) when they are there, instead of guessing which army is at the bottom; the guess turned 29 of 42 diagrams of an endgame book (White's king and queen above Black's pawn) upside down.
+- Diagrams: the colours of the two kings are checked against the image (black pieces are filled, white ones outlined) when it splits cleanly; the king-colour heuristic no longer overrides a right reading (it swapped the kings of a position where both stand next to the enemy pawns).
 - Moves: a bare pawn move after commentary (`…Blanches. g6 16.axb5`) is read as Black's reply when the next White move is legal after it; in the middle of a page the game only restarts from another position when at least 3 moves are legal there.
 - Moves: a glued word with a single lowercase letter (`Fe6En échangeant…`) no longer hides the move before it.
 - Pages: a block the OCR labelled `figure_title` or `vision_footnote` that holds numbered moves is book text (a column of moves was ignored), and a block with fewer moves than the classic OCR reads in its box takes the classic text.

@@ -22,6 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 import chess
+import numpy as np
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
 from PIL import Image
@@ -31,7 +32,7 @@ from autocrop import candidate_boxes, find_board
 from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
 from moves import replay, tokens
 from trait import dot_turn
-from wordboxes import Classic, add_orphans, fill_moves, fill_sparse, move_rects_ocr, move_rects_textlayer
+from wordboxes import Classic, add_orphans, coordinate_flip, fill_moves, fill_sparse, move_rects_ocr, move_rects_textlayer
 from orientation import orient
 from plausibility import colors_only_differ, issues, repair_king_colors
 
@@ -267,7 +268,7 @@ def onwhite(im):
 
 
 def read_boxes(model, im, boxes, batch=32):
-    """[(raw board, confidence)] for the board inside each box (fenify, square 0 = a1), evaluated in batches."""
+    """[(raw board, confidence, box)] for the board inside each box (fenify, square 0 = a1), evaluated in batches."""
     import torch
     from read_fen import prep
     dev = next(iter(model.parameters())).device if list(model.parameters()) else "cpu"
@@ -276,12 +277,12 @@ def read_boxes(model, im, boxes, batch=32):
         x = torch.stack([prep(im.crop(b)) for b in boxes[i:i + batch]]).to(dev)
         with torch.no_grad():
             p = model(x).cpu()  # (B, 64, 13) probabilities
-        for q in p:
+        for q, box in zip(p, boxes[i:i + batch]):
             board = chess.Board(None)
             for sq, c in enumerate(q.argmax(dim=1).tolist()):
                 if c:
                     board.set_piece_at(sq, chess.Piece((c - 1) % 6 + 1, chess.BLACK if c > 6 else chess.WHITE))
-            out.append((board, q.max(dim=1).values.mean().item()))
+            out.append((board, q.max(dim=1).values.mean().item(), box))
     return out
 
 
@@ -302,7 +303,49 @@ def dense_boxes(im, base):
     return [b for _, b in sorted(out)]
 
 
-def alt_readings(models, im, min_conf=.95):
+def fix_colors(raw, im, box):
+    """Piece colours checked against the image: black pieces are filled (a large share of very dark pixels in the middle of their square),
+    white ones only outlined. The readers sometimes swap the colours of the two kings on small prints (a 'practical case').
+    When the dark shares split cleanly in two groups (a gap of at least .05) and the reading disagrees with that split on at most two
+    pieces and those are kings, they change colour (if the position stays plausible). Boards with dark squares or wood never split cleanly: untouched.
+    Returns (board, decided): `decided` is True when the image split cleanly, i.e. its verdict on the colours (kept or corrected) is to be
+    trusted over any heuristic."""
+    pieces = list(raw.piece_map())
+    if len(pieces) < 3:
+        return raw, False
+    g = np.asarray(im.convert("L").crop(tuple(box))).astype(float)
+    h, w = g.shape
+    dark = {}
+    for sq in pieces:
+        r, c = 7 - chess.square_rank(sq), chess.square_file(sq)
+        cell = g[int(r * h / 8 + h / 40):int((r + 1) * h / 8 - h / 40), int(c * w / 8 + w / 40):int((c + 1) * w / 8 - w / 40)]
+        dark[sq] = float((cell < 80).mean()) if cell.size else 0.0
+    vals = sorted(dark.values())
+    gap, at = max((vals[i + 1] - vals[i], i) for i in range(len(vals) - 1))
+    if gap < .05:
+        return raw, False
+    threshold = (vals[at] + vals[at + 1]) / 2
+    wrong = [sq for sq in pieces if (raw.piece_at(sq).color == chess.BLACK) != (dark[sq] > threshold)]
+    if not wrong:
+        return raw, True
+    if len(wrong) > 2 or any(raw.piece_at(sq).piece_type != chess.KING for sq in wrong):  # only the kings are ever mixed up: anything else is doubtful
+        return raw, False
+    fixed = raw.copy()
+    for sq in wrong:
+        p = raw.piece_at(sq)
+        fixed.set_piece_at(sq, chess.Piece(p.piece_type, not p.color))
+    return (raw, False) if issues(fixed) else (fixed, True)
+
+
+def orient_as(raw, flip):
+    """(board with white at the bottom, flipped?, sure?) of a board read as displayed. `flip` (from the printed coordinates: True = Black is at
+    the bottom) decides when it is known; otherwise the position itself is guessed from (orient)."""
+    if flip is None:
+        return orient(raw)
+    return (raw.transform(lambda bb: chess.flip_vertical(chess.flip_horizontal(bb))) if flip else raw), flip, True
+
+
+def alt_readings(models, im, min_conf=.95, flip=None):
     """Other plausible readings of a diagram (white at the bottom, piece placement): the crops next to the autocrop's best one, read by every model.
     The checker pattern is periodic, so the best crop can be a cell off, and a shifted board is read just as confidently. Used as possible
     start positions of a page: the page's own moves decide (how many of them are legal from there)."""
@@ -313,9 +356,10 @@ def alt_readings(models, im, min_conf=.95):
         if m is None:
             continue
         for i in range(0, len(boxes), 64):
-            for raw, conf in read_boxes(m, im, boxes[i:i + 64]):
-                raw = repair_king_colors(raw)
-                if conf >= min_conf and not issues(raw) and (fen := orient(raw)[0].board_fen()) not in out:
+            for raw, conf, box in read_boxes(m, im, boxes[i:i + 64]):
+                raw, decided = fix_colors(raw, im, box)
+                raw = raw if decided else repair_king_colors(raw)
+                if conf >= min_conf and not issues(raw) and (fen := orient_as(raw, flip)[0].board_fen()) not in out:
                     out.append(fen)
     return out
 
@@ -341,20 +385,20 @@ def vivid_share(im):
     return float((((mx - mn) / np.maximum(mx, 1) > .75) & (mx > 200)).mean())
 
 
-def read_diagram(model, im, known=frozenset(), base=None):
+def read_diagram(model, im, known=frozenset(), base=None, flip=None):
     """Double reading: the fine-tuned `model` first; when it is not sure of itself (confidence < TRUSTED and no arrows or highlights, e.g. a print style it was
     not fine-tuned on: hatched squares make it invent queens) the original `base` model also reads, and its reading wins if it is
     more confident and plausible (never over a reading that a game of the book confirms)."""
-    r = _read_diagram(model, im, known)
+    r = _read_diagram(model, im, known, flip)
     if r and base is not None and r[1] < TRUSTED and r[0].board_fen() not in known and vivid_share(im) < MAX_VIVID:  # a reading confirmed by the game stays
-        r2 = _read_diagram(base, im, known)
+        r2 = _read_diagram(base, im, known, flip)
         # same pieces on the same squares but other colours: the base model mixes up who owns outlined pieces on hatched squares, keep the first
         if r2 and r2[1] > r[1] and not issues(r2[4]) and not colors_only_differ(r[0], r2[0]):
             return r2
     return r
 
 
-def _read_diagram(model, im, known=frozenset()):
+def _read_diagram(model, im, known=frozenset(), flip=None):
     """(oriented board, confidence, flipped, orientation sure, raw board) or None when the image is not a board.
     `known` = piece placements that occur in the book's games. Tries the best square and its one-cell shifts; if none reads as a
     known position, searches more finely around it (batched). The first reading that IS a known position wins, otherwise the
@@ -366,11 +410,11 @@ def _read_diagram(model, im, known=frozenset()):
     first = candidate_boxes(im)
     reads = read_boxes(model, im, first)
     best = reads[0]
-    hit = next((r for r in reads if orient(r[0])[0].board_fen() in known), None)
+    hit = next((r for r in reads if orient_as(r[0], flip)[0].board_fen() in known), None)
     if hit is None and known:
         dense = dense_boxes(im, first[0])
         for i in range(0, len(dense), 64):
-            hit = next((r for r in read_boxes(model, im, dense[i:i + 64]) if orient(r[0])[0].board_fen() in known), None)
+            hit = next((r for r in read_boxes(model, im, dense[i:i + 64]) if orient_as(r[0], flip)[0].board_fen() in known), None)
             if hit:
                 break
     if hit is None and (issues(best[0]) or best[1] < CONFIDENT):
@@ -383,9 +427,10 @@ def _read_diagram(model, im, known=frozenset()):
                 pool += [r for r in read_boxes(model, im, dense[i:i + 64]) if not issues(r[0])]
         if pool and (issues(best[0]) or max(r[1] for r in pool) > best[1]):
             hit = max(pool, key=lambda r: r[1])
-    raw, conf = hit or best
-    raw = repair_king_colors(raw)  # before the orientation: it compares the armies
-    oriented, flipped, sure = orient(raw)
+    raw, conf, box = hit or best
+    raw, decided = fix_colors(raw, im, box)  # the image first; the heuristic on the kings only when the image cannot tell
+    raw = raw if decided else repair_king_colors(raw)  # (both before the orientation, which compares the armies)
+    oriented, flipped, sure = orient_as(raw, flip)
     return oriented, conf, flipped, sure, raw
 
 
@@ -432,6 +477,31 @@ def selfcheck():
     c, d = mk("1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Cf6 5.0-0 Fe7"), mk("Avec la suite 6.Te1 b5 7.Fb3 d6 8.c3 0-0 9.h3 Ca5")
     dedupe([c, d])
     assert c["block_content"].endswith("Fe7") and d["block_content"].startswith("Avec")  # unrelated blocks are left alone
+    k = chess.Board("8/8/8/1K6/1Q6/8/1p6/2k5 w - - 0 1")  # the position of 'Dame contre pions' diagram 1: White (K, Q) is ABOVE its enemy pawn
+    assert orient_as(k, False)[0].board_fen() == "8/8/8/1K6/1Q6/8/1p6/2k5" and orient_as(k, False)[2] is True  # printed coordinates: kept as shown
+    assert orient_as(k, True)[0].board_fen() == "5k2/6p1/8/6Q1/6K1/8/8/8"  # shown with Black at the bottom: turned round
+    assert orient_as(k, None)[0].board_fen() == orient(k)[0].board_fen()  # no coordinates: the guess
+    # piece colours read off the image: black pieces are filled (dark), white ones only outlined; the readers mix them up on small prints
+    from PIL import ImageDraw
+    im = Image.new("RGB", (160, 160), "white")
+    dr = ImageDraw.Draw(im)
+    for name, black in (("e3", True), ("d5", True), ("f5", True), ("e8", False), ("e4", False), ("e2", False)):
+        sq = chess.parse_square(name)
+        x, y = chess.square_file(sq) * 20, (7 - chess.square_rank(sq)) * 20
+        if black:
+            dr.rectangle([x + 5, y + 5, x + 14, y + 14], fill="black")
+        else:
+            for dx, dy in ((9, 6), (10, 6), (9, 13), (10, 13), (6, 10), (13, 10)):
+                dr.point((x + dx, y + dy), fill="black")  # a few outline pixels
+    wrong = chess.Board("4k3/8/8/3p1p2/4P3/4K3/4P3/8 w - - 0 1")  # the kings' colours swapped (the real misreading of 'Dame contre pions' diagram 8.1)
+    fixed, decided = fix_colors(wrong, im, (0, 0, 160, 160))
+    assert fixed.board_fen() == "4K3/8/8/3p1p2/4P3/4k3/4P3/8" and decided
+    right = chess.Board("4K3/8/8/3p1p2/4P3/4k3/4P3/8 w - - 0 1")  # already right: kept, and the image is the authority (the kings' heuristic must not swap them)
+    assert fix_colors(right, im, (0, 0, 160, 160)) == (right, True)
+    rook = chess.Board("r3K3/8/8/3p1p2/4P3/4k3/4P3/8 w - - 0 1")  # a doubtful non-king piece (a black rook drawn light) is never recoloured
+    assert fix_colors(rook, im, (0, 0, 160, 160))[1] is False
+    blank = fix_colors(chess.Board("8/8/8/8/8/8/8/K6k w - - 0 1"), Image.new("RGB", (160, 160), "white"), (0, 0, 160, 160))
+    assert blank[0].board_fen() == "8/8/8/8/8/8/8/K6k" and blank[1] is False  # no dark pieces: no information
     print("make_chessbook_cli self-check ok")
 
 
@@ -467,12 +537,12 @@ def main():
     pages = page_numbers(a.pages, len(doc))
     ocr, k = Ocr(), a.dpi / 72
 
-    blocks, pngs, classic = {}, {}, Classic()
+    blocks, pngs, classic, page_lines = {}, {}, Classic(), {}
     for n in bar(pages, "Reading pages (OCR)"):
         blocks[n], how = page_blocks(a.pdf, doc, n, a.dpi, work, ocr, a.min_text_words)
         pngs[n] = render(a.pdf, n, a.dpi, work)
         if how != "text layer":  # the main OCR drops text now and then: a column cut short, a line of moves with no block at all. The classic OCR
-            lines = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json")  # (cached, also used later to locate the moves) has them
+            lines = page_lines[n] = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json")  # (cached, also used later to locate the moves) has them
             fill_sparse(blocks[n], lines)
             fill_moves(blocks[n], lines, lambda t: move_pairs(t, a.lang))
             add_orphans(blocks[n], lines, lambda t: has_moves(t, a.lang))
@@ -503,10 +573,11 @@ def main():
                 im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
                 if model is None:
                     model, base = load_models(a.weights, a.base_weights)
-                r = read_diagram(model, onwhite(im), base=base)
+                flip = coordinate_flip(page_lines[p], [x0, y0, x1, y1]) if p in page_lines else None  # printed a-h / 1-8, when the OCR read them
+                r = read_diagram(model, onwhite(im), base=base, flip=flip)
                 if r:
                     boards[p].append(r[0].board_fen())
-                    boards[p] += [f for f in alt_readings((model, base), onwhite(im)) if f not in boards[p]]  # the best crop may be a cell off
+                    boards[p] += [f for f in alt_readings((model, base), onwhite(im), flip=flip) if f not in boards[p]]  # the best crop may be a cell off
         return boards[p]
     pb = bar([n for n in pages if has_moves(texts[n], a.lang) and (not replays[n] or not all(m["ok"] for m in replays[n]))], "Moves from diagrams")
     for n in pb:
@@ -557,7 +628,8 @@ def main():
             im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
             if model is None:
                 model, base = load_models(a.weights, a.base_weights)
-            r = read_diagram(model, onwhite(im), known, base)
+            flip = coordinate_flip(page_lines[n], [x0, y0, x1, y1]) if n in page_lines else None
+            r = read_diagram(model, onwhite(im), known, base, flip)
             # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
             if r:
                 nb += 1

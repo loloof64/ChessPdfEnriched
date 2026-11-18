@@ -87,6 +87,36 @@ def fill_sparse(blocks, lines, gain=2.0):
     return blocks
 
 
+def coordinate_flip(lines, bbox):
+    """True when the diagram in `bbox` [x0, y0, x1, y1] is shown with Black at the bottom, False when White is, None when the printed
+    coordinates cannot tell (not enough of them, or they contradict). The classic OCR reads them as single characters: ranks (digits near the
+    left or right edge) go 8..1 downwards and files (letters near the top or bottom edge) a..h rightwards when White is at the bottom."""
+    x0, y0, x1, y1 = bbox
+    w, h = x1 - x0, y1 - y0
+    ranks, files = [], []  # (position, value)
+    for ln in lines:
+        for t, (a, b, c, d) in ln["pieces"]:
+            t = t.strip()
+            cx, cy = (a + c) / 2, (b + d) / 2
+            if len(t) != 1 or not (x0 <= cx <= x1 and y0 <= cy <= y1):
+                continue
+            if t in "12345678" and (cx < x0 + .15 * w or cx > x1 - .15 * w):
+                ranks.append((cy, int(t)))
+            elif t.lower() in "abcdefgh" and (cy < y0 + .15 * h or cy > y1 - .15 * h):
+                files.append((cx, "abcdefgh".index(t.lower())))
+
+    def trend(points):  # +1 values grow with the position, -1 they shrink, None: too few points or no clear trend
+        if len(points) < 3:
+            return None
+        mp, mv = sum(p for p, _ in points) / len(points), sum(v for _, v in points) / len(points)
+        num = sum((p - mp) * (v - mv) for p, v in points)
+        den = (sum((p - mp) ** 2 for p, _ in points) * sum((v - mv) ** 2 for _, v in points)) ** .5
+        return None if den == 0 or abs(num / den) < .6 else (1 if num > 0 else -1)
+
+    votes = {trend(ranks) == 1 if trend(ranks) is not None else None, trend(files) == -1 if trend(files) is not None else None} - {None}
+    return votes.pop() if len(votes) == 1 else None
+
+
 def fill_moves(blocks, lines, pairs, labels=("text", "figure_title", "vision_footnote", "paragraph_title")):
     """A block that holds fewer numbered moves (`pairs(text)`) than the classic OCR reads inside its box takes the classic text and becomes a
     text block: the main OCR sometimes cuts the line of moves of a column or labels it a 'figure_title' (a caption), which is not book text."""
@@ -216,6 +246,20 @@ def selfcheck():
     note = {"block_label": "vision_footnote", "block_bbox": [800, 1100, 1400, 1200], "block_content": "Avec abandon noir."}
     fill_moves([cap2, note], [], pairs)
     assert cap2["block_label"] == "text" and note["block_label"] == "vision_footnote"  # a caption without moves stays a caption
+    # printed coordinates tell the orientation of a diagram: ranks 8..1 downwards and files a..h rightwards = white at the bottom
+    def coords(ranks_down, files_right):
+        out = [{"pieces": [(str(r), [310.0, 40.0 + 36 * i, 320.0, 60.0 + 36 * i])]} for i, r in enumerate(ranks_down)]
+        out += [{"pieces": [(c, [40.0 + 36 * i, 330.0, 52.0 + 36 * i, 345.0])]} for i, c in enumerate(files_right)]
+        return out
+    box = [0, 0, 330, 350]
+    assert coordinate_flip(coords("87654321", "abcdefgh"), box) is False
+    assert coordinate_flip(coords("12345678", "hgfedcba"), box) is True
+    assert coordinate_flip(coords("87654321", "ab"), box) is False  # the ranks alone are enough
+    assert coordinate_flip(coords("8", "a"), box) is None  # too little to tell
+    assert coordinate_flip(coords("87654321", "hgfedcba"), box) is None  # contradicting: no guess
+    noisy = coords("87654321", "ab") + [{"pieces": [("8", [150.0, 335.0, 160.0, 345.0])]}]  # an 8 at the bottom edge is a misread file, not a rank
+    assert coordinate_flip(noisy, box) is False
+    assert coordinate_flip(coords("12345678", "hgfedcba"), [500, 500, 800, 800]) is None  # coordinates of another figure
     print("wordboxes self-check ok")
 
 
