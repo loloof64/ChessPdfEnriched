@@ -19,11 +19,23 @@ import 'ui_language.dart';
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final path = args.firstOrNull ?? io.Platform.environment['CHESSBOOK'];
-  runApp(ReaderApp(initial: path == null ? null : Book.load(path), initialLocale: await loadUiLanguage()));
+  runApp(
+    ReaderApp(
+      initial: path == null ? null : Book.load(path),
+      initialLocale: await loadUiLanguage(),
+    ),
+  );
 }
 
 class Book {
-  Book(this.path, this.title, this.pages, this._zip, this.corrections, this.dpi);
+  Book(
+    this.path,
+    this.title,
+    this.pages,
+    this._zip,
+    this.corrections,
+    this.dpi,
+  );
 
   final String path;
   final double dpi; // resolution the page images were rendered at (manifest 'dpi', 200 when absent): 100 % zoom = 96 / dpi px per page px
@@ -43,14 +55,17 @@ class Book {
     if (_cache.length >= 12) _cache.remove(_cache.keys.first);
     return _cache[name] = Uint8List.fromList(bytes);
   }
-  final Map<String, Map<String, dynamic>> corrections; // target id -> entry of corrections.json
+
+  final Map<String, Map<String, dynamic>>
+  corrections; // target id -> entry of corrections.json
 
   static String hash(String s) => 'sha256:${sha256.convert(utf8.encode(s))}';
 
   factory Book.load(String path) {
     final zip = ZipDecoder().decodeBytes(io.File(path).readAsBytesSync());
     Map<String, dynamic> json(String name) =>
-        jsonDecode(utf8.decode(zip.findFile(name)!.readBytes()!)) as Map<String, dynamic>;
+        jsonDecode(utf8.decode(zip.findFile(name)!.readBytes()!))
+            as Map<String, dynamic>;
     final pages = <int, Map<String, dynamic>>{};
     for (final f in zip.files) {
       final m = RegExp(r'^pages/p(\d+)\.json$').firstMatch(f.name);
@@ -63,15 +78,25 @@ class Book {
       }
     }
     final manifest = json('manifest.json');
-    return Book(path, manifest['title'] as String, pages, zip, corrections, ((manifest['dpi'] as num?) ?? 200).toDouble());
+    return Book(
+      path,
+      manifest['title'] as String,
+      pages,
+      zip,
+      corrections,
+      ((manifest['dpi'] as num?) ?? 200).toDouble(),
+    );
   }
 
   /// FEN to show for a diagram: the reviewed value, unless the generated FEN changed since (then it needs review).
   String? fenOf(Map<String, dynamic> d) {
     final generated = d['fen'] as String?;
     final c = corrections[d['id']];
-    if (generated == null || c == null || c['type'] != 'diagram_fen') return generated;
-    return c['source_hash'] == hash(generated) ? c['value'] as String : generated;
+    if (generated == null || c == null || c['type'] != 'diagram_fen')
+      return generated;
+    return c['source_hash'] == hash(generated)
+        ? c['value'] as String
+        : generated;
   }
 
   bool isCorrected(Map<String, dynamic> d) => fenOf(d) != d['fen'];
@@ -79,7 +104,9 @@ class Book {
   bool needsReview(Map<String, dynamic> d) {
     final c = corrections[d['id']];
     final generated = d['fen'] as String?;
-    return c != null && generated != null && c['source_hash'] != hash(generated);
+    return c != null &&
+        generated != null &&
+        c['source_hash'] != hash(generated);
   }
 
   /// Stores a diagram correction in corrections.json (the only file the reader writes): the zip is rewritten to a
@@ -93,12 +120,22 @@ class Book {
       'needs_review': false,
     };
     final out = Archive();
-    for (final f in ZipDecoder().decodeBytes(io.File(path).readAsBytesSync()).files) {
-      if (f.name != 'corrections.json') out.addFile(ArchiveFile.bytes(f.name, f.readBytes()!));
+    for (final f
+        in ZipDecoder().decodeBytes(io.File(path).readAsBytesSync()).files) {
+      if (f.name != 'corrections.json')
+        out.addFile(ArchiveFile.bytes(f.name, f.readBytes()!));
     }
-    out.addFile(ArchiveFile.string(
-        'corrections.json', jsonEncode({'schema_version': 1, 'corrections': corrections.values.toList()})));
-    final tmp = io.File('$path.tmp')..writeAsBytesSync(ZipEncoder().encode(out));
+    out.addFile(
+      ArchiveFile.string(
+        'corrections.json',
+        jsonEncode({
+          'schema_version': 1,
+          'corrections': corrections.values.toList(),
+        }),
+      ),
+    );
+    final tmp = io.File('$path.tmp')
+      ..writeAsBytesSync(ZipEncoder().encode(out));
     tmp.renameSync(path);
   }
 }
@@ -107,7 +144,8 @@ class ReaderApp extends StatefulWidget {
   const ReaderApp({super.key, this.initial, this.initialLocale});
 
   final Book? initial;
-  final Locale? initialLocale; // saved manual language choice (null = Automatic)
+  final Locale?
+  initialLocale; // saved manual language choice (null = Automatic)
 
   @override
   State<ReaderApp> createState() => _ReaderAppState();
@@ -133,37 +171,67 @@ class _ReaderAppState extends State<ReaderApp> {
       final path = picked.firstOrNull?.path;
       if (path != null) setState(() => book = Book.load(path));
     } catch (e) {
-      _messenger.currentState?.showSnackBar(SnackBar(content: Text(AppLocalizations.of(_messenger.currentContext!)!.openFailed('$e'))));
+      _messenger.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLocalizations.of(_messenger.currentContext!)!.openFailed('$e'),
+          ),
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Chess PDF Enriched',
-        scaffoldMessengerKey: _messenger,
-        // material_ui brings its own standard texts (flutter_localizations' delegates target the old Material and would not be found)
-        localizationsDelegates: [AppLocalizations.delegate, ...GlobalMaterialLocalizations.delegates],
-        supportedLocales: AppLocalizations.supportedLocales,
-        locale: uiLocale,
-        localeListResolutionCallback: (locales, _) => resolveLocale(null, locales ?? const []),
-        theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown)),
-        home: book == null
-            ? Scaffold(
-                appBar: AppBar(actions: [LanguageMenu(current: uiLocale, onChanged: _setLocale)]),
-                body: Center(
-                  child: FilledButton.icon(
-                    onPressed: _open,
-                    icon: const Icon(Icons.folder_open),
-                    label: Builder(builder: (context) => Text(AppLocalizations.of(context)!.openBookButton)),
-                  ),
+    title: 'Chess PDF Enriched',
+    debugShowCheckedModeBanner: false,
+    scaffoldMessengerKey: _messenger,
+    // material_ui brings its own standard texts (flutter_localizations' delegates target the old Material and would not be found)
+    localizationsDelegates: [
+      AppLocalizations.delegate,
+      ...GlobalMaterialLocalizations.delegates,
+    ],
+    supportedLocales: AppLocalizations.supportedLocales,
+    locale: uiLocale,
+    localeListResolutionCallback: (locales, _) =>
+        resolveLocale(null, locales ?? const []),
+    theme: ThemeData(
+      colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown),
+    ),
+    home: book == null
+        ? Scaffold(
+            appBar: AppBar(
+              actions: [LanguageMenu(current: uiLocale, onChanged: _setLocale)],
+            ),
+            body: Center(
+              child: FilledButton.icon(
+                onPressed: _open,
+                icon: const Icon(Icons.folder_open),
+                label: Builder(
+                  builder: (context) =>
+                      Text(AppLocalizations.of(context)!.openBookButton),
                 ),
-              )
-            : ReaderPage(key: ValueKey(book), book: book!, onOpen: _open, uiLocale: uiLocale, onLanguage: _setLocale),
-      );
+              ),
+            ),
+          )
+        : ReaderPage(
+            key: ValueKey(book),
+            book: book!,
+            onOpen: _open,
+            uiLocale: uiLocale,
+            onLanguage: _setLocale,
+          ),
+  );
 }
 
 class ReaderPage extends StatefulWidget {
-  const ReaderPage({super.key, required this.book, required this.onOpen, required this.uiLocale, required this.onLanguage});
+  const ReaderPage({
+    super.key,
+    required this.book,
+    required this.onOpen,
+    required this.uiLocale,
+    required this.onLanguage,
+  });
 
   final Book book;
   final VoidCallback onOpen;
@@ -178,14 +246,18 @@ class _ReaderPageState extends State<ReaderPage> {
   late int page = widget.book.pages.keys.reduce((a, b) => a < b ? a : b);
   String fen = kInitialFEN;
   Side orientation = Side.white;
-  bool facsimile = true; // show the original page image (needs the scans in the book)
+  bool facsimile =
+      true; // show the original page image (needs the scans in the book)
   // zoom: 'page' = whole page visible, 'width' = page width fills the pane, otherwise a percentage of the real page size
   String fit = 'width';
   double percent = 100;
   double _lastK = 1, _k100 = 1; // scale actually drawn / scale of 100 %, kept to step the zoom from where it is
   static const _presets = [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 300.0];
-  String? selected, moveLabel, lastUci; // moveLabel: the move as printed with its number ('3. Cf3')
-  bool? whiteToMove; // whose turn it is in the position shown (null when unknown)
+  String? selected,
+      moveLabel,
+      lastUci; // moveLabel: the move as printed with its number ('3. Cf3')
+  bool?
+  whiteToMove; // whose turn it is in the position shown (null when unknown)
   late final _pageCtl = TextEditingController(text: '$page');
   Map<String, dynamic>? selectedDiagram;
   final _taps = <TapGestureRecognizer>[];
@@ -200,39 +272,48 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _pick(Map<String, dynamic> m) => setState(() {
-        selected = m['id'] as String;
-        selectedDiagram = null;
-        lastUci = m['uci'] as String?;
-        fen = (m['fen'] as String?) ?? fen;
-        // FEN after a white move: black to move, fullmove = n ('3. Cf3'); after a black move: fullmove = n + 1 ('2... d5')
-        final f = fen.split(' ');
-        final n = int.parse(f[5]);
-        moveLabel = f[1] == 'b' ? '$n. ${m['raw']}' : '${n - 1}... ${m['raw']}';
-        whiteToMove = f[1] == 'w';
-      });
+    selected = m['id'] as String;
+    selectedDiagram = null;
+    lastUci = m['uci'] as String?;
+    fen = (m['fen'] as String?) ?? fen;
+    // FEN after a white move: black to move, fullmove = n ('3. Cf3'); after a black move: fullmove = n + 1 ('2... d5')
+    final f = fen.split(' ');
+    final n = int.parse(f[5]);
+    moveLabel = f[1] == 'b' ? '$n. ${m['raw']}' : '${n - 1}... ${m['raw']}';
+    whiteToMove = f[1] == 'w';
+  });
 
   void _pickDiagram(Map<String, dynamic> d) => setState(() {
-        selected = d['id'] as String;
-        selectedDiagram = d;
-        lastUci = null;
-        fen = widget.book.fenOf(d)!;
-        // the side to move is only known when the diagram was matched with a game position (the book prints it as a dot beside the board)
-        whiteToMove = d['side_known'] == true ? fen.split(' ')[1] == 'w' : null;
-        moveLabel = null;
-      });
+    selected = d['id'] as String;
+    selectedDiagram = d;
+    lastUci = null;
+    fen = widget.book.fenOf(d)!;
+    // the side to move is only known when the diagram was matched with a game position (the book prints it as a dot beside the board)
+    whiteToMove = d['side_known'] == true ? fen.split(' ')[1] == 'w' : null;
+    moveLabel = null;
+  });
 
   Move? get lastMove => lastUci == null ? null : Move.parse(lastUci!);
 
   void _zoomBy(int d) {
     final now = _lastK / _k100 * 100;
-    final next = d > 0 ? _presets.firstWhere((p) => p > now + 0.5, orElse: () => _presets.last) : _presets.lastWhere((p) => p < now - 0.5, orElse: () => _presets.first);
+    final next = d > 0
+        ? _presets.firstWhere((p) => p > now + 0.5, orElse: () => _presets.last)
+        : _presets.lastWhere(
+            (p) => p < now - 0.5,
+            orElse: () => _presets.first,
+          );
     setState(() {
       fit = '';
       percent = next;
     });
   }
 
-  String _zoomLabel(AppLocalizations l) => fit == 'page' ? l.zoomFitPage : fit == 'width' ? l.zoomFitWidth : '${percent.round()} %';
+  String _zoomLabel(AppLocalizations l) => fit == 'page'
+      ? l.zoomFitPage
+      : fit == 'width'
+      ? l.zoomFitWidth
+      : '${percent.round()} %';
 
   /// Text above the board: the diagram (with its state) or the move chosen, built here so a language change redraws it.
   String _selectionLabel(AppLocalizations l) {
@@ -248,7 +329,14 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _goto(int p) {
     if (!widget.book.pages.containsKey(p)) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.pageAbsent(p, _numbers.first, _numbers.last))));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLocalizations.of(context)!
+                .pageAbsent(p, _numbers.first, _numbers.last),
+          ),
+        ),
+      );
       _pageCtl.text = '$page';
       return;
     }
@@ -273,14 +361,26 @@ class _ReaderPageState extends State<ReaderPage> {
     if (current == null) return;
     final edited = await showDialog<String>(
       context: context,
-      builder: (_) => DiagramEditor(placement: current.split(' ').first, image: widget.book.file(d['image'] as String?)),
+      builder: (_) => DiagramEditor(
+        placement: current.split(' ').first,
+        image: widget.book.file(d['image'] as String?),
+      ),
     );
     if (edited == null || edited == current.split(' ').first) return;
     try {
-      widget.book.saveDiagramFen(d['id'] as String, d['fen'] as String, '$edited ${(d['fen'] as String).split(' ').skip(1).join(' ')}');
+      widget.book.saveDiagramFen(
+        d['id'] as String,
+        d['fen'] as String,
+        '$edited ${(d['fen'] as String).split(' ').skip(1).join(' ')}',
+      );
       setState(() => _pickDiagram(d));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.saveFailed('$e'))));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context)!.saveFailed('$e')),
+          ),
+        );
     }
   }
 
@@ -291,58 +391,89 @@ class _ReaderPageState extends State<ReaderPage> {
     final st = block['style'] as Map<String, dynamic>?;
     if (st == null) return (Colors.black87, null);
     final hex = (st['color'] as String).substring(1);
-    return (Color(0xFF000000 | int.parse(hex, radix: 16)), st['bold'] == true ? FontWeight.bold : null);
+    return (
+      Color(0xFF000000 | int.parse(hex, radix: 16)),
+      st['bold'] == true ? FontWeight.bold : null,
+    );
   }
 
   /// Largest font size (page px) at which the block, wrapped to its width, fits its height. Measured with the same spans
   /// as the display, bold moves included (they are wider than plain text).
-  double _fitOne(BuildContext ctx, Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) =>
-      _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
-        final b = (block['bbox'] as List).cast<num>();
-        // Generic no-overlap rule: a block may not extend past the top of any block or figure that starts below its own top
-        // and shares part of its width (OCR boxes often run a few px into their neighbour, p3: paragraph over the '1-0' line).
-        // An obstacle that starts inside the upper 60 % of the box is a figure the text wraps around: ignored.
-        var maxH = b[3].toDouble();
-        final page_ = widget.book.pages[page]!;
-        for (final o in [...(page_['blocks'] as List), ...(page_['diagrams'] as List)].cast<Map<String, dynamic>>()) {
-          final c = (o['bbox'] as List).cast<num>();
-          final sideBySide = c[0] < b[0] + b[2] && c[0] + c[2] > b[0];
-          final below = c[1] > b[1] + b[3] * 0.6 && c[1] < b[1] + b[3];
-          if (o['id'] != block['id'] && sideBySide && below) maxH = min(maxH, c[1] - b[1] - 2.0);
-        }
-        // the OCR box itself tolerates 2 %; a limit set by a neighbour does not (it is where the overlap would start), with 2 % margin
-        final limit = maxH < b[3] ? maxH * 0.98 : b[3] * 1.02;
-        // ctx must be BELOW the Scaffold/Material: that is where the displayed Text gets its theme font and spacing
-        final base = DefaultTextStyle.of(ctx).style;
-        final scaler = MediaQuery.textScalerOf(ctx);
-        var f = 80.0;
-        while (f > 8) {
-          // same effective style as the displayed Text.rich (theme font and letter spacing, text scale), or the measure is too narrow
-          final tp = TextPainter(
-              text: TextSpan(children: _spans(block, moves, null), style: base.merge(TextStyle(fontSize: f, height: 1.25, letterSpacing: 0, fontWeight: _blockStyle(block).$2))),
-              textDirection: TextDirection.ltr,
-              textScaler: scaler)
-            ..layout(maxWidth: b[2].toDouble() * 0.98); // 2 % margin: a line that just fits when measured must not wrap when drawn
-          if (tp.height <= limit) break;
-          f -= 0.5;
-        }
-        return f;
-      });
+  double _fitOne(
+    BuildContext ctx,
+    Map<String, dynamic> block,
+    Map<String, Map<String, dynamic>> moves,
+  ) => _fonts.putIfAbsent('${widget.book.title}/$page/${block['id']}', () {
+    final b = (block['bbox'] as List).cast<num>();
+    // Generic no-overlap rule: a block may not extend past the top of any block or figure that starts below its own top
+    // and shares part of its width (OCR boxes often run a few px into their neighbour, p3: paragraph over the '1-0' line).
+    // An obstacle that starts inside the upper 60 % of the box is a figure the text wraps around: ignored.
+    var maxH = b[3].toDouble();
+    final page_ = widget.book.pages[page]!;
+    for (final o in [
+      ...(page_['blocks'] as List),
+      ...(page_['diagrams'] as List),
+    ].cast<Map<String, dynamic>>()) {
+      final c = (o['bbox'] as List).cast<num>();
+      final sideBySide = c[0] < b[0] + b[2] && c[0] + c[2] > b[0];
+      final below = c[1] > b[1] + b[3] * 0.6 && c[1] < b[1] + b[3];
+      if (o['id'] != block['id'] && sideBySide && below)
+        maxH = min(maxH, c[1] - b[1] - 2.0);
+    }
+    // the OCR box itself tolerates 2 %; a limit set by a neighbour does not (it is where the overlap would start), with 2 % margin
+    final limit = maxH < b[3] ? maxH * 0.98 : b[3] * 1.02;
+    // ctx must be BELOW the Scaffold/Material: that is where the displayed Text gets its theme font and spacing
+    final base = DefaultTextStyle.of(ctx).style;
+    final scaler = MediaQuery.textScalerOf(ctx);
+    var f = 80.0;
+    while (f > 8) {
+      // same effective style as the displayed Text.rich (theme font and letter spacing, text scale), or the measure is too narrow
+      final tp = TextPainter(
+        text: TextSpan(
+          children: _spans(block, moves, null),
+          style: base.merge(
+            TextStyle(
+              fontSize: f,
+              height: 1.25,
+              letterSpacing: 0,
+              fontWeight: _blockStyle(block).$2,
+            ),
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      )..layout(maxWidth: b[2].toDouble() * 0.98); // 2 % margin: a line that just fits when measured must not wrap when drawn
+      if (tp.height <= limit) break;
+      f -= 0.5;
+    }
+    return f;
+  });
 
   /// Paragraphs (150+ characters) of a page share ONE size, the smallest that fits any of them, so the text looks uniform like
   /// the book's and cannot overflow (each is drawn at most at its own fit). Titles and short blocks keep their own size.
-  double _fit(BuildContext ctx, Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves) {
+  double _fit(
+    BuildContext ctx,
+    Map<String, dynamic> block,
+    Map<String, Map<String, dynamic>> moves,
+  ) {
     final own = _fitOne(ctx, block, moves);
     if ((block['text'] as String).length < 150) return own;
     var body = own;
-    for (final o in (widget.book.pages[page]!['blocks'] as List).cast<Map<String, dynamic>>()) {
-      if ((o['text'] as String).length >= 150) body = min(body, _fitOne(ctx, o, moves));
+    for (final o
+        in (widget.book.pages[page]!['blocks'] as List)
+            .cast<Map<String, dynamic>>()) {
+      if ((o['text'] as String).length >= 150)
+        body = min(body, _fitOne(ctx, o, moves));
     }
     return body;
   }
 
   /// Spans of a block: plain text with its moves in bold, clickable when [taps] is given (None when only measuring).
-  List<InlineSpan> _spans(Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, List<TapGestureRecognizer>? taps) {
+  List<InlineSpan> _spans(
+    Map<String, dynamic> block,
+    Map<String, Map<String, dynamic>> moves,
+    List<TapGestureRecognizer>? taps,
+  ) {
     final text = block['text'] as String;
     final spans = <InlineSpan>[];
     var pos = 0;
@@ -357,15 +488,19 @@ class _ReaderPageState extends State<ReaderPage> {
         tap = TapGestureRecognizer()..onTap = ok ? () => _pick(m) : null;
         taps.add(tap);
       }
-      spans.add(TextSpan(
-        text: text.substring(s[0], s[1]),
-        recognizer: tap,
-        style: TextStyle(
-          fontWeight: FontWeight.bold,
-          color: !ok ? Colors.red : (id == selected ? Colors.white : Colors.brown.shade800),
-          backgroundColor: id == selected ? Colors.brown : null,
+      spans.add(
+        TextSpan(
+          text: text.substring(s[0], s[1]),
+          recognizer: tap,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: !ok
+                ? Colors.red
+                : (id == selected ? Colors.white : Colors.brown.shade800),
+            backgroundColor: id == selected ? Colors.brown : null,
+          ),
         ),
-      ));
+      );
       pos = s[1];
     }
     spans.add(TextSpan(text: text.substring(pos)));
@@ -373,16 +508,29 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   /// Text of a block, positioned where the block sits on the original page (page px scaled by [k]).
-  Widget _block(BuildContext ctx, Map<String, dynamic> block, Map<String, Map<String, dynamic>> moves, double k) {
+  Widget _block(
+    BuildContext ctx,
+    Map<String, dynamic> block,
+    Map<String, Map<String, dynamic>> moves,
+    double k,
+  ) {
     final b = (block['bbox'] as List).cast<num>();
     return Positioned(
       left: b[0] * k,
       top: b[1] * k,
       width: b[2] * k,
       // text-layer lines have a box fitted to their own text: centring inside it keeps centred lines centred when our font is narrower
-      child: Text.rich(TextSpan(children: _spans(block, moves, _taps)),
-          textAlign: block['style'] != null ? TextAlign.center : TextAlign.start,
-          style: TextStyle(fontSize: _fit(ctx, block, moves) * k, height: 1.25, letterSpacing: 0, color: _blockStyle(block).$1, fontWeight: _blockStyle(block).$2)),
+      child: Text.rich(
+        TextSpan(children: _spans(block, moves, _taps)),
+        textAlign: block['style'] != null ? TextAlign.center : TextAlign.start,
+        style: TextStyle(
+          fontSize: _fit(ctx, block, moves) * k,
+          height: 1.25,
+          letterSpacing: 0,
+          color: _blockStyle(block).$1,
+          fontWeight: _blockStyle(block).$2,
+        ),
+      ),
     );
   }
 
@@ -403,7 +551,9 @@ class _ReaderPageState extends State<ReaderPage> {
             hoverColor: Colors.amber.withValues(alpha: .25),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: m['id'] == selected ? Colors.amber.withValues(alpha: .5) : null,
+                color: m['id'] == selected
+                    ? Colors.amber.withValues(alpha: .5)
+                    : null,
                 border: ok ? null : Border.all(color: Colors.red, width: 1.5),
               ),
             ),
@@ -424,8 +574,15 @@ class _ReaderPageState extends State<ReaderPage> {
         onTap: d['fen'] == null ? null : () => _pickDiagram(d),
         onSecondaryTap: d['fen'] == null ? null : () => _editDiagram(d),
         child: Container(
-          decoration: BoxDecoration(border: Border.all(color: d['id'] == selected ? Colors.brown : Colors.transparent, width: 3)),
-          child: bytes == null || !drawImage ? null : Image.memory(bytes, fit: BoxFit.fill),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: d['id'] == selected ? Colors.brown : Colors.transparent,
+              width: 3,
+            ),
+          ),
+          child: bytes == null || !drawImage
+              ? null
+              : Image.memory(bytes, fit: BoxFit.fill),
         ),
       ),
     );
@@ -439,15 +596,26 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     _taps.clear();
     final data = widget.book.pages[page]!;
-    final moves = {for (final m in (data['moves'] as List)) (m as Map<String, dynamic>)['id'] as String: m};
+    final moves = {
+      for (final m in (data['moves'] as List))
+        (m as Map<String, dynamic>)['id'] as String: m,
+    };
     final nOk = moves.values.where((m) => m['ok'] as bool).length;
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.book.title),
         actions: [
-          IconButton(icon: const Icon(Icons.folder_open), tooltip: l.openBook, onPressed: widget.onOpen),
+          IconButton(
+            icon: const Icon(Icons.folder_open),
+            tooltip: l.openBook,
+            onPressed: widget.onOpen,
+          ),
           LanguageMenu(current: widget.uiLocale, onChanged: widget.onLanguage),
-          IconButton(icon: const Icon(Icons.chevron_left), tooltip: l.previousPage, onPressed: page > _numbers.first ? () => _step(-1) : null),
+          IconButton(
+            icon: const Icon(Icons.chevron_left),
+            tooltip: l.previousPage,
+            onPressed: page > _numbers.first ? () => _step(-1) : null,
+          ),
           SizedBox(
             width: 56,
             child: TextField(
@@ -459,14 +627,22 @@ class _ReaderPageState extends State<ReaderPage> {
             ),
           ),
           Text(' / ${_numbers.last}'),
-          IconButton(icon: const Icon(Icons.chevron_right), tooltip: l.nextPage, onPressed: page < _numbers.last ? () => _step(1) : null),
+          IconButton(
+            icon: const Icon(Icons.chevron_right),
+            tooltip: l.nextPage,
+            onPressed: page < _numbers.last ? () => _step(1) : null,
+          ),
           const SizedBox(width: 8),
           IconButton(
             icon: Icon(facsimile ? Icons.article : Icons.image),
             tooltip: facsimile ? l.showReconstructedText : l.showOriginalPage,
             onPressed: () => setState(() => facsimile = !facsimile),
           ),
-          IconButton(icon: const Icon(Icons.zoom_out), tooltip: l.zoomOut, onPressed: () => _zoomBy(-1)),
+          IconButton(
+            icon: const Icon(Icons.zoom_out),
+            tooltip: l.zoomOut,
+            onPressed: () => _zoomBy(-1),
+          ),
           PopupMenuButton<String>(
             tooltip: l.zoomLevel,
             onSelected: (v) => setState(() {
@@ -477,95 +653,173 @@ class _ReaderPageState extends State<ReaderPage> {
               PopupMenuItem(value: 'page', child: Text(l.zoomFitPage)),
               PopupMenuItem(value: 'width', child: Text(l.zoomFitWidth)),
               const PopupMenuDivider(),
-              for (final p in _presets) PopupMenuItem(value: '$p', child: Text('${p.round()} %')),
+              for (final p in _presets)
+                PopupMenuItem(value: '$p', child: Text('${p.round()} %')),
             ],
-            child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Center(child: Text(_zoomLabel(l)))),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(child: Text(_zoomLabel(l))),
+            ),
           ),
-          IconButton(icon: const Icon(Icons.zoom_in), tooltip: l.zoomIn, onPressed: () => _zoomBy(1)),
+          IconButton(
+            icon: const Icon(Icons.zoom_in),
+            tooltip: l.zoomIn,
+            onPressed: () => _zoomBy(1),
+          ),
           const SizedBox(width: 16),
         ],
       ),
-      body: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Expanded(
-          child: LayoutBuilder(builder: (context, c) {
-            final pw = (data['width'] as num).toDouble(), ph = (data['height'] as num).toDouble();
-            _k100 = 96 / widget.book.dpi;
-            final fitWidth = (c.maxWidth - 32) / pw;
-            final fitPage = ((c.maxHeight - 72) / ph).clamp(0.05, fitWidth); // 72 = padding + the line above the page
-            final k = fit == 'page' ? fitPage : fit == 'width' ? fitWidth : percent / 100 * _k100;
-            _lastK = k;
-            final w = pw * k;
-            final background = widget.book.file(data['background'] as String?);
-            // facsimile: the ORIGINAL page image, with clickable zones on the moves and diagrams (when the book embeds the scans)
-            final scan = facsimile ? widget.book.file('scans/p${page.toString().padLeft(4, '0')}.png') : null;
-            final pageView = SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(l.movesSummary(moves.length, moves.length - nOk), style: Theme.of(context).textTheme.labelMedium),
-                const SizedBox(height: 8),
-                Container(
-                  width: w,
-                  height: (data['height'] as num) * k,
-                  decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.black26)),
-                  child: Stack(children: [
-                    if (scan != null)
-                      Positioned.fill(child: Image.memory(scan, fit: BoxFit.fill))
-                    else if (background != null) // text-layer pages: the page without its text (shapes, colours, images) under the text
-                      Positioned.fill(child: Image.memory(background, fit: BoxFit.fill)),
-                    for (final d in (data['diagrams'] as List).cast<Map<String, dynamic>>()) _figure(d, k, scan == null && background == null),
-                    if (scan != null)
-                      for (final m in moves.values) ..._overlays(m, k)
-                    else
-                      for (final b in (data['blocks'] as List).cast<Map<String, dynamic>>()) _block(context, b, moves, k),
-                  ]),
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final pw = (data['width'] as num).toDouble(),
+                    ph = (data['height'] as num).toDouble();
+                _k100 = 96 / widget.book.dpi;
+                final fitWidth = (c.maxWidth - 32) / pw;
+                final fitPage = ((c.maxHeight - 72) / ph).clamp(
+                  0.05,
+                  fitWidth,
+                ); // 72 = padding + the line above the page
+                final k = fit == 'page'
+                    ? fitPage
+                    : fit == 'width'
+                    ? fitWidth
+                    : percent / 100 * _k100;
+                _lastK = k;
+                final w = pw * k;
+                final background = widget.book.file(
+                  data['background'] as String?,
+                );
+                // facsimile: the ORIGINAL page image, with clickable zones on the moves and diagrams (when the book embeds the scans)
+                final scan = facsimile
+                    ? widget.book.file(
+                        'scans/p${page.toString().padLeft(4, '0')}.png',
+                      )
+                    : null;
+                final pageView = SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        l.movesSummary(moves.length, moves.length - nOk),
+                        style: Theme.of(context).textTheme.labelMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: w,
+                        height: (data['height'] as num) * k,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: Colors.black26),
+                        ),
+                        child: Stack(
+                          children: [
+                            if (scan != null)
+                              Positioned.fill(
+                                child: Image.memory(scan, fit: BoxFit.fill),
+                              )
+                            else if (background !=
+                                null) // text-layer pages: the page without its text (shapes, colours, images) under the text
+                              Positioned.fill(
+                                child: Image.memory(
+                                  background,
+                                  fit: BoxFit.fill,
+                                ),
+                              ),
+                            for (final d
+                                in (data['diagrams'] as List)
+                                    .cast<Map<String, dynamic>>())
+                              _figure(d, k, scan == null && background == null),
+                            if (scan != null)
+                              for (final m in moves.values) ..._overlays(m, k)
+                            else
+                              for (final b
+                                  in (data['blocks'] as List)
+                                      .cast<Map<String, dynamic>>())
+                                _block(context, b, moves, k),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                // zoomed in: the page is wider than the pane, so it also scrolls sideways
+                return w + 32 <= c.maxWidth
+                    ? pageView
+                    : SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          width: w + 32,
+                          height: c.maxHeight,
+                          child: pageView,
+                        ),
+                      );
+              },
+            ),
+          ),
+          LayoutBuilder(
+            builder: (context, _) {
+              // board fits the window: at most 400 px, at most the height left under the app bar minus the caption
+              final side =
+                  (MediaQuery.sizeOf(context).height - kToolbarHeight - 90)
+                      .clamp(120.0, 400.0);
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    StaticChessboard(
+                      size: side,
+                      orientation: orientation,
+                      fen: fen,
+                      lastMove: lastMove,
+                      settings: const StaticChessboardSettings(
+                        enableCoordinates: true,
+                      ), // a-h and 1-8 along the edges (off by default for a static board)
+                      shapes: {
+                        if (lastMove is NormalMove)
+                          Arrow(
+                            color: const Color(0xB3E8A317),
+                            orig: (lastMove as NormalMove).from,
+                            dest: (lastMove as NormalMove).to,
+                          ),
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _selectionLabel(l),
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    if (whiteToMove != null)
+                      Text(
+                        whiteToMove! ? l.sideWhite : l.sideBlack,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    TextButton.icon(
+                      onPressed: () =>
+                          setState(() => orientation = orientation.opposite),
+                      icon: const Icon(Icons.swap_vert),
+                      label: Text(l.flipBoard),
+                    ),
+                    if (selectedDiagram != null)
+                      TextButton.icon(
+                        onPressed: () => _editDiagram(selectedDiagram!),
+                        icon: const Icon(Icons.edit),
+                        label: Text(l.correctDiagram),
+                      ),
+                  ],
                 ),
-              ]),
-            );
-            // zoomed in: the page is wider than the pane, so it also scrolls sideways
-            return w + 32 <= c.maxWidth
-                ? pageView
-                : SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(width: w + 32, height: c.maxHeight, child: pageView));
-          }),
-        ),
-        LayoutBuilder(builder: (context, _) {
-          // board fits the window: at most 400 px, at most the height left under the app bar minus the caption
-          final side = (MediaQuery.sizeOf(context).height - kToolbarHeight - 90).clamp(120.0, 400.0);
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(children: [
-              StaticChessboard(
-                size: side,
-                orientation: orientation,
-                fen: fen,
-                lastMove: lastMove,
-                settings: const StaticChessboardSettings(enableCoordinates: true),  // a-h and 1-8 along the edges (off by default for a static board)
-                shapes: {
-                  if (lastMove is NormalMove)
-                    Arrow(color: const Color(0xB3E8A317), orig: (lastMove as NormalMove).from, dest: (lastMove as NormalMove).to),
-                },
-              ),
-              const SizedBox(height: 8),
-              Text(_selectionLabel(l), style: Theme.of(context).textTheme.titleMedium),
-              if (whiteToMove != null) Text(whiteToMove! ? l.sideWhite : l.sideBlack, style: Theme.of(context).textTheme.bodyMedium),
-              TextButton.icon(
-                onPressed: () => setState(() => orientation = orientation.opposite),
-                icon: const Icon(Icons.swap_vert),
-                label: Text(l.flipBoard),
-              ),
-              if (selectedDiagram != null)
-                TextButton.icon(
-                  onPressed: () => _editDiagram(selectedDiagram!),
-                  icon: const Icon(Icons.edit),
-                  label: Text(l.correctDiagram),
-                ),
-            ]),
-          );
-        }),
-      ]),
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 }
-
 
 /// Position editor for a diagram: drag a piece from the palette onto a square, drag a piece off the board to delete it.
 class DiagramEditor extends StatefulWidget {
@@ -580,18 +834,37 @@ class DiagramEditor extends StatefulWidget {
 
 class _DiagramEditorState extends State<DiagramEditor> {
   late Map<Square, Piece> pieces = Map.of(readFen(widget.placement));
-  Side orientation = Side.white; // view only: the saved FEN does not depend on it
+  Side orientation =
+      Side.white; // view only: the saved FEN does not depend on it
 
-  static const _palette = [Role.king, Role.queen, Role.rook, Role.bishop, Role.knight, Role.pawn];
+  static const _palette = [
+    Role.king,
+    Role.queen,
+    Role.rook,
+    Role.bishop,
+    Role.knight,
+    Role.pawn,
+  ];
 
-  Widget _paletteRow(Side side) => Row(mainAxisSize: MainAxisSize.min, children: [
-        for (final r in _palette)
-          Draggable<Piece>(
-            data: Piece(color: side, role: r),
-            feedback: PieceWidget(piece: Piece(color: side, role: r), size: 48, pieceAssets: PieceSet.cburnettAssets),
-            child: PieceWidget(piece: Piece(color: side, role: r), size: 48, pieceAssets: PieceSet.cburnettAssets),
+  Widget _paletteRow(Side side) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      for (final r in _palette)
+        Draggable<Piece>(
+          data: Piece(color: side, role: r),
+          feedback: PieceWidget(
+            piece: Piece(color: side, role: r),
+            size: 48,
+            pieceAssets: PieceSet.cburnettAssets,
           ),
-      ]);
+          child: PieceWidget(
+            piece: Piece(color: side, role: r),
+            size: 48,
+            pieceAssets: PieceSet.cburnettAssets,
+          ),
+        ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -599,37 +872,53 @@ class _DiagramEditorState extends State<DiagramEditor> {
     final l = AppLocalizations.of(context)!;
     final side = (MediaQuery.sizeOf(context).height - 420).clamp(220.0, 384.0);
     return AlertDialog(
-        title: Text(l.correctDiagramTitle),
-        content: SingleChildScrollView(child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (widget.image != null) Image.memory(widget.image!, width: 260),
-          const SizedBox(width: 16),
-          Column(mainAxisSize: MainAxisSize.min, children: [
-            ChessboardEditor(
-              size: side,
-              orientation: orientation,
-              pieces: pieces,
-              onDroppedPiece: (origin, dest, piece) => setState(() {
-                if (origin != null) pieces.remove(origin);
-                pieces[dest] = piece;
-              }),
-              onDiscardedPiece: (sq) => setState(() => pieces.remove(sq)),
+      title: Text(l.correctDiagramTitle),
+      content: SingleChildScrollView(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.image != null) Image.memory(widget.image!, width: 260),
+            const SizedBox(width: 16),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ChessboardEditor(
+                  size: side,
+                  orientation: orientation,
+                  pieces: pieces,
+                  onDroppedPiece: (origin, dest, piece) => setState(() {
+                    if (origin != null) pieces.remove(origin);
+                    pieces[dest] = piece;
+                  }),
+                  onDiscardedPiece: (sq) => setState(() => pieces.remove(sq)),
+                ),
+                const SizedBox(height: 8),
+                _paletteRow(Side.white),
+                _paletteRow(Side.black),
+                const SizedBox(height: 4),
+                TextButton.icon(
+                  onPressed: () =>
+                      setState(() => orientation = orientation.opposite),
+                  icon: const Icon(Icons.swap_vert),
+                  label: Text(l.flipBoard),
+                ),
+                Text(l.dragHint),
+              ],
             ),
-            const SizedBox(height: 8),
-            _paletteRow(Side.white),
-            _paletteRow(Side.black),
-            const SizedBox(height: 4),
-            TextButton.icon(
-              onPressed: () => setState(() => orientation = orientation.opposite),
-              icon: const Icon(Icons.swap_vert),
-              label: Text(l.flipBoard),
-            ),
-            Text(l.dragHint),
-          ]),
-        ])),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: Text(l.cancel)),
-          FilledButton(onPressed: () => Navigator.pop(context, writeFen(pieces)), child: Text(l.save)),
-        ],
-      );
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(l.cancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, writeFen(pieces)),
+          child: Text(l.save),
+        ),
+      ],
+    );
   }
 }
