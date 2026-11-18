@@ -33,7 +33,7 @@ from moves import replay, tokens
 from trait import dot_turn
 from wordboxes import Classic, move_rects_ocr, move_rects_textlayer
 from orientation import orient
-from plausibility import issues
+from plausibility import colors_only_differ, issues
 
 MAX_EMBEDDED_PX = 40_000_000  # an embedded image bigger than this (width x height) is not extracted: PDFs can be hostile
 MAX_EMBEDDED_PER_PAGE = 60
@@ -325,7 +325,8 @@ def read_diagram(model, im, known=frozenset(), base=None):
     r = _read_diagram(model, im, known)
     if r and base is not None and r[1] < TRUSTED and r[0].board_fen() not in known and vivid_share(im) < MAX_VIVID:  # a reading confirmed by the game stays
         r2 = _read_diagram(base, im, known)
-        if r2 and r2[1] > r[1] and not issues(r2[4]):
+        # same pieces on the same squares but other colours: the base model mixes up who owns outlined pieces on hatched squares, keep the first
+        if r2 and r2[1] > r[1] and not issues(r2[4]) and not colors_only_differ(r[0], r2[0]):
             return r2
     return r
 

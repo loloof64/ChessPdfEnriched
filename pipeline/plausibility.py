@@ -15,6 +15,12 @@ def issues(board: chess.Board) -> list[str]:
     # ponytail: does not catch a lone ghost bishop (e.g. 3 bishops with few pawns is legal); needs the classifier route
 
 
+def colors_only_differ(a: chess.Board, b: chess.Board) -> bool:
+    """The two boards differ, but only in who owns the pieces: same squares occupied, same piece types."""
+    types = lambda x: {sq: p.piece_type for sq, p in x.piece_map().items()}
+    return a.board_fen() != b.board_fen() and types(a) == types(b)
+
+
 if __name__ == "__main__":
     ok = lambda fen: issues(chess.Board(fen + " w - - 0 1"))
     assert ok("6k1/pp6/2p5/3p4/1P1P4/8/P7/6K1") == []
@@ -23,4 +29,8 @@ if __name__ == "__main__":
     assert "no_black_king" in ok("8/8/8/8/8/8/8/6K1")
     assert ok("2b1kr2/p6r/1pB1pQ2/5p2/2pP4/2P5/PP3P2/R5K1") == []  # black in check, black to move
     assert ok("6k1/8/8/8/8/8/PPPPPPPP/QQ4K1") != []  # 8 pawns + 2 queens
+    same = chess.Board("4k3/pp3ppp/4p3/3pP3/3N1P2/8/PPP3PP/4K3 w - - 0 1")  # a reading and the same one with the colours of K, k, N swapped
+    swapped = chess.Board("4K3/pp3ppp/4p3/3pP3/3n1P2/8/PPP3PP/4k3 w - - 0 1")
+    assert colors_only_differ(same, swapped) and not colors_only_differ(same, same)
+    assert not colors_only_differ(same, chess.Board("4k3/pp3ppp/4p3/3pP3/3Q1P2/8/PPP3PP/4K3 w - - 0 1"))  # a piece type differs
     print("ok")

@@ -11,6 +11,9 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 - Diagrams: the double reading now triggers below 0.99 confidence (was 0.975), except on images with arrows or highlights, where the
   base model invents pieces. Fixes the remaining phantom bishops and queens of the coloured-print book.
 - GUI: the overall progress is shown as "step N of M" with the elapsed time, instead of a percentage bar based on guessed step durations.
+- Moves: a prose word glued to a move by the OCR (`14.Ce2Opération`) no longer hides the move; a numbered move that is illegal because the
+  OCR dropped or changed one letter (`Cf7` for `Cfd7`) is repaired when exactly one legal move fits and the following moves prove it.
+- Diagrams: when both models place the same pieces on the same squares and differ only in colours, the fine-tuned reading is kept.
 - Diagrams: when the GPU is full (the OCR model keeps most of it), the diagram models load on the CPU instead of failing with "CUDA out of memory".
 
 ## [0.1.1] - 2026-11-18
