@@ -13,6 +13,9 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 - Side to move: the dot search no longer reaches the next column (its pieces were counted as a second dot).
 - Moves: `A)` / `B)` labels of alternatives are not closing parentheses; a sibling after `;` restarts from its own move number;
   a bare move that is an alternative to the previous one (`4.Kd6 Ke6 (...) d3`) is a variation, and the main line resumes after the comment.
+- Moves: a new exercise whose first move was also legal before the last move of the previous one (`1.Da3#` then `1.Bd5+`) restarts from its own diagram
+  when the other reading dies at once.
+- Diagrams: a board the OCR labels `seal` is read like any other diagram (the first diagram of page 9 of Calcul de variantes 1 was missing).
 
 ## [0.2.1] - 2026-11-18
 

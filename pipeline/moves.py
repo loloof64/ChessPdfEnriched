@@ -257,8 +257,10 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
             # a move the book omits explains a mismatch of one ply (recovered when the move is read): no other start position is needed
             alt_of_last = (before_last is not None and not dead and (before_last.fullmove_number, before_last.turn == chess.BLACK) == (n, black)
                            and _legal(before_last, toks[idx + 1][1], table) and not (moves and moves[-1]["raw"].rstrip("!?") == toks[idx + 1][1].rstrip("!?")))  # 'Si 3.Rh6': an alternative to the move just played
-            if mismatch and not alt_of_last and (dead or not _skipped_move(board, to_san(toks[idx + 1][1], table), toks, idx + 1, val, table)):
-                cur = 0 if dead else future(board, idx)
+            # (an alternative to the last move is only the better reading when the line goes on from there: a new exercise often starts with a
+            # move that was also legal before the last one ('1.Da3#' then, in the next exercise, '1.Fd5+'); a diagram that replays far more wins)
+            if mismatch and (alt_of_last or dead or not _skipped_move(board, to_san(toks[idx + 1][1], table), toks, idx + 1, val, table)):
+                cur = future(before_last, idx) if alt_of_last else 0 if dead else future(board, idx)
                 found, found_idx = [], []  # (score, board) of every candidate start that beats the current board, and its anchor index
                 starts = ([chess.STARTING_BOARD_FEN] if n == 1 and not black else [])
                 for ai, fen in enumerate(starts + list(anchors)):
@@ -272,7 +274,9 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                     # a single legal move proves little (many diagrams allow it): believe it only when exactly one diagram does
                     tops = [i for i, (sc, _) in enumerate(found) if sc == top]
                     played = any(m["ok"] and m["depth"] == 0 for m in moves)  # in the middle of a page the game is not abandoned for a position that
-                    if top >= (3 if played else 2) or (not played and (len(tops) == 1 or sum(found_idx[i] < own for i in tops) == 1)):  # allows 1-2 moves
+                    if alt_of_last and (cur > 2 or top < cur + 3):
+                        pass  # the alternative to the last move stays when it goes on legally ('Si 3.Rh6 ...'): it is dropped only when it dies at once
+                    elif top >= (3 if played else 2) or (not played and (len(tops) == 1 or sum(found_idx[i] < own for i in tops) == 1)):  # allows 1-2 moves
                         if top < 2 and len(tops) > 1:
                             best = next(found[i][1] for i in tops if found_idx[i] < own)
                         board, before_last, dead, stack, implicit = best, None, False, [], set()
@@ -366,12 +370,16 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
             if (mv is None and not dead and before_last is not None and idx > 0 and toks[idx - 1][0] == "move" and run_ok.get(idx)
                     and plausible_lone(val, pieces) and _legal(before_last, val, table) and moves and moves[-1]["raw"].rstrip("!?") != val.rstrip("!?")):
                 # a bare piece move right after a move, illegal for the side to move but legal where the last move was played: the book gives an
-                # alternative to that move without brackets or number ('4.Rd6 Re6 (plus visuel ... d3 5.Re5': 4.Re6 is meant)
-                stack.append((board, before_last, dead))
-                implicit.add(len(stack) - 1)
-                board = before_last.copy()
-                mv = board.parse_san(to_san(val, table))
-                bare_alt = idx
+                # alternative to that move without brackets or number ('4.Rd6 Re6 (plus visuel ... d3 5.Re5': 4.Re6 is meant): believed when the text
+                # goes on legally from there (an illegal move that is legal for the other side is often just an OCR or book typo)
+                alt_board = before_last.copy()
+                alt_board.push_san(to_san(val, table))
+                if future(alt_board, idx + 1) >= 2:
+                    stack.append((board, before_last, dead))
+                    implicit.add(len(stack) - 1)
+                    board = before_last.copy()
+                    mv = board.parse_san(to_san(val, table))
+                    bare_alt = idx
             inferred = None
             if mv is None and not dead and idx > 0 and toks[idx - 1][0] == "num":
                 if skipped := _skipped_move(board, to_san(val, table), toks, idx, toks[idx - 1][1], table):
@@ -429,6 +437,11 @@ def selfcheck():
     t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Fc4 (plus actif. Cf6 5.O-O"  # 'Fc4' (White) is an alternative to 4.Fa4, written without brackets: not an illegal Black reply
     r = replay(t)
     assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 1] == ["Bc4"] and [m["san"] for m in r][-2:] == ["Nf6", "O-O"]  # the main line goes on after the comment
+    # two exercises on a page: the second one starts with a move that was also legal before the first one's last move ('1.Rf1'), but only the
+    # diagram of the second one replays the whole line
+    t = "1.Ta8# Le seul coup. Exercice suivant : 1.Rf1 Rf7 2.a4 Re7 3.a5 Rd7 4.a6"
+    r = replay(t, "6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "fr", ["4k3/8/8/8/8/8/PPP5/4K3"], own=1)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r][-1] == "a6" and len(r) == 8
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 6.Fd3 Cb4 7.Fe2 6.c3"  # dropped ']': 6.c3 goes back to the main line
     assert ok(t)[-1] == "c3" and [m["depth"] for m in replay(t)][-1] == 0
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.c3 Un coup comme e5! pousse. 5...c5 6.Fd3"  # 'e5!' in prose is not Black's move
