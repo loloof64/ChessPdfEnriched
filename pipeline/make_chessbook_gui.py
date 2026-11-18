@@ -15,50 +15,99 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from gui_i18n import LANGUAGES, LANGUAGE_NAMES, set_language, t
+
 HERE = Path(__file__).parent
 SETTINGS = HERE / "work" / "gui_settings.json"  # last folders and language, kept between runs (work/ is ignored by git)
 # steps in the order make_chessbook_cli.py runs them (their durations differ too much between books for an overall percentage)
+# (these labels are identifiers matching the '@@PROGRESS' lines of the CLI; the displayed text is t(key))
 STEPS = ["Reading pages (OCR)", "Moves from diagrams", "Locating moves", "Reading diagrams"]
+STEP_KEYS = dict(zip(STEPS, ("step_ocr", "step_moves", "step_locate", "step_diagrams")))
+UI_CHOICES = (None,) + LANGUAGES  # combobox order: Automatic, English, Français, Español
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Chess PDF Enriched : make chessbook")
         self.minsize(640, 420)
         self.proc, self.lines, self.t0, self.stage = None, queue.Queue(), 0, 0
+        self.status = ("idle",)  # what the step line shows, kept as data so a language change can redraw it
         self.settings = self.load_settings()
+        self.ui_setting = self.settings.get("ui_lang") if self.settings.get("ui_lang") in LANGUAGES else None
+        set_language(self.ui_setting)
         self.pdf, self.out, self.lang = tk.StringVar(), tk.StringVar(), tk.StringVar(value=self.settings.get("lang", "fr"))
         f = ttk.Frame(self, padding=12)
         f.pack(fill="both", expand=True)
         f.columnconfigure(1, weight=1)
-        ttk.Label(f, text="Book (PDF)").grid(row=0, column=0, sticky="w")
+        self.lbl_book, self.btn_pdf = ttk.Label(f), ttk.Button(f, command=self.pick_pdf)
+        self.lbl_book.grid(row=0, column=0, sticky="w")
         ttk.Entry(f, textvariable=self.pdf).grid(row=0, column=1, sticky="ew", padx=6, pady=3)
-        ttk.Button(f, text="Choose…", command=self.pick_pdf).grid(row=0, column=2)
-        ttk.Label(f, text="Output (.chessbook)").grid(row=1, column=0, sticky="w")
+        self.btn_pdf.grid(row=0, column=2)
+        self.lbl_out, self.btn_out = ttk.Label(f), ttk.Button(f, command=self.pick_out)
+        self.lbl_out.grid(row=1, column=0, sticky="w")
         ttk.Entry(f, textvariable=self.out).grid(row=1, column=1, sticky="ew", padx=6, pady=3)
-        ttk.Button(f, text="Choose…", command=self.pick_out).grid(row=1, column=2)
-        ttk.Label(f, text="Move language").grid(row=2, column=0, sticky="w")
+        self.btn_out.grid(row=1, column=2)
+        self.lbl_notation = ttk.Label(f)
+        self.lbl_notation.grid(row=2, column=0, sticky="w")
         ttk.Combobox(f, textvariable=self.lang, values=("fr", "en"), state="readonly", width=5).grid(row=2, column=1, sticky="w", padx=6, pady=3)
+        self.lbl_ui, self.ui_box = ttk.Label(f), ttk.Combobox(f, state="readonly", width=14)
+        self.lbl_ui.grid(row=3, column=0, sticky="w")
+        self.ui_box.grid(row=3, column=1, sticky="w", padx=6, pady=3)
+        self.ui_box.bind("<<ComboboxSelected>>", self.on_ui_language)
         buttons = ttk.Frame(f)
-        buttons.grid(row=3, column=0, columnspan=3, pady=8, sticky="w")
-        self.start = ttk.Button(buttons, text="Start", command=self.run)
+        buttons.grid(row=4, column=0, columnspan=3, pady=8, sticky="w")
+        self.start = ttk.Button(buttons, command=self.run)
         self.start.pack(side="left")
-        self.stop = ttk.Button(buttons, text="Cancel", command=self.cancel, state="disabled")
+        self.stop = ttk.Button(buttons, command=self.cancel, state="disabled")
         self.stop.pack(side="left", padx=6)
-        self.step_text, self.all_text = tk.StringVar(value="Step"), tk.StringVar(value="Overall")
-        ttk.Label(f, textvariable=self.step_text).grid(row=4, column=0, columnspan=3, sticky="w")
+        self.step_text, self.all_text = tk.StringVar(), tk.StringVar()
+        ttk.Label(f, textvariable=self.step_text).grid(row=5, column=0, columnspan=3, sticky="w")
         self.step_bar = ttk.Progressbar(f, maximum=100)
-        self.step_bar.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(0, 6))
-        ttk.Label(f, textvariable=self.all_text).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        self.step_bar.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        ttk.Label(f, textvariable=self.all_text).grid(row=7, column=0, columnspan=3, sticky="w", pady=(0, 6))
         self.log = tk.Text(f, height=8, state="disabled", wrap="word")
-        self.log.grid(row=8, column=0, columnspan=3, sticky="nsew")
-        f.rowconfigure(8, weight=1)
+        self.log.grid(row=9, column=0, columnspan=3, sticky="nsew")
+        f.rowconfigure(9, weight=1)
+        self.retranslate()
         self.after(100, self.poll)
+
+    def retranslate(self):
+        """Put every text in the current language (at start and when the language is changed)."""
+        self.title(t("window_title"))
+        for widget, key in ((self.lbl_book, "book"), (self.btn_pdf, "choose"), (self.lbl_out, "output"), (self.btn_out, "choose"),
+                            (self.lbl_notation, "notation"), (self.lbl_ui, "ui_language"), (self.start, "start"), (self.stop, "cancel")):
+            widget.configure(text=t(key))
+        self.ui_box.configure(values=[t("auto")] + [LANGUAGE_NAMES[c] for c in LANGUAGES])
+        self.ui_box.current(UI_CHOICES.index(self.ui_setting))
+        self.show_status()
+        self.show_overall(done=self.status[0] in ("done", "stopped"))
+
+    def on_ui_language(self, _event=None):
+        self.ui_setting = UI_CHOICES[self.ui_box.current()]
+        set_language(self.ui_setting)
+        self.settings.pop("ui_lang", None)
+        self.remember(**({"ui_lang": self.ui_setting} if self.ui_setting else {}))
+        self.retranslate()
+
+    def show_status(self):
+        kind = self.status[0]
+        if kind == "idle":
+            text = t("step")
+        elif kind == "starting":
+            text = t("starting")
+        elif kind == "progress":
+            _, label, i, n, note = self.status
+            text = f"{t(STEP_KEYS[label]) if label in STEP_KEYS else label}: {i}/{n} {note}".strip()
+        elif kind == "done":
+            text = t("done")
+        else:
+            text = t("stopped", code=self.status[1])
+        self.step_text.set(text)
 
     def load_settings(self):
         try:
-            return json.loads(SETTINGS.read_text())
+            data = json.loads(SETTINGS.read_text())
+            return data if isinstance(data, dict) else {}
         except (OSError, ValueError):
             return {}
 
@@ -78,7 +127,7 @@ class App(tk.Tk):
         return None
 
     def pick_pdf(self):
-        path = filedialog.askopenfilename(title="Choose the PDF", filetypes=[("PDF", "*.pdf")], initialdir=self.folder("pdf_dir", self.pdf.get()))
+        path = filedialog.askopenfilename(title=t("pick_pdf"), filetypes=[("PDF", "*.pdf")], initialdir=self.folder("pdf_dir", self.pdf.get()))
         if path:
             self.pdf.set(path)
             self.remember(pdf_dir=str(Path(path).parent))
@@ -87,7 +136,7 @@ class App(tk.Tk):
                 self.out.set(str(Path(out_dir) / (Path(path).stem + ".chessbook")))
 
     def pick_out(self):
-        path = filedialog.asksaveasfilename(title="Write the .chessbook to", defaultextension=".chessbook", filetypes=[("chessbook", "*.chessbook")],
+        path = filedialog.asksaveasfilename(title=t("pick_out"), defaultextension=".chessbook", filetypes=[("chessbook", "*.chessbook")],
                                             initialdir=self.folder("out_dir", self.out.get()),
                                             initialfile=Path(self.out.get()).name if self.out.get() else "")
         if path:
@@ -102,7 +151,7 @@ class App(tk.Tk):
 
     def run(self):
         if not Path(self.pdf.get()).is_file() or not self.out.get():
-            messagebox.showerror("Missing file", "Choose an existing PDF and an output file.")
+            messagebox.showerror(t("missing_title"), t("missing_msg"))
             return
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")  # a new run starts with an empty log
@@ -116,7 +165,8 @@ class App(tk.Tk):
         self.stop.configure(state="normal")
         self.step_bar["value"], self.stage = 0, 0
         self.show_overall()
-        self.step_text.set("Starting (loading the models, can take a minute)…")
+        self.status = ("starting",)
+        self.show_status()
 
     def read(self, proc):
         for line in proc.stdout:
@@ -126,18 +176,22 @@ class App(tk.Tk):
     def cancel(self):
         if self.proc:
             self.proc.terminate()
-            self.say("Cancelled.")
+            self.say(t("cancelled"))
 
     def show_overall(self, done=False):
         elapsed = int(time.time() - self.t0)
-        step = f"step {self.stage} of {len(STEPS)}, " if self.stage and not done else ""
-        self.all_text.set(f"Overall: {step}{elapsed // 60:02d}:{elapsed % 60:02d}")
+        clock = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        if self.stage and not done:
+            self.all_text.set(t("overall_step", n=self.stage, total=len(STEPS), time=clock))
+        else:
+            self.all_text.set(t("overall_time", time=clock) if self.t0 else t("overall"))
 
     def progress(self, label, i, n, note):
         k = STEPS.index(label) if label in STEPS else None
         frac = i / max(1, n)
         self.step_bar["value"] = 100 * frac
-        self.step_text.set(f"{label}: {i}/{n} {note}".strip())
+        self.status = ("progress", label, i, n, note)
+        self.show_status()
         if k is not None:
             self.stage = k + 1
 
@@ -151,9 +205,10 @@ class App(tk.Tk):
                     self.stop.configure(state="disabled")
                     if code == 0:
                         self.step_bar["value"] = 100
-                        self.step_text.set("Done")
+                        self.status = ("done",)
                     else:
-                        self.step_text.set(f"Stopped (exit code {code})")
+                        self.status = ("stopped", code)
+                    self.show_status()
                     self.show_overall(done=True)
                 elif line.startswith("@@PROGRESS\t"):
                     _, label, i, n, note = line.split("\t")
