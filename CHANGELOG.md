@@ -7,6 +7,8 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
 ### Pipeline
 - Diagrams: double reading. When the fine-tuned model is unsure (mean confidence < 0.975) the original fenify model reads too and wins if
   it is more confident and plausible. Fixes books printed in another style (hatched squares were read as queens). Run
