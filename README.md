@@ -73,7 +73,7 @@ cd pipeline
 - **Original fenify model** (`fenify-base.pt`, [notnil/fenify](https://github.com/notnil/fenify), MIT license, downloaded from its own
   release): reads clean diagrams as well as the fine-tuned one, and other print styles better (hatched squares, coloured boards), but
   it sometimes sees "ghost" pieces on highlighted squares or under arrows.
-- **Double reading**: when the fine-tuned reading has a mean confidence below 0.975, the base model reads the diagram too and its
+- **Double reading**: when the fine-tuned reading has a mean confidence below 0.99 and the image has no arrows or highlights, the base model reads the diagram too and its
   reading is kept if it is more confident and plausible. Without `fenify-base.pt` only the fine-tuned model is used. To use the base
   model alone: `--weights work/fenify-base.pt`.
 

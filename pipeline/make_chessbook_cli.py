@@ -39,7 +39,8 @@ MAX_EMBEDDED_PX = 40_000_000  # an embedded image bigger than this (width x heig
 MAX_EMBEDDED_PER_PAGE = 60
 Image.MAX_IMAGE_PIXELS = 100_000_000  # explicit PIL limit (it raises above twice this) for rendered pages and extracted images
 CONFIDENT = 0.95  # mean per-square probability above which a diagram reading is not second-guessed by a finer crop search
-TRUSTED = 0.975  # fine-tuned reading below this mean confidence is double-checked with the base model
+TRUSTED = 0.99  # fine-tuned reading below this mean confidence is double-checked with the base model...
+MAX_VIVID = 0.002  # ...unless the diagram has arrows/highlights (share of bright saturated pixels): the fine-tuned model is trained for them, the base invents pieces there
 MIN_BOARD_SCORE = 2.5  # autocrop checkerboard score: logos < 1, small screenshot boards 3-5, real diagrams 6+
 HERE = Path(__file__).parent
 T0 = time.time()  # program start, for the total time
@@ -304,12 +305,20 @@ def load_models(weights, base_weights):
     return load(weights), (load(base_weights) if base_weights and Path(base_weights).exists() else None)
 
 
+def vivid_share(im):
+    """Share of bright, saturated pixels (yellow/red arrows and highlights; never wood, pieces or pastel print)."""
+    import numpy as np
+    t = np.asarray(im.convert("RGB")).astype(float)
+    mx, mn = t.max(2), t.min(2)
+    return float((((mx - mn) / np.maximum(mx, 1) > .75) & (mx > 200)).mean())
+
+
 def read_diagram(model, im, known=frozenset(), base=None):
-    """Double reading: the fine-tuned `model` first; when it is not sure of itself (confidence < TRUSTED, e.g. a print style it was
+    """Double reading: the fine-tuned `model` first; when it is not sure of itself (confidence < TRUSTED and no arrows or highlights, e.g. a print style it was
     not fine-tuned on: hatched squares make it invent queens) the original `base` model also reads, and its reading wins if it is
     more confident and plausible (never over a reading that a game of the book confirms)."""
     r = _read_diagram(model, im, known)
-    if r and base is not None and r[1] < TRUSTED and r[0].board_fen() not in known:  # a reading confirmed by the game stays
+    if r and base is not None and r[1] < TRUSTED and r[0].board_fen() not in known and vivid_share(im) < MAX_VIVID:  # a reading confirmed by the game stays
         r2 = _read_diagram(base, im, known)
         if r2 and r2[1] > r[1] and not issues(r2[4]):
             return r2
