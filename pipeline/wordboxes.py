@@ -87,6 +87,29 @@ def fill_sparse(blocks, lines, gain=2.0):
     return blocks
 
 
+def add_orphans(blocks, lines, has_moves):
+    """Add as a text block each classic-OCR line that lies inside no block of the main OCR and holds moves ('31.g4' printed above a
+    diagram that the main OCR skipped). It goes before the text block under it in its column (reading order), else at the end."""
+    boxes = [b["block_bbox"] for b in blocks]
+    for ln in lines:
+        text, chars = char_boxes([(t, b) for t, b in ln["pieces"]])
+        chars = [c for c in chars if c]
+        if not chars or not has_moves(text):
+            continue
+        x0, y0 = min(c[0] for c in chars), min(c[1] for c in chars)
+        x1, y1 = max(c[2] for c in chars), max(c[3] for c in chars)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        if any(b[0] - 4 <= cx <= b[2] + 4 and b[1] - 4 <= cy <= b[3] + 4 for b in boxes):
+            continue
+        new = {"block_label": "text", "block_bbox": [round(x0), round(y0), round(x1), round(y1)], "block_content": text.strip(), "orphan": True}
+        below = [(b["block_bbox"][1], i) for i, b in enumerate(blocks)
+                 if b["block_label"] == "text" and b["block_content"].strip() and b["block_bbox"][1] > cy and b["block_bbox"][0] < x1 and b["block_bbox"][2] > x0]
+        at = min(below)[1] if below else len(blocks)
+        blocks.insert(at, new)
+        boxes.insert(at, new["block_bbox"])
+    return blocks
+
+
 def merge_rects(boxes, pad=2):
     """Boxes of consecutive characters -> one rectangle [x, y, w, h] per text line (boxes on the same row are united)."""
     rows = []
@@ -146,6 +169,22 @@ def selfcheck():
     assert blocks[3]["block_content"].startswith("Voici une partie. 1.e4 c5") and blocks[0]["block_content"] == full  # others untouched
     short = [blk(0, "ab"), blk(500, "cd")]  # fewer than 3 text blocks: no baseline to compare with
     assert sparse_blocks(short) == []
+    # a line of moves the main OCR gave no block at all ('31.g4' above a diagram) is added before the text block below it in its column
+    import re
+    mv = lambda t: bool(re.search(r"\d+\.+\s*[A-Za-z]", t))
+    left = {"block_label": "text", "block_bbox": [0, 100, 400, 800], "block_content": "30.Tf2 a6"}
+    right = {"block_label": "text", "block_bbox": [500, 300, 900, 700], "block_content": "Après avoir repoussé. 31...Cc8"}
+    img = {"block_label": "chart", "block_bbox": [550, 120, 850, 280], "block_content": ""}
+    page = [left, img, right]
+    lines = [line(100, "31.g4"), line(130, "A41"), line(310, "Après avoir repoussé. 31...Cc8"), line(200, "1 2 3")]
+    lines[0]["pieces"] = [("31.g4", [520.0, 40.0, 600.0, 70.0])]
+    lines[1]["pieces"] = [("A41", [520.0, 10.0, 560.0, 30.0])]
+    lines[2]["pieces"] = [("Après avoir repoussé. 31...Cc8", [510.0, 310.0, 890.0, 330.0])]
+    lines[3]["pieces"] = [("1 2 3", [600.0, 200.0, 640.0, 220.0])]  # inside the chart: coordinates of a diagram
+    add_orphans(page, lines, mv)
+    assert [b["block_content"] for b in page] == ["30.Tf2 a6", "", "31.g4", "Après avoir repoussé. 31...Cc8"], [b["block_content"] for b in page]
+    add_orphans(page, lines, mv)  # idempotent: the new block now covers its line
+    assert len(page) == 4
     print("wordboxes self-check ok")
 
 

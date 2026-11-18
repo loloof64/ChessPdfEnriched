@@ -31,7 +31,7 @@ from autocrop import candidate_boxes, find_board
 from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
 from moves import replay, tokens
 from trait import dot_turn
-from wordboxes import Classic, fill_sparse, move_rects_ocr, move_rects_textlayer, sparse_blocks
+from wordboxes import Classic, add_orphans, fill_sparse, move_rects_ocr, move_rects_textlayer
 from orientation import orient
 from plausibility import colors_only_differ, issues, repair_king_colors
 
@@ -427,8 +427,10 @@ def main():
     for n in bar(pages, "Reading pages (OCR)"):
         blocks[n], how = page_blocks(a.pdf, doc, n, a.dpi, work, ocr, a.min_text_words)
         pngs[n] = render(a.pdf, n, a.dpi, work)
-        if how != "text layer" and sparse_blocks(blocks[n]):  # the main OCR dropped most of a column: take it from the classic OCR (cached, also used later)
-            fill_sparse(blocks[n], classic.lines(pngs[n], work / "ppocr" / f"p{n}.json"))
+        if how != "text layer":  # the main OCR drops text now and then: a column cut short, a line of moves with no block at all. The classic OCR
+            lines = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json")  # (cached, also used later to locate the moves) has them
+            fill_sparse(blocks[n], lines)
+            add_orphans(blocks[n], lines, lambda t: has_moves(t, a.lang))
         blocks[n] = dedupe(blocks[n])
 
     # moves: pages whose text starts at move 1 first, the others from a position of another page's game
