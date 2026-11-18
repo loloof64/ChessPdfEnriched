@@ -26,3 +26,6 @@ doc/api/
 .flutter-plugins
 .flutter-plugins-dependencies
 test/render/
+
+# editor settings
+.vscode/
