@@ -301,7 +301,12 @@ def load_models(weights, base_weights):
     """(fine-tuned model, original fenify model or None when its file is absent)."""
     import torch
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    load = lambda p: torch.jit.load(str(p), map_location=dev).eval()
+
+    def load(p):
+        try:
+            return torch.jit.load(str(p), map_location=dev).eval()
+        except torch.OutOfMemoryError:  # the OCR model keeps most of a 12 GB GPU: these small nets then run on the CPU
+            return torch.jit.load(str(p), map_location="cpu").eval()
     return load(weights), (load(base_weights) if base_weights and Path(base_weights).exists() else None)
 
 
