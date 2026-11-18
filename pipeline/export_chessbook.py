@@ -2,7 +2,7 @@
 from PIL import Image
 
 KEEP = ("text", "paragraph_title", "header", "doc_title")  # block labels that carry book text
-FIGURE = ("image", "chart")  # block labels that may hold a diagram
+FIGURE = ("image", "chart", "seal")  # block labels that may hold a diagram (the OCR sometimes calls a board a seal)
 
 
 def text_blocks(blocks):
