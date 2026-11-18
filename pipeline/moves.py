@@ -17,10 +17,10 @@ PIECES = {"fr": "CFTDR", "en": "NBRQK"}  # knight, bishop, rook, queen, king as 
 def _lang(lang):
     """(token regex, translate table to English SAN, piece letters) for a book language."""
     p = PIECES[lang]
-    san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}])?)[+#]?[!?]*"
+    san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}]|(?<=[18])[{p[:4]}])?)[+#]?[!?]*"
     # a move number is not glued to a square ('e5.h3' is prose); the OCR sometimes drops the spaces ('e62.d4', 'cxd4f69.exf6', 'Ff40-012.0-0'),
     # so a move may be followed directly by a number, another pawn move, a castling or a prose word ('Ce2Opération')
-    tok = re.compile(rf"(?P<num>(?<![a-h])\d+\.(?:\.\.)?|(?<![a-h])\d+\.\.\.)|(?P<move>{san})(?!(?!\d+\.|[a-h][1-8]|0-0|O-O|[A-Z][a-zé]{{2,}})[A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
+    tok = re.compile(rf"(?P<num>(?<![a-h])\d+\.(?:\.\.)?|(?<![a-h])\d+\.\.\.)|(?P<move>{san})(?!(?!\d+\.|[a-h][1-8]|0-0|O-O|[A-Z]['’]?[a-zé]{{2,}})[A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
     return tok, str.maketrans(p, "NBRQK"), p
 
 
@@ -113,6 +113,28 @@ def _repair(board, san, toks, idx, table, look=12):
     return best[0] if len(best) == 1 else None
 
 
+def _skipped_move(board, san, toks, idx, number, table, look=12, need=5):
+    """The book (or the OCR) skips one move: '30.Tf2 a6 ... 31...Cc8' has no White 31st move. Returns (skipped move, the printed move) when
+    exactly one legal move of the side to play makes the printed move and at least `need - 1` of the moves after it legal; otherwise None."""
+    n, black = int(number.rstrip(".")), number.endswith("...")
+    if not ((black and board.turn == chess.WHITE and n == board.fullmove_number) or (not black and board.turn == chess.BLACK and n == board.fullmove_number + 1)):
+        return None
+    found = []
+    for first in board.legal_moves:
+        b = board.copy()
+        b.push(first)
+        try:
+            mv = b.parse_san(san)
+        except ValueError:
+            continue
+        found.append((1 + _run_length(b, mv, toks, idx, table, look, True), first, mv))
+    if not found:
+        return None
+    top = max(sc for sc, _, _ in found)
+    best = [(first, mv) for sc, first, mv in found if sc == top]
+    return best[0] if top >= need and len(best) == 1 else None
+
+
 def tokens(text, lang="fr"):
     """[(kind, value, start, end)] in order; prose between tokens is recorded as ('prose', '')."""
     out, pos = [], 0
@@ -125,11 +147,33 @@ def tokens(text, lang="fr"):
     return out
 
 
-def replay(text, start=None, lang="fr", anchors=(), own=0):
+def _stray_close(toks, reach=60):
+    """Index of the ']' the OCR/book put too early: a closing bracket with nothing open (a stray ']') means the last variation that closed
+    just before it (at most `reach` tokens away) goes on up to there. None when there is no stray bracket."""
+    depth, last_top = 0, None
+    for k, (kind, *_) in enumerate(toks):
+        if kind == "open":
+            depth += 1
+        elif kind == "close":
+            if depth == 0:
+                return last_top if last_top is not None and k - last_top <= reach else None
+            depth -= 1
+            if depth == 0:
+                last_top = k
+    return None
+
+
+def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
     """[{san, fen, ok, depth, ply, raw}] ; mainline + variations. Stops a line at its first illegal move.
     `anchors`: piece placements of diagrams. A move number that does not follow the board (or follows a dead line) may restart
     the game from one of them (the first `own` are the page's own diagrams, preferred on ties; side to move and move number come from the printed number) when that makes the next moves legal."""
-    toks = tokens(text, lang)
+    if toks is None:
+        toks = tokens(text, lang)
+        if (c := _stray_close(toks)) is not None:  # the variation before the stray ']' probably goes on: keep that reading when it is better
+            alt = replay(text, start, lang, anchors, own, toks[:c] + [("prose", "", toks[c][2], toks[c][3])] + toks[c + 1:])
+            plain = replay(text, start, lang, anchors, own, toks)
+            bad = lambda ms: sum(not m["ok"] for m in ms)
+            return alt if (bad(alt), -len(alt)) < (bad(plain), -len(plain)) else plain
     _, table, pieces = _lang(lang)
     board, before_last = chess.Board(start) if start else chess.Board(), None
     stack, moves = [], []
@@ -218,7 +262,10 @@ def replay(text, start=None, lang="fr", anchors=(), own=0):
                 start = toks[idx - 1][2]
             # a bare move (no number in its run) is only a Black reply printed without its number ('13.b4 ... Ce4'): White's moves always carry
             # theirs, so a bare White-looking move is prose ('répliquer à Db3 par Db6')
-            if dead or not (run_ok.get(idx) or (plausible_lone(val, pieces) and board.turn == chess.BLACK)):
+            # a bare pawn move is believed when a variation of that very Black move follows it: 'b4 ( 19...bxa4 ... )'
+            alt = (board.turn == chess.BLACK and idx + 2 < len(toks) and toks[idx + 1][0] == "open" and toks[idx + 2][0] == "num"
+                   and toks[idx + 2][1].endswith("...") and int(toks[idx + 2][1].rstrip(".")) == board.fullmove_number)
+            if dead or not (run_ok.get(idx) or (plausible_lone(val, pieces) and board.turn == chess.BLACK) or alt):
                 continue
             mv = None
             try:
@@ -244,6 +291,12 @@ def replay(text, start=None, lang="fr", anchors=(), own=0):
                         mv, board, before_last, dead = ob.parse_san(to_san(val, table)), ob.copy(), obl, od
                         del stack[lvl:]
                         break
+            inferred = None
+            if mv is None and not dead and idx > 0 and toks[idx - 1][0] == "num":
+                if skipped := _skipped_move(board, to_san(val, table), toks, idx, toks[idx - 1][1], table):
+                    inferred = board.san(skipped[0])
+                    board.push(skipped[0])  # not printed in the book: played silently so that the position after the printed move is right
+                    mv = skipped[1]
             fixed = False
             if mv is None and not dead:
                 mv = _repair(board, to_san(val, table), toks, idx, table)
@@ -273,7 +326,7 @@ def replay(text, start=None, lang="fr", anchors=(), own=0):
             san = board.san(mv); board.push(mv)
             before_last = prev
             closed = None
-            moves.append({"raw": val, "san": san, "fen": board.fen(), "ok": True, "depth": len(stack), "ply": board.ply(), "span": [start, end], "uci": mv.uci(), **({"fixed": True} if fixed else {})})
+            moves.append({"raw": val, "san": san, "fen": board.fen(), "ok": True, "depth": len(stack), "ply": board.ply(), "span": [start, end], "uci": mv.uci(), **({"fixed": True} if fixed else {}), **({"after_skipped": inferred} if inferred else {})})
     return moves
 
 
@@ -294,6 +347,24 @@ def selfcheck():
     assert ok(t)[-3:] == ["Ne2", "Nb6", "Ned4"]  # a prose word glued to a move by the OCR ('Ce2Opération') does not hide the move
     t = "1.e4 e6 2.d4 d5 3.Cc3 Cf6 4.e5 Cf7 5.f4 c5 6.Cf3 Cc6 7.Fe3 a6"  # the OCR dropped a letter: 'Cf7' is 'Cfd7' (Cf7 is illegal, the next moves prove it)
     assert ok(t)[:12] == "e4 e6 d4 d5 Nc3 Nf6 e5 Nfd7 f4 c5 Nf3 Nc6".split() and len(ok(t)) == 14
+    t = "1.e4 e5 2...Cc6 3.Fb5 a6 4.Fa4 Cf6 5.Cxe5 Fe7 6.0-0"  # the book omits White's 2nd move: only 2.Cf3 lets 5.Cxe5 be legal
+    assert ok(t) == "e4 e5 Nc6 Bb5 a6 Ba4 Nf6 Nxe5 Be7 O-O".split() and replay(t)[2]["ply"] == 4
+    t = "1.e4 e5 2...Cc6 3.Fb5 a6 4.Fa4 Cf6 5.0-0 Fe7 6.Te1"  # several White moves fit (Cf3, Ce2, Ch3): no guess
+    assert ok(t) == ["e4", "e5"]
+    t = "1.e4 e5 2...Cc6 3.Fb5"  # too little to tell which move is missing: no guess
+    assert ok(t) == ["e4", "e5"]
+    t = "1.e4 e5 2.Cf3L'attaque est claire. 2...Cc6 3.Fb5"  # a glued word that starts with an elision ('L'attaque') hides nothing
+    assert ok(t) == "e4 e5 Nf3 Nc6 Bb5".split()
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 [3.Fc4!?] Ce coup est plus solide. Cf6 4.d3 Fc5 5.0-0 d6] 3...a6 4.Fa4"  # ']' too early, then a stray ']'
+    r = replay(t)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 0] == "e4 e5 Nf3 Nc6 Bb5 a6 Ba4".split()
+    t = "1.h4 g5 2.hxg5 h6 3.gxh6 Cf6 4.h7 Tg8 5.hxg8D Cxg8"  # promotion written without '=' ('hxg8D')
+    assert ok(t)[-2:] == ["hxg8=Q", "Nxg8"] and len(ok(t)) == 10
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 Le clou. a6 ( 3...Cf6 4.0-0 ) 4.Fa4"  # a bare pawn move followed by a variation of that very move IS a move
+    r = replay(t)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 0] == "e4 e5 Nf3 Nc6 Bb5 a6 Ba4".split()
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 Le coup a6 est possible. 3...Cf6"  # a pawn square in prose is still prose
+    assert [m["san"] for m in replay(t) if m["ok"]][-1] == "Nf6"
     print("moves.py self-check ok")
 
 
