@@ -7,6 +7,8 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
 ### Interface
 - Interface languages: English, French and Spanish in the reader and in the graphical front end. They follow the system language
   (English when it is none of the three); a language menu allows a manual choice (Automatic, English, Français, Español), remembered
