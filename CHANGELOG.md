@@ -21,6 +21,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 - Diagrams: when both models place the same pieces on the same squares and differ only in colours, the fine-tuned reading is kept.
 - Moves: a move the book omits (`31...Cc8` without White's 31st) is recovered when exactly one legal move makes the rest of the line legal; a glued word with an elision (`36.hxg6L'ouverture`), a promotion written without `=` (`gxf8D+`), a bare pawn move followed by its own variation (`b4 ( 19...bxa4 … )`) and a `]` closed too early followed by a stray `]` are now read correctly.
 - Pages: a text block the main OCR cut short (a column reduced to its first sentence) is refilled from the classic OCR text inside its box.
+- Diagrams: when both kings are clearly nearer to the pawns of the other colour, their colours are swapped (the readers mix them up on small prints).
 - Diagrams: when the GPU is full (the OCR model keeps most of it), the diagram models load on the CPU instead of failing with "CUDA out of memory".
 
 ## [0.1.1] - 2026-11-18

@@ -33,7 +33,7 @@ from moves import replay, tokens
 from trait import dot_turn
 from wordboxes import Classic, fill_sparse, move_rects_ocr, move_rects_textlayer, sparse_blocks
 from orientation import orient
-from plausibility import colors_only_differ, issues
+from plausibility import colors_only_differ, issues, repair_king_colors
 
 MAX_EMBEDDED_PX = 40_000_000  # an embedded image bigger than this (width x height) is not extracted: PDFs can be hostile
 MAX_EMBEDDED_PER_PAGE = 60
@@ -361,6 +361,7 @@ def _read_diagram(model, im, known=frozenset()):
         if pool and (issues(best[0]) or max(r[1] for r in pool) > best[1]):
             hit = max(pool, key=lambda r: r[1])
     raw, conf = hit or best
+    raw = repair_king_colors(raw)  # before the orientation: it compares the armies
     oriented, flipped, sure = orient(raw)
     return oriented, conf, flipped, sure, raw
 
