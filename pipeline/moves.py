@@ -223,7 +223,9 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
     for idx, (kind, val, start, end) in enumerate(toks):
         if anchors and kind == "num" and not stack and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             n, black = int(val.rstrip(".")), val.endswith("...")
-            if dead or (board.fullmove_number, board.turn == chess.BLACK) != (n, black) or not _legal(board, toks[idx + 1][1], table):
+            mismatch = dead or (board.fullmove_number, board.turn == chess.BLACK) != (n, black) or not _legal(board, toks[idx + 1][1], table)
+            # a move the book omits explains a mismatch of one ply (recovered when the move is read): no other start position is needed
+            if mismatch and (dead or not _skipped_move(board, to_san(toks[idx + 1][1], table), toks, idx + 1, val, table)):
                 cur = 0 if dead else lookahead(board, idx)
                 found, found_idx = [], []  # (score, board) of every candidate start that beats the current board, and its anchor index
                 starts = ([chess.STARTING_BOARD_FEN] if n == 1 and not black else [])
@@ -381,6 +383,9 @@ def selfcheck():
     assert [m["san"] for m in replay("3.Td3 Re8", None, "fr", [rook]) if m["ok"]] == ["Rd3+", "Ke8"]  # start of a page: one legal move is enough
     t = "1.e4 e5 2.Cf3 Cc6 3.Td3 Rd7"  # in the middle of a page a single legal move in some diagram does not move the game there
     assert [m["san"] for m in replay(t, None, "fr", [rook]) if m["ok"]] == ["e4", "e5", "Nf3", "Nc6"]
+    wrong = "rnbqkbnr/pppp1ppp/8/4p3/4P3/2N5/PPPP1PPP/R1BQKBNR"  # a diagram where the 5 moves that follow are legal up to 5.Cxe5: not the game
+    t = "1.e4 e5 2...Cc6 3.Fb5 a6 4.Fa4 Cf6 5.Cxe5 Fe7 6.0-0"  # the omitted 2.Cf3 is recovered before any other start position is tried
+    assert [m["san"] for m in replay(t, None, "fr", [wrong]) if m["ok"]][-3:] == ["Nxe5", "Be7", "O-O"]
     print("moves.py self-check ok")
 
 
