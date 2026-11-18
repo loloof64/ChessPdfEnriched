@@ -31,7 +31,7 @@ from autocrop import candidate_boxes, find_board
 from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
 from moves import replay, tokens
 from trait import dot_turn
-from wordboxes import Classic, add_orphans, fill_sparse, move_rects_ocr, move_rects_textlayer
+from wordboxes import Classic, add_orphans, fill_moves, fill_sparse, move_rects_ocr, move_rects_textlayer
 from orientation import orient
 from plausibility import colors_only_differ, issues, repair_king_colors
 
@@ -389,6 +389,12 @@ def _read_diagram(model, im, known=frozenset()):
     return oriented, conf, flipped, sure, raw
 
 
+def move_pairs(text, lang):
+    """How many move numbers directly followed by a move the text holds."""
+    toks = tokens(text, lang)
+    return sum(t[0] == "num" and nxt[0] == "move" for t, nxt in zip(toks, toks[1:]))
+
+
 def has_moves(text, lang):
     """True when the text has a move number directly followed by a move ('12.Cf3'), not only a numbered list ('1. Les Noirs')."""
     toks = tokens(text, lang)
@@ -468,6 +474,7 @@ def main():
         if how != "text layer":  # the main OCR drops text now and then: a column cut short, a line of moves with no block at all. The classic OCR
             lines = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json")  # (cached, also used later to locate the moves) has them
             fill_sparse(blocks[n], lines)
+            fill_moves(blocks[n], lines, lambda t: move_pairs(t, a.lang))
             add_orphans(blocks[n], lines, lambda t: has_moves(t, a.lang))
         blocks[n] = dedupe(blocks[n])
 

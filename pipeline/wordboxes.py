@@ -87,6 +87,20 @@ def fill_sparse(blocks, lines, gain=2.0):
     return blocks
 
 
+def fill_moves(blocks, lines, pairs, labels=("text", "figure_title", "vision_footnote", "paragraph_title")):
+    """A block that holds fewer numbered moves (`pairs(text)`) than the classic OCR reads inside its box takes the classic text and becomes a
+    text block: the main OCR sometimes cuts the line of moves of a column or labels it a 'figure_title' (a caption), which is not book text."""
+    for b in blocks:
+        if b["block_label"] in labels:
+            new = block_stream(lines, b["block_bbox"])[0].strip()
+            if pairs(new) > pairs(b["block_content"]):
+                b["block_content"] = new
+                b["block_label"] = "text" if b["block_label"] != "paragraph_title" else b["block_label"]
+            if b["block_label"] in ("figure_title", "vision_footnote") and pairs(b["block_content"]) > 0:
+                b["block_label"] = "text"  # book text, whatever the OCR called it (a caption under a diagram that continues the game)
+    return blocks
+
+
 def add_orphans(blocks, lines, has_moves):
     """Add as a text block each classic-OCR line that lies inside no block of the main OCR and holds moves ('31.g4' printed above a
     diagram that the main OCR skipped). It goes before the text block under it in its column (reading order), else at the end."""
@@ -185,6 +199,23 @@ def selfcheck():
     assert [b["block_content"] for b in page] == ["30.Tf2 a6", "", "31.g4", "Après avoir repoussé. 31...Cc8"], [b["block_content"] for b in page]
     add_orphans(page, lines, mv)  # idempotent: the new block now covers its line
     assert len(page) == 4
+    # a block with fewer moves than the classic OCR reads in its box takes that text and counts as text (a 'figure_title' caption holding moves)
+    pairs = lambda t: len(re.findall(r"\d+\.+\s*[A-Za-z]", t))
+    cap = {"block_label": "figure_title", "block_bbox": [800, 700, 1400, 840], "block_content": "Pas question de bouger le pion e3."}
+    chart = {"block_label": "chart", "block_bbox": [1000, 390, 1300, 680], "block_content": ""}
+    same = {"block_label": "text", "block_bbox": [100, 100, 700, 300], "block_content": "1.e4 e5 2.Cf3"}
+    page = [chart, cap, same]
+    lines = [{"pieces": [("Pas question de bouger le pion e3.", [810.0, 705.0, 1300.0, 725.0])]},
+             {"pieces": [('"d". 56...fxe3 57.fxe3 Fg4 58.Rc7', [810.0, 760.0, 1300.0, 780.0])]},
+             {"pieces": [("1.e4 e5 2.Cf3 Cc6", [110.0, 110.0, 600.0, 130.0])]},  # same number of numbered moves as the block: left alone
+             {"pieces": [("56 57 58 coordinates", [1010.0, 420.0, 1200.0, 440.0])]}]  # inside a chart: never text
+    fill_moves(page, lines, pairs)
+    assert cap["block_label"] == "text" and "56...fxe3 57.fxe3 Fg4 58.Rc7" in cap["block_content"] and chart["block_content"] == ""
+    assert same["block_content"] == "1.e4 e5 2.Cf3" and same["block_label"] == "text"
+    cap2 = {"block_label": "figure_title", "block_bbox": [800, 900, 1400, 1000], "block_content": 'Idée. "d". 56...fxe3 57.fxe3 Fg4'}  # moves already read, wrong label
+    note = {"block_label": "vision_footnote", "block_bbox": [800, 1100, 1400, 1200], "block_content": "Avec abandon noir."}
+    fill_moves([cap2, note], [], pairs)
+    assert cap2["block_label"] == "text" and note["block_label"] == "vision_footnote"  # a caption without moves stays a caption
     print("wordboxes self-check ok")
 
 
