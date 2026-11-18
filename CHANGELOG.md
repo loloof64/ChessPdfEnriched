@@ -7,6 +7,10 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-18
+
+Mostly fixes found by reading more books (diagram orientation, side to move, moves lost or marked illegal). Books made with an earlier version keep their old readings: make them again to get the fixes.
+
 ### Reader
 - The board next to the page shows its coordinates (a-h, 1-8).
 
