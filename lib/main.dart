@@ -12,12 +12,14 @@ import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'l10n/app_localizations.dart';
+import 'ui_language.dart';
 
 /// Minimal .chessbook reader: text on the left with clickable moves, board on the right.
 /// Book to open at start: first program argument, else CHESSBOOK; otherwise the "Ouvrir" screen.
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
+  WidgetsFlutterBinding.ensureInitialized();
   final path = args.firstOrNull ?? io.Platform.environment['CHESSBOOK'];
-  runApp(ReaderApp(initial: path == null ? null : Book.load(path)));
+  runApp(ReaderApp(initial: path == null ? null : Book.load(path), initialLocale: await loadUiLanguage()));
 }
 
 class Book {
@@ -102,9 +104,10 @@ class Book {
 }
 
 class ReaderApp extends StatefulWidget {
-  const ReaderApp({super.key, this.initial});
+  const ReaderApp({super.key, this.initial, this.initialLocale});
 
   final Book? initial;
+  final Locale? initialLocale; // saved manual language choice (null = Automatic)
 
   @override
   State<ReaderApp> createState() => _ReaderAppState();
@@ -113,6 +116,12 @@ class ReaderApp extends StatefulWidget {
 class _ReaderAppState extends State<ReaderApp> {
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   late Book? book = widget.initial;
+  late Locale? uiLocale = widget.initialLocale;
+
+  void _setLocale(Locale? l) {
+    setState(() => uiLocale = l);
+    saveUiLanguage(l);
+  }
 
   Future<void> _open() async {
     try {
@@ -135,9 +144,12 @@ class _ReaderAppState extends State<ReaderApp> {
         // material_ui brings its own standard texts (flutter_localizations' delegates target the old Material and would not be found)
         localizationsDelegates: [AppLocalizations.delegate, ...GlobalMaterialLocalizations.delegates],
         supportedLocales: AppLocalizations.supportedLocales,
+        locale: uiLocale,
+        localeListResolutionCallback: (locales, _) => resolveLocale(null, locales ?? const []),
         theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown)),
         home: book == null
             ? Scaffold(
+                appBar: AppBar(actions: [LanguageMenu(current: uiLocale, onChanged: _setLocale)]),
                 body: Center(
                   child: FilledButton.icon(
                     onPressed: _open,
@@ -146,15 +158,17 @@ class _ReaderAppState extends State<ReaderApp> {
                   ),
                 ),
               )
-            : ReaderPage(key: ValueKey(book), book: book!, onOpen: _open),
+            : ReaderPage(key: ValueKey(book), book: book!, onOpen: _open, uiLocale: uiLocale, onLanguage: _setLocale),
       );
 }
 
 class ReaderPage extends StatefulWidget {
-  const ReaderPage({super.key, required this.book, required this.onOpen});
+  const ReaderPage({super.key, required this.book, required this.onOpen, required this.uiLocale, required this.onLanguage});
 
   final Book book;
   final VoidCallback onOpen;
+  final Locale? uiLocale; // manual language choice (null = Automatic)
+  final ValueChanged<Locale?> onLanguage;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -432,6 +446,7 @@ class _ReaderPageState extends State<ReaderPage> {
         title: Text(widget.book.title),
         actions: [
           IconButton(icon: const Icon(Icons.folder_open), tooltip: l.openBook, onPressed: widget.onOpen),
+          LanguageMenu(current: widget.uiLocale, onChanged: widget.onLanguage),
           IconButton(icon: const Icon(Icons.chevron_left), tooltip: l.previousPage, onPressed: page > _numbers.first ? () => _step(-1) : null),
           SizedBox(
             width: 56,
