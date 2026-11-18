@@ -163,17 +163,17 @@ flutter pub get
 flutter run -d linux
 ```
 
-- **Open a book**: "Ouvrir un livre" button (or the folder icon at the top) and choose a `.chessbook` file. You can also pass the
+- **Open a book**: "Open a book" button (or the folder icon at the top) and choose a `.chessbook` file. You can also pass the
   path: `flutter run -d linux --dart-entrypoint-args path.chessbook`, or the `CHESSBOOK=path.chessbook` variable.
 - **Read**: by default the **facsimile**: the original page as is (the PDF image), with clickable zones on the moves and the
   diagrams. Clicking a move shows the position, with the last-move arrow and its number (`3. Cf3`, `2... d5`). A move circled in
   red is illegal. The page/image icon in the top bar switches to the **rebuilt text** (text blocks laid out again, useful if the
   book has no page images, option `--no-scans`).
 - **Pages**: previous and next buttons, or type a number in the field and confirm.
-- **Zoom**: − and + buttons, or the menu in the middle: "Page entière" (whole page visible), "Largeur de page", or a percentage
+- **Zoom**: − and + buttons, or the menu in the middle: "Whole page", "Page width", or a percentage
   (100 % = real page size; beyond the pane width the page also scrolls horizontally).
-- **Board**: the "Retourner l'échiquier" button flips the view.
-- **Correct a diagram**: right click on the diagram, or the "Corriger ce diagramme" button after selecting it. Drag a piece from the
+- **Board**: the "Flip the board" button flips the view.
+- **Correct a diagram**: right click on the diagram, or the "Correct this diagram" button after selecting it. Drag a piece from the
   palette onto a square, drag it off the board to remove it, then save. The correction is written to `corrections.json` inside the `.chessbook`.
 
 Tests: `flutter test` (the corrections-saving test needs a generated book in `pipeline/work/fab/` and is skipped otherwise).
