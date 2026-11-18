@@ -4,7 +4,7 @@
     .venv/bin/python make_chessbook_gui.py
 
 Pick the PDF, pick where to write the .chessbook, press Start. make_chessbook_cli.py runs as a child process; its progress lines
-drive the two progress bars (current step, whole job)."""
+drive the progress bar of the current step and the overall step counter (step N of M, elapsed time)."""
 import json
 import queue
 import subprocess
@@ -17,8 +17,8 @@ from tkinter import filedialog, messagebox, ttk
 
 HERE = Path(__file__).parent
 SETTINGS = HERE / "work" / "gui_settings.json"  # last folders and language, kept between runs (work/ is ignored by git)
-# steps in the order make_chessbook_cli.py runs them, with their share of the whole job (a rough guess: only the bar's pace depends on it)
-STEPS = [("Reading pages (OCR)", 25), ("Moves from diagrams", 15), ("Locating moves", 20), ("Reading diagrams", 40)]
+# steps in the order make_chessbook_cli.py runs them (their durations differ too much between books for an overall percentage)
+STEPS = ["Reading pages (OCR)", "Moves from diagrams", "Locating moves", "Reading diagrams"]
 
 
 class App(tk.Tk):
@@ -26,7 +26,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("Chess PDF Enriched : make chessbook")
         self.minsize(640, 420)
-        self.proc, self.lines, self.t0 = None, queue.Queue(), 0
+        self.proc, self.lines, self.t0, self.stage = None, queue.Queue(), 0, 0
         self.settings = self.load_settings()
         self.pdf, self.out, self.lang = tk.StringVar(), tk.StringVar(), tk.StringVar(value=self.settings.get("lang", "fr"))
         f = ttk.Frame(self, padding=12)
@@ -46,13 +46,11 @@ class App(tk.Tk):
         self.start.pack(side="left")
         self.stop = ttk.Button(buttons, text="Cancel", command=self.cancel, state="disabled")
         self.stop.pack(side="left", padx=6)
-        self.step_text, self.all_text = tk.StringVar(value="Step"), tk.StringVar(value="Whole job")
+        self.step_text, self.all_text = tk.StringVar(value="Step"), tk.StringVar(value="Overall")
         ttk.Label(f, textvariable=self.step_text).grid(row=4, column=0, columnspan=3, sticky="w")
         self.step_bar = ttk.Progressbar(f, maximum=100)
         self.step_bar.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(0, 6))
-        ttk.Label(f, textvariable=self.all_text).grid(row=6, column=0, columnspan=3, sticky="w")
-        self.all_bar = ttk.Progressbar(f, maximum=100)
-        self.all_bar.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        ttk.Label(f, textvariable=self.all_text).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 6))
         self.log = tk.Text(f, height=8, state="disabled", wrap="word")
         self.log.grid(row=8, column=0, columnspan=3, sticky="nsew")
         f.rowconfigure(8, weight=1)
@@ -109,7 +107,6 @@ class App(tk.Tk):
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")  # a new run starts with an empty log
         self.log.configure(state="disabled")
-        self.all_text.set("Whole job")
         cmd = [sys.executable, str(HERE / "make_chessbook_cli.py"), self.pdf.get(), "-o", self.out.get(), "--lang", self.lang.get(), "--progress-lines"]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=HERE)
         threading.Thread(target=self.read, args=(self.proc,), daemon=True).start()
@@ -117,7 +114,8 @@ class App(tk.Tk):
         self.t0 = time.time()
         self.start.configure(state="disabled")
         self.stop.configure(state="normal")
-        self.step_bar["value"] = self.all_bar["value"] = 0
+        self.step_bar["value"], self.stage = 0, 0
+        self.show_overall()
         self.step_text.set("Starting (loading the models, can take a minute)…")
 
     def read(self, proc):
@@ -130,15 +128,18 @@ class App(tk.Tk):
             self.proc.terminate()
             self.say("Cancelled.")
 
+    def show_overall(self, done=False):
+        elapsed = int(time.time() - self.t0)
+        step = f"step {self.stage} of {len(STEPS)}, " if self.stage and not done else ""
+        self.all_text.set(f"Overall: {step}{elapsed // 60:02d}:{elapsed % 60:02d}")
+
     def progress(self, label, i, n, note):
-        k = next((k for k, (name, _) in enumerate(STEPS) if name == label), None)
+        k = STEPS.index(label) if label in STEPS else None
         frac = i / max(1, n)
         self.step_bar["value"] = 100 * frac
         self.step_text.set(f"{label}: {i}/{n} {note}".strip())
         if k is not None:
-            total = sum(w for _, w in STEPS)
-            done = sum(w for _, w in STEPS[:k]) + STEPS[k][1] * frac
-            self.all_bar["value"] = 100 * done / total
+            self.stage = k + 1
 
     def poll(self):
         try:
@@ -148,13 +149,12 @@ class App(tk.Tk):
                     code = self.proc.wait()
                     self.start.configure(state="normal")
                     self.stop.configure(state="disabled")
-                    elapsed = int(time.time() - self.t0)
                     if code == 0:
-                        self.step_bar["value"] = self.all_bar["value"] = 100
+                        self.step_bar["value"] = 100
                         self.step_text.set("Done")
                     else:
                         self.step_text.set(f"Stopped (exit code {code})")
-                    self.all_text.set(f"Whole job: {elapsed // 60:02d}:{elapsed % 60:02d}")
+                    self.show_overall(done=True)
                 elif line.startswith("@@PROGRESS\t"):
                     _, label, i, n, note = line.split("\t")
                     self.progress(label, int(i), int(n), note)
@@ -163,8 +163,7 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         if self.proc and self.proc.poll() is None:
-            elapsed = int(time.time() - self.t0)
-            self.all_text.set(f"Whole job: {elapsed // 60:02d}:{elapsed % 60:02d}")
+            self.show_overall()
         self.after(100, self.poll)
 
 

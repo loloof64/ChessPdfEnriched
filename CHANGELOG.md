@@ -10,6 +10,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 ### Pipeline
 - Diagrams: the double reading now triggers below 0.99 confidence (was 0.975), except on images with arrows or highlights, where the
   base model invents pieces. Fixes the remaining phantom bishops and queens of the coloured-print book.
+- GUI: the overall progress is shown as "step N of M" with the elapsed time, instead of a percentage bar based on guessed step durations.
 
 ## [0.1.1] - 2026-11-18
 
