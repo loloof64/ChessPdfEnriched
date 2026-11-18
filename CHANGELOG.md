@@ -11,6 +11,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 - The board next to the page shows its coordinates (a-h, 1-8).
 
 ### Pipeline
+- Moves: start positions are scored with the variations too (two diagrams often allow the same main line); an unbracketed alternative (`Si 3.Rh6 ...`) is a variation the book may leave for the main line again, also inside a bracket; a move mentioned again right after being played is no error; an omitted move is recovered also when several candidates lead to the same position.
 - Diagrams: the orientation is read from the printed coordinates (digits 8..1 and letters a..h read by the classic OCR) when they are there, instead of guessing which army is at the bottom; the guess turned 29 of 42 diagrams of an endgame book (White's king and queen above Black's pawn) upside down.
 - Diagrams: the colours of the two kings are checked against the image (black pieces are filled, white ones outlined) when it splits cleanly; the king-colour heuristic no longer overrides a right reading (it swapped the kings of a position where both stand next to the enemy pawns).
 - Moves: a bare pawn move after commentary (`…Blanches. g6 16.axb5`) is read as Black's reply when the next White move is legal after it; in the middle of a page the game only restarts from another position when at least 3 moves are legal there.

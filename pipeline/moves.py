@@ -113,6 +113,25 @@ def _repair(board, san, toks, idx, table, look=12):
     return best[0] if len(best) == 1 else None
 
 
+def _after_moves(board, toks, idx, table, n=2):
+    """FEN of the pieces after the next `n` main-line moves following token idx (prose, numbers and bracketed variations skipped)."""
+    b, depth, played = board.copy(), 0, 0
+    for kind, val, *_ in toks[idx + 1:]:
+        if kind in ("open", "close"):
+            depth += 1 if kind == "open" else -1
+            if depth < 0:
+                break
+        elif kind == "move" and not depth:
+            try:
+                b.push(b.parse_san(to_san(val, table)))
+            except ValueError:
+                break
+            played += 1
+            if played >= n:
+                break
+    return b.board_fen()
+
+
 def _skipped_move(board, san, toks, idx, number, table, look=12, need=5):
     """The book (or the OCR) skips one move: '30.Tf2 a6 ... 31...Cc8' has no White 31st move. Returns (skipped move, the printed move) when
     exactly one legal move of the side to play makes the printed move and at least `need - 1` of the moves after it legal; otherwise None."""
@@ -127,12 +146,14 @@ def _skipped_move(board, san, toks, idx, number, table, look=12, need=5):
             mv = b.parse_san(san)
         except ValueError:
             continue
-        found.append((1 + _run_length(b, mv, toks, idx, table, look, True), first, mv))
+        score = 1 + _run_length(b, mv, toks, idx, table, look, True)
+        b.push(mv)
+        found.append((score, first, mv, _after_moves(b, toks, idx, table)))  # (candidates that reach the same position a move or two later are equivalent)
     if not found:
         return None
-    top = max(sc for sc, _, _ in found)
-    best = [(first, mv) for sc, first, mv in found if sc == top]
-    return best[0] if top >= need and len(best) == 1 else None
+    top = max(sc for sc, *_ in found)
+    best = [(first, mv, after) for sc, first, mv, after in found if sc == top]
+    return (best[0][0], best[0][1]) if top >= need and len({after for *_, after in best}) == 1 else None
 
 
 def tokens(text, lang="fr"):
@@ -192,47 +213,46 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
             run_ok[k] = seen
         i = j
     dead = False
+    implicit = set()  # indices of the `stack` entries that are variations never opened by a bracket ('Si 3.Rh6 ...'): they do not hide a new game
     closed = None  # (board of the variation just closed, index of its ']'): the OCR sometimes closes a variation too early
-    def lookahead(b, idx, cap=8):
-        """How many of the moves after token idx are legal in a row from board b (prose between them is skipped)."""
-        b, n = b.copy(), 0
-        depth = 0
-        for k in range(idx + 1, len(toks)):
-            if toks[k][0] == "open":
-                depth += 1  # a variation does not continue the game: skip its content
-            elif toks[k][0] == "close":
-                if depth == 0:
-                    break
-                depth -= 1
-            if toks[k][0] != "move" or depth:
-                continue
-            numbered = run_ok.get(k)
-            if not (numbered or (plausible_lone(toks[k][1], pieces) and b.turn == chess.BLACK)):
-                continue  # prose mention, as in the main loop
-            try:
-                b.push(b.parse_san(to_san(toks[k][1], table)))
-            except ValueError:
-                if numbered:
-                    break
-                continue
-            n += 1
-            if n >= cap:
-                break
-        return n
+    def future(b, idx):
+        """Evidence that the game goes on from board b at token idx: the legal moves of the next tokens up to the first illegal one of the main
+        line, variations included (a variation often tells two candidate start positions apart: the main line alone is the same for both)."""
+        score = 0
+        for m in replay("", b.fen(), lang, toks=toks[idx:idx + 80]):
+            if m["ok"]:
+                score += 1
+            elif m["depth"] == 0:
+                break  # the end of this game: what follows (another position's solution) says nothing about this start
+            else:
+                score -= 1  # an illegal move inside a variation weighs against this start but does not end the count
+        return score
 
     for idx, (kind, val, start, end) in enumerate(toks):
-        if anchors and kind == "num" and not stack and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
+        implicit = {i for i in implicit if i < len(stack)}  # entries only leave the stack from the top
+        if kind == "num" and stack and len(stack) - 1 in implicit and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
+            # inside an unbracketed alternative: a numbered move that the MAIN line expects and allows brings the book back to it
+            ob, obl, od = stack[-1]
+            if (ob.fullmove_number, ob.turn == chess.BLACK) == (int(val.rstrip(".")), val.endswith("...")) and _legal(ob, toks[idx + 1][1], table):
+                # (when the alternative line accepts that number too, the one the text goes on in better wins; a tie goes back to the main line)
+                alt_ok = (board.fullmove_number, board.turn == chess.BLACK) == (int(val.rstrip(".")), val.endswith("...")) and _legal(board, toks[idx + 1][1], table)
+                if not alt_ok or future(ob, idx) >= future(board, idx):
+                    board, before_last, dead = ob.copy(), obl, od
+                    stack.pop()
+        if anchors and kind == "num" and all(i in implicit for i in range(len(stack))) and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             n, black = int(val.rstrip(".")), val.endswith("...")
             mismatch = dead or (board.fullmove_number, board.turn == chess.BLACK) != (n, black) or not _legal(board, toks[idx + 1][1], table)
             # a move the book omits explains a mismatch of one ply (recovered when the move is read): no other start position is needed
-            if mismatch and (dead or not _skipped_move(board, to_san(toks[idx + 1][1], table), toks, idx + 1, val, table)):
-                cur = 0 if dead else lookahead(board, idx)
+            alt_of_last = (before_last is not None and not dead and (before_last.fullmove_number, before_last.turn == chess.BLACK) == (n, black)
+                           and _legal(before_last, toks[idx + 1][1], table) and not (moves and moves[-1]["raw"].rstrip("!?") == toks[idx + 1][1].rstrip("!?")))  # 'Si 3.Rh6': an alternative to the move just played
+            if mismatch and not alt_of_last and (dead or not _skipped_move(board, to_san(toks[idx + 1][1], table), toks, idx + 1, val, table)):
+                cur = 0 if dead else future(board, idx)
                 found, found_idx = [], []  # (score, board) of every candidate start that beats the current board, and its anchor index
                 starts = ([chess.STARTING_BOARD_FEN] if n == 1 and not black else [])
                 for ai, fen in enumerate(starts + list(anchors)):
                     cand = chess.Board(fen + (" b" if black else " w") + f" KQkq - 0 {n}")
                     cand.clean_castling_rights()
-                    if (score := lookahead(cand, idx)) > cur:
+                    if (score := future(cand, idx)) > cur:
                         found.append((score, cand)); found_idx.append(ai - len(starts))
                 if found:
                     top = max(sc for sc, _ in found)
@@ -243,21 +263,23 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                     if top >= (3 if played else 2) or (not played and (len(tops) == 1 or sum(found_idx[i] < own for i in tops) == 1)):  # allows 1-2 moves
                         if top < 2 and len(tops) > 1:
                             best = next(found[i][1] for i in tops if found_idx[i] < own)
-                        board, before_last, dead, stack = best, None, False, []
+                        board, before_last, dead, stack, implicit = best, None, False, [], set()
         if kind == "num" and dead and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             # after an illegal move (often an alternative given in prose without brackets: 'Si 24.Fxd5 ...') resume at the next move
             # number that is exactly the one the board expects and whose move is legal
             n, black = int(val.rstrip(".")), val.endswith("...")
             if n == board.fullmove_number and black == (board.turn == chess.BLACK) and _legal(board, toks[idx + 1][1], table):
                 dead = False
-        if kind == "num" and val == "1." and not stack and board.ply() > 0 and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
-            board, before_last, dead = chess.Board(), None, False  # "1." after moves have been played: a new game starts here
+        if kind == "num" and val == "1." and all(i in implicit for i in range(len(stack))) and board.ply() > 0 and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
+            board, before_last, dead, stack, implicit = chess.Board(), None, False, [], set()  # "1." after moves have been played: a new game starts here
         elif kind == "open":
             stack.append((board, before_last, dead)); board = (before_last or board).copy(); dead = False; branch = board.copy()
         elif kind == "semi" and stack:  # sibling variation: restart from the same branch point
             board = stack[-1][1].copy() if stack[-1][1] else board; dead = False
         elif kind == "close" and stack:
             closed = (board.copy(), idx)
+            while len(stack) > 1 and len(stack) - 1 in implicit:  # the bracket ends the unbracketed alternatives still open inside it
+                stack.pop()
             board, before_last, dead = stack.pop()
         elif kind == "move":
             # a move number glued to the move ('23...Fxd5') is part of what the book prints in bold: include it in the span
@@ -303,6 +325,15 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                         mv, board, before_last, dead = ob.parse_san(to_san(val, table)), ob.copy(), obl, od
                         del stack[lvl:]
                         break
+            if mv is None and not dead and before_last is not None and idx > 0 and toks[idx - 1][0] == "num":
+                n_, blk_ = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
+                if ((before_last.fullmove_number, before_last.turn == chess.BLACK) == (n_, blk_) and _legal(before_last, val, table)
+                        and not (moves and moves[-1]["raw"].rstrip("!?") == val.rstrip("!?"))):  # (the same move again is a mention)
+                    if not stack or len(stack) - 1 not in implicit:  # an unbracketed alternative to the move just played ('Si 3.Rh6'): a variation
+                        stack.append((board, before_last, dead))  # that the line may leave again for the line it came from
+                        implicit.add(len(stack) - 1)
+                    board = before_last.copy()
+                    mv = board.parse_san(to_san(val, table))
             inferred = None
             if mv is None and not dead and idx > 0 and toks[idx - 1][0] == "num":
                 if skipped := _skipped_move(board, to_san(val, table), toks, idx, toks[idx - 1][1], table):
@@ -313,6 +344,8 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
             if mv is None and not dead:
                 mv = _repair(board, to_san(val, table), toks, idx, table)
                 fixed = mv is not None
+            if mv is None and any(m["ok"] and m["depth"] == len(stack) and m["raw"].rstrip("!?") == val.rstrip("!?") for m in moves[-6:]):
+                continue  # the book mentions again a move it has just given ('3.Rf4 serait une erreur ... 3.Rf4??'): not an illegal move
             if mv is None:
                 # an illegal move that carries its own number, or a piece move / capture inside a numbered sequence, is an error (red,
                 # the line stops). A bare pawn square in prose ('c6 se trouve sous tension') or a lone move-looking word ('...par Th1')
@@ -388,6 +421,23 @@ def selfcheck():
     assert [m["san"] for m in replay(t, None, "fr", [wrong]) if m["ok"]][-3:] == ["Nxe5", "Be7", "O-O"]
     t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 Cf6En échangeant le Fou, les Noirs jouent bien. 4.0-0"  # a glued 2-letter word ('En')
     assert [m["san"] for m in replay(t) if m["ok"]][-2:] == ["Nf6", "O-O"]
+    right, wrong = "Q7/8/8/3K4/8/8/pk6/8", "1K6/8/8/8/1Q6/8/k1p5/8"  # both allow 1.Db7+ Ra1; only the first allows the variation 1...Rc2 2.Dc6+ Rb2
+    t = "1.Db7+ Ra1 Cherche le Pat. [1...Rc2 C'est une autre possibilite. 2.Dc6+ Rb2 3.Db5+ Rc2] 2.Dc6 Rb2"
+    assert all(m["ok"] for m in replay(t, None, "fr", [wrong, right]))  # the start that also makes the variations legal wins the tie
+    t = "1.e4 e5 2.Cf3 Si 2.Cc3 Cf6 3.Fb5"  # an unbracketed alternative to the move just played (same number and colour): from the position before it
+    assert [m["san"] for m in replay(t) if m["ok"]] == "e4 e5 Nf3 Nc3 Nf6 Bb5".split() and all(m["ok"] for m in replay(t))
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 Le coup 3.Fb5?? est annonce comme faible. 3...a6"  # the book repeats a move it has just given: a mention, not an error
+    assert all(m["ok"] for m in replay(t)) and [m["san"] for m in replay(t)][-1] == "a6"
+    t = "1.e4 e5 [1...c5 2.Cf3 Cc6 Si 2...d6 3.d4 cxd4] 2.Cf3"  # an unbracketed alternative INSIDE a variation, closed by the bracket
+    assert all(m["ok"] for m in replay(t)) and [m["san"] for m in replay(t)][-1] == "Nf3"
+    t = "1.e4 e5 [1...c5 2.Cf3 Cc6 Si 2...d6 3.d4 cxd4 3.Fb5 g6] 2.Cf3"  # ... and left for the variation's own line by the next numbered move
+    r = replay(t)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 1][-2:] == ["Bb5", "g6"]
+    t = "1.g7 h3 2.g8D h2 3.Rg6 4.Rf5+ Rf1 [4...Rh1 5.Rg4] 5.Dh8 Rg1 6.Da1+ Rg2 7.Da2+ Rg1 8.Rg4 h1D 9.Rg3"  # Black's 3rd move is omitted: Rg1 or Rg2, the
+    assert all(m["ok"] for m in replay(t, "8/7K/6P1/8/7p/8/8/7k w - - 0 1", "fr"))  # book goes on the same either way (4...Rf1): any of them will do
+    t = "1.e4 e5 2.Cf3 Cc6 Si 2...d6 3.d4 Fg4 4.Fb5 3.Fb5 a6"  # after 'Si 2...d6' the book plays on in THAT line (3.d4 Fg4 is only legal there): both lines accept
+    r = replay(t)  # a number 3, the text that follows decides
+    assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 1] == ["d6", "d4", "Bg4", "Bb5+"] and [m["san"] for m in r][-2:] == ["Bb5", "a6"]
     print("moves.py self-check ok")
 
 
