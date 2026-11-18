@@ -20,7 +20,7 @@ def _lang(lang):
     san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}]|(?<=[18])[{p[:4]}])?)[+#]?[!?]*"
     # a move number is not glued to a square ('e5.h3' is prose); the OCR sometimes drops the spaces ('e62.d4', 'cxd4f69.exf6', 'Ff40-012.0-0'),
     # so a move may be followed directly by a number, another pawn move, a castling or a prose word ('Ce2Opération')
-    tok = re.compile(rf"(?P<num>(?<![a-h])\d+\.(?:\.\.)?|(?<![a-h])\d+\.\.\.)|(?P<move>{san})(?!(?!\d+\.|[a-h][1-8]|0-0|O-O|[A-Z]['’]?[a-zé]{{1,}})[A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
+    tok = re.compile(rf"(?P<num>(?<![a-h])\d+(?:\.\.\.|\.(?!\.)))|(?P<move>{san})(?!(?!\d+\.|[a-h][1-8]|0-0|O-O|[A-Z]['’]?[a-zé]{{1,}})[A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
     return tok, str.maketrans(p, "NBRQK"), p
 
 
@@ -177,34 +177,36 @@ def tokens(text, lang="fr"):
 
 
 def _stray_close(toks, reach=60):
-    """Index of the ']' the OCR/book put too early: a closing bracket with nothing open (a stray ']') means the last variation that closed
-    just before it (at most `reach` tokens away) goes on up to there. None when there is no stray bracket."""
-    depth, last_top = 0, None
-    for k, (kind, *_) in enumerate(toks):
+    """Index of the ']' the OCR/book put too early: a closing bracket with nothing open (a stray ']') means the last variation of the same kind
+    that closed just before it (at most `reach` tokens away) goes on up to there. None when there is no stray bracket."""
+    depth, last_top = 0, {}
+    for k, (kind, val, *_) in enumerate(toks):
         if kind == "open":
             depth += 1
         elif kind == "close":
             if depth == 0:
-                return last_top if last_top is not None and k - last_top <= reach else None
+                c = last_top.get(val)
+                return c if c is not None and k - c <= reach else None
             depth -= 1
             if depth == 0:
-                last_top = k
+                last_top[val] = k
     return None
 
 
-def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
+def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None):
     """[{san, fen, ok, depth, ply, raw}] ; mainline + variations. Stops a line at its first illegal move.
     `anchors`: piece placements of diagrams. A move number that does not follow the board (or follows a dead line) may restart
-    the game from one of them (the first `own` are the page's own diagrams, preferred on ties; side to move and move number come from the printed number) when that makes the next moves legal."""
+    the game from one of them (the first `own` are the page's own diagrams, preferred on ties; side to move and move number come from the printed number) when that makes the next moves legal.
+    `prev`: the position before `start` (a page that begins with a variation of the previous page's last move needs it)."""
     if toks is None:
         toks = tokens(text, lang)
         if (c := _stray_close(toks)) is not None:  # the variation before the stray ']' probably goes on: keep that reading when it is better
-            alt = replay(text, start, lang, anchors, own, toks[:c] + [("prose", "", toks[c][2], toks[c][3])] + toks[c + 1:])
-            plain = replay(text, start, lang, anchors, own, toks)
+            alt = replay(text, start, lang, anchors, own, toks[:c] + [("prose", "", toks[c][2], toks[c][3])] + toks[c + 1:], prev)
+            plain = replay(text, start, lang, anchors, own, toks, prev)
             bad = lambda ms: sum(not m["ok"] for m in ms)
             return alt if (bad(alt), -len(alt)) < (bad(plain), -len(plain)) else plain
     _, table, pieces = _lang(lang)
-    board, before_last = chess.Board(start) if start else chess.Board(), None
+    board, before_last = chess.Board(start) if start else chess.Board(), chess.Board(prev) if prev else None
     stack, moves = [], []
     # runs of tokens without prose between them: a run is trusted if it holds a move number
     i = 0
@@ -403,14 +405,34 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
             if not run_ok.get(idx):
                 # a bare Black reply must be followed by the number of a White move ('Cg4' in a sentence, then '13...b6', is prose)
                 # (the next number of this line: what lies inside brackets is skipped)
-                depth, nxt = 0, None
-                for t in toks[idx + 1:]:
+                depth, nxt, mention = 0, None, None  # (indices into toks)
+                for k in range(idx + 1, len(toks)):
+                    t = toks[k]
                     depth += (t[0] == "open") - (t[0] == "close")
                     if depth < 0:
                         break
                     if t[0] == "num" and depth == 0:
-                        nxt = t
+                        if t[1].endswith("...") and int(t[1].rstrip(".")) == board.fullmove_number and mention is None:
+                            mention = k  # maybe a mention of another Black move at this very number ('... contrairement à 12...e5.'), maybe the real move
+                            continue
+                        nxt = k
                         break
+                if mention is not None and nxt is not None:
+                    # the bare move is believed over the numbered one only when the next White move is legal after it and not after the numbered one
+                    def follows(first):
+                        b = board.copy()
+                        try:
+                            b.push(first)
+                        except ValueError:
+                            return False
+                        return nxt + 1 < len(toks) and toks[nxt + 1][0] == "move" and _legal(b, toks[nxt + 1][1], table)
+                    try:
+                        other = board.parse_san(to_san(toks[mention + 1][1], table)) if toks[mention + 1][0] == "move" else None
+                    except ValueError:
+                        other = None
+                    if not (follows(mv) and not (other and follows(other))):
+                        nxt = mention
+                nxt = toks[nxt if nxt is not None else mention] if (nxt is not None or mention is not None) else None
                 if nxt and nxt[1].endswith("...") != (board.turn == chess.WHITE):
                     continue
             prev = board.copy()
@@ -442,6 +464,10 @@ def selfcheck():
     t = "1.Ta8# Le seul coup. Exercice suivant : 1.Rf1 Rf7 2.a4 Re7 3.a5 Rd7 4.a6"
     r = replay(t, "6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "fr", ["4k3/8/8/8/8/8/PPP5/4K3"], own=1)
     assert all(m["ok"] for m in r) and [m["san"] for m in r][-1] == "a6" and len(r) == 8
+    tk = tokens("[1.e4 e5] 2.Cf3 (2.d4 d5) 2...Cc6 3.Fb5]")  # the stray ']' goes with the earlier ']' of the same kind, not with the ')' in between
+    assert tk[_stray_close(tk)][1] == "]"
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Cf6 [4...Fc5 car 4..Cxe4 ne marche pas 5.O-O] 5.O-O"  # '4..Cxe4': a mention, not the White move 4 followed by Cxe4
+    assert all(m["ok"] for m in replay(t)) and [m["san"] for m in replay(t) if m["depth"] == 1] == ["Bc5", "O-O"]
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 6.Fd3 Cb4 7.Fe2 6.c3"  # dropped ']': 6.c3 goes back to the main line
     assert ok(t)[-1] == "c3" and [m["depth"] for m in replay(t)][-1] == 0
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.c3 Un coup comme e5! pousse. 5...c5 6.Fd3"  # 'e5!' in prose is not Black's move
