@@ -7,6 +7,9 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+### Reader
+- The board next to the page shows its coordinates (a-h, 1-8).
+
 ### Pipeline
 - Moves: a bare pawn move after commentary (`…Blanches. g6 16.axb5`) is read as Black's reply when the next White move is legal after it; in the middle of a page the game only restarts from another position when at least 3 moves are legal there.
 - Moves: a glued word with a single lowercase letter (`Fe6En échangeant…`) no longer hides the move before it.

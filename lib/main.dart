@@ -538,6 +538,7 @@ class _ReaderPageState extends State<ReaderPage> {
                 orientation: orientation,
                 fen: fen,
                 lastMove: lastMove,
+                settings: const StaticChessboardSettings(enableCoordinates: true),  // a-h and 1-8 along the edges (off by default for a static board)
                 shapes: {
                   if (lastMove is NormalMove)
                     Arrow(color: const Color(0xB3E8A317), orig: (lastMove as NormalMove).from, dest: (lastMove as NormalMove).to),
