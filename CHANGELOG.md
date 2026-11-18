@@ -7,6 +7,11 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+### Interface
+- Interface languages: English, French and Spanish in the reader and in the graphical front end. They follow the system language
+  (English when it is none of the three); a language menu allows a manual choice (Automatic, English, Français, Español), remembered
+  between runs and applied at once. The Spanish texts have not been reviewed by a Spanish speaker yet.
+
 ### Pipeline
 - Diagrams: the double reading now triggers below 0.99 confidence (was 0.975), except on images with arrows or highlights, where the
   base model invents pieces. Fixes the remaining phantom bishops and queens of the coloured-print book.

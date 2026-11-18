@@ -15,6 +15,13 @@ limits, pitfalls) are in [pipeline/NEXT_SESSION.md](pipeline/NEXT_SESSION.md) (i
 Tagged releases (`X.Y.Z`) on GitHub provide the reader for Windows (x64 zip) and Linux (x64 AppImage), and a zip of the pipeline
 (Python scripts and the dependency files needed to build its venv).
 
+### Interface languages
+
+Both programs speak English, French and Spanish. They follow the system language (English when it is another one), and a language
+menu (globe icon in the reader, "Interface language" in the graphical front end) lets you choose: Automatic, English, Français,
+Español. The choice is remembered (reader: the platform's preferences; front end: `pipeline/work/gui_settings.json`) and applies at
+once. It is independent of the language of a book's move notation (`--lang`, "Book move notation").
+
 ## 1. Pipeline: generate a `.chessbook` from a PDF
 
 ### Requirements
