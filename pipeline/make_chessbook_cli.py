@@ -31,7 +31,7 @@ from autocrop import candidate_boxes, find_board
 from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
 from moves import replay, tokens
 from trait import dot_turn
-from wordboxes import Classic, move_rects_ocr, move_rects_textlayer
+from wordboxes import Classic, fill_sparse, move_rects_ocr, move_rects_textlayer, sparse_blocks
 from orientation import orient
 from plausibility import colors_only_differ, issues
 
@@ -422,11 +422,13 @@ def main():
     pages = page_numbers(a.pages, len(doc))
     ocr, k = Ocr(), a.dpi / 72
 
-    blocks, pngs = {}, {}
+    blocks, pngs, classic = {}, {}, Classic()
     for n in bar(pages, "Reading pages (OCR)"):
         blocks[n], how = page_blocks(a.pdf, doc, n, a.dpi, work, ocr, a.min_text_words)
-        blocks[n] = dedupe(blocks[n])
         pngs[n] = render(a.pdf, n, a.dpi, work)
+        if how != "text layer" and sparse_blocks(blocks[n]):  # the main OCR dropped most of a column: take it from the classic OCR (cached, also used later)
+            fill_sparse(blocks[n], classic.lines(pngs[n], work / "ppocr" / f"p{n}.json"))
+        blocks[n] = dedupe(blocks[n])
 
     # moves: pages whose text starts at move 1 first, the others from a position of another page's game
     texts = {n: joined_text(blocks[n]) for n in pages}
@@ -472,7 +474,6 @@ def main():
             data[n]["background"] = f"backgrounds/p{n}.png"
 
     # where each move sits on the page image: lets the reader keep the ORIGINAL page and put clickable zones on it
-    classic = Classic()
     for n in bar(pages, "Locating moves"):
         if not any(m["ok"] for m in data[n]["moves"]):
             continue

@@ -64,6 +64,29 @@ def block_stream(lines, bbox):
     return text, boxes
 
 
+def sparse_blocks(blocks, min_area=100_000, ratio=.3):
+    """Text blocks that hold far fewer characters than their box allows (below `ratio` of the page's median density, box of at least
+    `min_area` px²): the main OCR sometimes stops after a sentence and drops the rest of a column."""
+    chars = lambda b: sum(not c.isspace() for c in b["block_content"])
+    area = lambda b: (b["block_bbox"][2] - b["block_bbox"][0]) * (b["block_bbox"][3] - b["block_bbox"][1])
+    text = [b for b in blocks if b["block_label"] == "text"]
+    if len(text) < 3:
+        return []
+    dens = sorted(chars(b) / max(area(b), 1) for b in text)
+    median = dens[len(dens) // 2]
+    return [b for b in text if area(b) >= min_area and chars(b) / area(b) < ratio * median]
+
+
+def fill_sparse(blocks, lines, gain=2.0):
+    """Replace the text of each sparse block by the classic-OCR text inside its box when that holds at least `gain` times more characters."""
+    count = lambda t: sum(not c.isspace() for c in t)
+    for b in sparse_blocks(blocks):
+        new = block_stream(lines, b["block_bbox"])[0].strip()
+        if count(new) >= gain * count(b["block_content"]):
+            b["block_content"] = new
+    return blocks
+
+
 def merge_rects(boxes, pad=2):
     """Boxes of consecutive characters -> one rectangle [x, y, w, h] per text line (boxes on the same row are united)."""
     rows = []
@@ -110,6 +133,24 @@ def move_rects_textlayer(words, spans):
     return out
 
 
+def selfcheck():
+    """python wordboxes.py --check : a text block the main OCR cut short is refilled from the classic OCR lines inside its box."""
+    def blk(y, text):
+        return {"block_label": "text", "block_bbox": [0, y, 600, y + 400], "block_content": text}
+    full = "1.e4 c5 2.Cf3 e6 3.c3 Cf6 4.e5 Cd5 " * 6
+    blocks = [blk(0, full), blk(500, full), blk(1000, full), blk(1500, "Voici une partie.")]
+    line = lambda y, t: {"pieces": [(t, [10.0, y, 500.0, y + 20.0])]}
+    lines = [line(1510, "Voici une partie."), line(1540, full[:200]), line(1570, full[200:])]
+    assert [b["block_bbox"][1] for b in sparse_blocks(blocks)] == [1500]
+    fill_sparse(blocks, lines)
+    assert blocks[3]["block_content"].startswith("Voici une partie. 1.e4 c5") and blocks[0]["block_content"] == full  # others untouched
+    short = [blk(0, "ab"), blk(500, "cd")]  # fewer than 3 text blocks: no baseline to compare with
+    assert sparse_blocks(short) == []
+    print("wordboxes self-check ok")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--check"]:
+        selfcheck(); sys.exit()
     for ln in Classic().lines(sys.argv[1])[:10]:
         print(char_boxes([(t, b) for t, b in ln["pieces"]])[0])
