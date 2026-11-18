@@ -14,6 +14,7 @@ from read_fen import prep, read_board
 from synth import Synth
 
 STEPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
+OUT = sys.argv[2] if len(sys.argv) > 2 else "work/fenify-ft.pt"
 BATCH, LR = 8, 3e-5
 HELD_OUT = ("img-006", "img-007", "img-008", "img-009")  # backgrounds were never taken from these
 
@@ -26,6 +27,21 @@ class Boards(IterableDataset):
             img, labels = gen.sample(i)
             i += 1
             yield prep(img.convert("RGB")), torch.tensor(labels)
+
+
+def hatch_eval(model):
+    """Errors (ghost, missing, wrong) on the hatched diagrams: p1_d1 and p4_d2 are seen in training (their squares), p1_d2 is held out."""
+    import autocrop
+    from synth import HATCH_DIR, HATCH_SOURCES
+    truths = dict(HATCH_SOURCES, p1_d2="6k1/ppp3pp/4p3/3pN3/3P4/8/PPP2PPP/6K1")
+    out = {}
+    for name, fen in truths.items():
+        im = Image.open(f"{HATCH_DIR}/{name}.png").convert("RGB")
+        x0, y0, x1, y1, _ = autocrop.find_board(im)
+        truth = chess.Board(None)
+        truth.set_board_fen(fen)
+        out[name] = errors(read_board(model, im.crop((x0, y0, x1, y1))), truth)
+    return out
 
 
 def real_eval(model):
@@ -62,9 +78,9 @@ if __name__ == "__main__":
             print(step, round(float(loss), 4), flush=True)
         if step % 500 == 0 or step == STEPS:
             model.to("cpu")
-            print("REAL ghost/miss/wrong all, held-out:", real_eval(model), flush=True)
+            print("REAL ghost/miss/wrong all, held-out:", real_eval(model), "HATCHED", hatch_eval(model), flush=True)
             model.to(dev)
         if step == STEPS:
             break
     model.cpu().eval()
-    model.save("work/fenify-ft.pt")
+    model.save(OUT)

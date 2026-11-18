@@ -18,6 +18,10 @@ from eval_fen import CROP, TRUTH
 
 ASSETS = os.path.expanduser("~/.pub-cache/hosted/pub.dev/chessground-11.0.0/assets")
 BOOK_SOURCES = ("img-004", "img-005")  # diagrams 006-009 stay held out for evaluation
+# small hatched diagrams of structure_francaise_t1 (dark squares hatched): real squares of the two diagrams whose position is known.
+# p1_d2 (truth 6k1/ppp3pp/4p3/3pN3/3P4/8/PPP2PPP/6K1) stays held out for evaluation.
+HATCH_SOURCES = {"p1_d1": "6k1/ppp3pp/4p3/3p4/3P4/8/PPP2PPP/6K1", "p4_d2": "6k1/ppp3pp/8/3pp3/3P4/8/PPP2PPP/6K1"}
+HATCH_DIR = "work/structure_francaise_t1/diagrams"
 SQ = 64  # background tile size
 TYPES = {"P": 1, "N": 2, "B": 3, "R": 4, "Q": 5, "K": 6}
 
@@ -60,6 +64,29 @@ def _book_tiles():
     return tiles, {k: v for k, v in pieces.items() if v}
 
 
+def _hatch_tiles():
+    """(empty tiles by parity, piece tiles by (symbol, parity)) cut from the real hatched diagrams; the board box comes from autocrop."""
+    import autocrop
+    empty, pieces = {0: [], 1: []}, {}
+    for name, fen in HATCH_SOURCES.items():
+        im = Image.open(f"{HATCH_DIR}/{name}.png").convert("RGB")
+        x0, y0, x1, y1, _ = autocrop.find_board(im)
+        grid = _squares(im.crop((x0, y0, x1, y1)))
+        truth = chess.Board(None)
+        truth.set_board_fen(fen)
+        for r in range(8):
+            for c in range(8):
+                t = grid[r][c].astype(int)
+                if ((t[..., 0] > 180) & (t[..., 1] < 100)).any():  # the red side-to-move dot sits under the board
+                    continue
+                piece = truth.piece_at((7 - r) * 8 + c)
+                if piece is None:
+                    empty[(r + c) % 2].append(grid[r][c])
+                else:
+                    pieces.setdefault((piece.symbol(), (r + c) % 2), []).append(grid[r][c])
+    return empty, pieces
+
+
 def _piece_sets():
     sets = []
     for d in sorted(glob.glob(f"{ASSETS}/piece_sets/*")):
@@ -72,6 +99,7 @@ def _piece_sets():
 class Synth:
     def __init__(self):
         self.tiles, self.real_pieces = _book_tiles()
+        self.hatch_empty, self.hatch_pieces = _hatch_tiles()
         self.sets = _piece_sets()
         self.boards = [Image.open(f).convert("RGB") for f in glob.glob(f"{ASSETS}/boards/*.jpg")]
 
@@ -82,12 +110,31 @@ class Synth:
         b = rng.choice(self.boards).resize((8 * s, 8 * s))
         return np.asarray(b).copy()
 
+    @staticmethod
+    def _hatched(rng, s):
+        """Black-and-white book print: white light squares, dark squares = white with thin diagonal lines (drawn large, then
+        shrunk so the lines come out anti-aliased like a small printed diagram)."""
+        k = 4
+        n = 8 * s * k
+        y, x = np.mgrid[0:n, 0:n]
+        period = rng.uniform(2.5, 4.5) * k
+        d = (x + y) if rng.random() < 0.5 else (x - y)
+        lines = (d % period) < period * rng.uniform(0.35, 0.6)
+        dark = ((y // (s * k)) + (x // (s * k))) % 2 == 1
+        img = np.full((n, n, 3), rng.randint(235, 255), np.uint8)
+        img[dark & lines] = rng.randint(0, 60)
+        return cv2.resize(img, (8 * s, 8 * s), interpolation=cv2.INTER_AREA)
+
     def sample(self, seed=None):
         rng = random.Random(seed)
-        s = rng.randint(40, 64)
-        img = self._background(rng, s)
+        hatched = rng.random() < 0.25  # small hatched print (cells of ~20 px), as in some books
+        s = rng.randint(18, 30) if hatched else rng.randint(40, 64)
+        if hatched and rng.random() < 0.5:  # real hatched squares
+            img = np.vstack([np.hstack([cv2.resize(rng.choice(self.hatch_empty[(r + c) % 2]), (s, s)) for c in range(8)]) for r in range(8)])
+        else:
+            img = self._hatched(rng, s) if hatched else self._background(rng, s)
         # highlighted squares (under pieces)
-        for _ in range(rng.choice([0, 0, 1, 2, 3])):
+        for _ in range(0 if hatched else rng.choice([0, 0, 1, 2, 3])):
             r, c = rng.randrange(8), rng.randrange(8)
             col = rng.choice([(235, 190, 30), (245, 60, 50), (250, 100, 90), (240, 210, 40)])
             col = np.clip(np.array(col) + np.random.randint(-15, 15, 3), 0, 255)
@@ -112,7 +159,7 @@ class Synth:
             placed.append(((r, c), rng.choice("wb") + kind))
         for (r, c), key in placed:
             labels[(7 - r) * 8 + c] = TYPES[key[1]] + (0 if key[0] == "w" else 6)
-            real = self.real_pieces.get((key[1] if key[0] == "w" else key[1].lower(), (r + c) % 2))
+            real = (self.hatch_pieces if hatched else self.real_pieces).get((key[1] if key[0] == "w" else key[1].lower(), (r + c) % 2))
             if real and rng.random() < 0.5:  # real book glyph, on its own background
                 img_np = np.asarray(board.convert("RGB")).copy()
                 img_np[r * s:(r + 1) * s, c * s:(c + 1) * s] = cv2.resize(rng.choice(real), (s, s))
@@ -124,7 +171,7 @@ class Synth:
             board.alpha_composite(p, (max(ox, 0), max(oy, 0)))
         img = np.asarray(board.convert("RGB")).copy()
         # arrows (over pieces)
-        for _ in range(rng.choice([0, 0, 1, 2])):
+        for _ in range(0 if hatched else rng.choice([0, 0, 1, 2])):  # black-and-white print: no arrows
             (r0, c0), (r1, c1) = rng.sample(squares, 2)
             col = rng.choice([(215, 175, 20), (200, 40, 40), (225, 190, 30)])
             p0 = np.array([c0 * s + s / 2, r0 * s + s / 2])
@@ -141,14 +188,14 @@ class Synth:
         # crop jitter: board interior is cropped by hand-made proportions in practice
         m = int(s * rng.uniform(0, 0.15))
         img = img[rng.randint(0, m):img.shape[0] - rng.randint(0, m), rng.randint(0, m):img.shape[1] - rng.randint(0, m)]
-        if rng.random() < 0.5:  # mild blur/noise like a scan
+        if hatched or rng.random() < 0.5:  # mild blur/noise like a scan
             img = cv2.GaussianBlur(img, (3, 3), rng.uniform(0.3, 1.0))
         return Image.fromarray(img), labels
 
 
 if __name__ == "__main__":
     g = Synth()
-    print(len(g.tiles[0]), len(g.tiles[1]), "tiles;", {k: len(v) for k, v in g.real_pieces.items()}, "real piece tiles;", len(g.sets), "piece sets;", len(g.boards), "boards")
+    print(len(g.tiles[0]), len(g.tiles[1]), "tiles;", {k: len(v) for k, v in g.real_pieces.items()}, "real piece tiles;", {k: len(v) for k, v in g.hatch_pieces.items()}, "hatched piece tiles;", len(g.sets), "piece sets;", len(g.boards), "boards")
     sheet = Image.new("RGB", (4 * 300, 2 * 300))
     for i in range(8):
         im, lab = g.sample(i)
