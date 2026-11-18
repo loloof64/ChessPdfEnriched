@@ -654,10 +654,11 @@ def main():
                     full = start_fens[n] if hit == "start" else fen_of[hit]
                     d["fen"] = " ".join(full.split()[:4]) + " 0 1"
                     d["side_known"], d["side_source"] = True, "game"
-                # whose turn the printed dot says (hollow, level with the top rank: White; filled, bottom rank: Black); the game wins
-                turn = dot_turn(page_img, [x0, y0, x1 - x0, y1 - y0])
-                if turn and not d.get("side_known"):
-                    d["fen"] = board.board_fen() + f" {turn} - - 0 1"
+                # whose turn the printed dot says (level with the rank of the side to move)
+                # (the dot is read against the army at the bottom; it is evidence about THIS diagram, a game match can be a coincidence)
+                turn = dot_turn(page_img, [x0, y0, x1 - x0, y1 - y0], flipped)
+                if turn and (not d.get("side_known") or d["fen"].split()[1] != turn):
+                    d["fen"] = " ".join(d["fen"].split()[:1] + [turn] + (d["fen"].split()[2:4] if d.get("side_known") else ["-", "-"])) + " 0 1"
                     d["side_known"], d["side_source"] = True, "dot"
             data[n]["diagrams"].append(d)
 

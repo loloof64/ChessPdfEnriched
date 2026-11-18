@@ -11,6 +11,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 - The board next to the page shows its coordinates (a-h, 1-8).
 
 ### Pipeline
+- Diagrams: the side to move read from the printed dot is now read against the army at the bottom of the diagram (the dot sits at the edge of the side to move); it was inverted for every diagram printed with White at the bottom, and it now wins over a match with a game of the book (which can be a coincidence).
 - Moves: a bracketed variation written after the opponent's reply (`13.Rg4! h3 [13.Rg2?? …]`) varies the earlier move it names; a bare promotion written without `=` (`a1D`) is a move.
 - Moves: start positions are scored with the variations too (two diagrams often allow the same main line); an unbracketed alternative (`Si 3.Rh6 ...`) is a variation the book may leave for the main line again, also inside a bracket; a move mentioned again right after being played is no error; an omitted move is recovered also when several candidates lead to the same position.
 - Diagrams: the orientation is read from the printed coordinates (digits 8..1 and letters a..h read by the classic OCR) when they are there, instead of guessing which army is at the bottom; the guess turned 29 of 42 diagrams of an endgame book (White's king and queen above Black's pawn) upside down.
