@@ -7,6 +7,13 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+### Conversion
+
+- Diagram readers: when the OCR model leaves no GPU memory, the small nets move to the CPU instead of failing.
+- Side to move: the dot search no longer reaches the next column (its pieces were counted as a second dot).
+- Moves: `A)` / `B)` labels of alternatives are not closing parentheses; a sibling after `;` restarts from its own move number;
+  a bare move that is an alternative to the previous one (`4.Kd6 Ke6 (...) d3`) is a variation, and the main line resumes after the comment.
+
 ## [0.2.1] - 2026-11-18
 
 Mostly fixes found by reading more books (diagram orientation, side to move, moves lost or marked illegal). Books made with an earlier version keep their old readings: make them again to get the fixes.
