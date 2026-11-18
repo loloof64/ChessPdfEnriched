@@ -9,6 +9,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ### Pipeline
 - Moves: a bare pawn move after commentary (`…Blanches. g6 16.axb5`) is read as Black's reply when the next White move is legal after it; in the middle of a page the game only restarts from another position when at least 3 moves are legal there.
+- Moves: a glued word with a single lowercase letter (`Fe6En échangeant…`) no longer hides the move before it.
 - Moves: a move the book omits is now recovered before any other start position is tried; before, a page could restart from a wrong diagram position where the next moves happened to be legal, which turned later correct moves red.
 - Pages: near-duplicate passages repeated by the OCR with typos (`Poursoit`/`Poursuit`) are removed, so their moves are not read twice. Diagrams: when a page has to start from a diagram, every plausible reading of it (neighbouring crops, both models) is offered and the page's own moves decide (the autocrop can be a cell off).
 - GUI: no more `…` character on the buttons and texts (three plain dots).

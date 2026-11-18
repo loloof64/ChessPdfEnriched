@@ -20,7 +20,7 @@ def _lang(lang):
     san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}]|(?<=[18])[{p[:4]}])?)[+#]?[!?]*"
     # a move number is not glued to a square ('e5.h3' is prose); the OCR sometimes drops the spaces ('e62.d4', 'cxd4f69.exf6', 'Ff40-012.0-0'),
     # so a move may be followed directly by a number, another pawn move, a castling or a prose word ('Ce2Opération')
-    tok = re.compile(rf"(?P<num>(?<![a-h])\d+\.(?:\.\.)?|(?<![a-h])\d+\.\.\.)|(?P<move>{san})(?!(?!\d+\.|[a-h][1-8]|0-0|O-O|[A-Z]['’]?[a-zé]{{2,}})[A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
+    tok = re.compile(rf"(?P<num>(?<![a-h])\d+\.(?:\.\.)?|(?<![a-h])\d+\.\.\.)|(?P<move>{san})(?!(?!\d+\.|[a-h][1-8]|0-0|O-O|[A-Z]['’]?[a-zé]{{1,}})[A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
     return tok, str.maketrans(p, "NBRQK"), p
 
 
@@ -386,6 +386,8 @@ def selfcheck():
     wrong = "rnbqkbnr/pppp1ppp/8/4p3/4P3/2N5/PPPP1PPP/R1BQKBNR"  # a diagram where the 5 moves that follow are legal up to 5.Cxe5: not the game
     t = "1.e4 e5 2...Cc6 3.Fb5 a6 4.Fa4 Cf6 5.Cxe5 Fe7 6.0-0"  # the omitted 2.Cf3 is recovered before any other start position is tried
     assert [m["san"] for m in replay(t, None, "fr", [wrong]) if m["ok"]][-3:] == ["Nxe5", "Be7", "O-O"]
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 Cf6En échangeant le Fou, les Noirs jouent bien. 4.0-0"  # a glued 2-letter word ('En')
+    assert [m["san"] for m in replay(t) if m["ok"]][-2:] == ["Nf6", "O-O"]
     print("moves.py self-check ok")
 
 
