@@ -210,7 +210,7 @@ class Ocr:
 def dedupe(blocks):
     """The OCR sometimes runs past its box and repeats the text of the NEXT blocks at the end of a block: cut each block at
     the start of any later block's text it contains (otherwise those moves are read twice). The comparison ignores ALL whitespace
-    ('42.Txc3' and '42. Txc3' are the same text). Idempotent."""
+    ('42.Txc3' and '42. Txc3' are the same text), and tolerates a few OCR typos in the first words of the repeated text. Idempotent."""
     squash = lambda t: re.sub(r"\s+", "", t)
     for b in blocks:  # the OCR sometimes returns a text block as an HTML table: plain text, or its repeated text is not recognised
         if b["block_label"] in KEEP and "<t" in b["block_content"]:
@@ -222,12 +222,17 @@ def dedupe(blocks):
         for b in blocks[i + 1:]:
             if b not in keep:
                 continue
-            head = squash(b["block_content"])[:25]
             idx = [k for k, ch in enumerate(a["block_content"]) if not ch.isspace()]  # position in the original of each non-space char
             flat = "".join(a["block_content"][k] for k in idx)
-            at = flat.find(head)
-            if at > 0:
-                a["block_content"] = a["block_content"][:idx[at]].rstrip()
+            sb = squash(b["block_content"])
+            for off in (0, 30, 60, 90):  # the repeated text may have OCR typos in its first words: look for a later window of it too
+                n = 25 if off == 0 else 60  # (a longer window then: short runs of moves recur between games)
+                at = flat.find(sb[off:off + n]) if len(sb) >= off + n else -1
+                if at - off > 0:
+                    a["block_content"] = a["block_content"][:idx[at - off]].rstrip()
+                    break
+                if at == 0 or at - off == 0:
+                    break
     return blocks
 
 
@@ -295,6 +300,24 @@ def dense_boxes(im, base):
                 if b[0] >= 0 and b[1] >= 0 and b[2] <= im.width and b[3] <= im.height:
                     out.append((abs(dx) + abs(dy) + abs(scale - 1) * 100, b))
     return [b for _, b in sorted(out)]
+
+
+def alt_readings(models, im, min_conf=.95):
+    """Other plausible readings of a diagram (white at the bottom, piece placement): the crops next to the autocrop's best one, read by every model.
+    The checker pattern is periodic, so the best crop can be a cell off, and a shifted board is read just as confidently. Used as possible
+    start positions of a page: the page's own moves decide (how many of them are legal from there)."""
+    out = []
+    boxes = candidate_boxes(im)
+    boxes = boxes + [b for b in dense_boxes(im, boxes[0])[:120] if b not in boxes]  # nearest first: within about a cell of the best crop, in finer steps
+    for m in models:
+        if m is None:
+            continue
+        for i in range(0, len(boxes), 64):
+            for raw, conf in read_boxes(m, im, boxes[i:i + 64]):
+                raw = repair_king_colors(raw)
+                if conf >= min_conf and not issues(raw) and (fen := orient(raw)[0].board_fen()) not in out:
+                    out.append(fen)
+    return out
 
 
 def load_models(weights, base_weights):
@@ -393,7 +416,22 @@ def infer_start(text, lang, others):
     return best[1], best[2]
 
 
+def selfcheck():
+    """python make_chessbook_cli.py --check : OCR defects of the text blocks."""
+    mk = lambda t: {"block_label": "text", "block_bbox": [0, 0, 1, 1], "block_content": t}
+    a = mk("13...Cd8 Le Cavalier. 14.a4! Poursoit le plan de clarification à l'aile dame. 14...Tb8 [14...bxa4 15.Fxa4+- La case c4.] 15.axb5 Ouvre la colonne a. 15...axb5")
+    b = mk("Poursuit le plan de clarification à l'aile dame. 14...Tb8 [ 14...bxa4 15.Fxa4+- La case c4.] 15.axb5 Ouvre la colonne a. 15...axb5 Les Blancs dominent.")
+    dedupe([a, b])  # the repeated passage has OCR typos in its first words: the start of the next block is not found as is
+    assert a["block_content"] == "13...Cd8 Le Cavalier. 14.a4!", a["block_content"]
+    c, d = mk("1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Cf6 5.0-0 Fe7"), mk("Avec la suite 6.Te1 b5 7.Fb3 d6 8.c3 0-0 9.h3 Ca5")
+    dedupe([c, d])
+    assert c["block_content"].endswith("Fe7") and d["block_content"].startswith("Avec")  # unrelated blocks are left alone
+    print("make_chessbook_cli self-check ok")
+
+
 def main():
+    if sys.argv[1:] == ["--check"]:
+        return selfcheck()
     ap = argparse.ArgumentParser(description="Generate a .chessbook from a chess-book PDF.")
     ap.add_argument("pdf", type=Path)
     ap.add_argument("-o", "--output", type=Path, help="default: <pdf name>.chessbook in the current folder")
@@ -461,6 +499,7 @@ def main():
                 r = read_diagram(model, onwhite(im), base=base)
                 if r:
                     boards[p].append(r[0].board_fen())
+                    boards[p] += [f for f in alt_readings((model, base), onwhite(im)) if f not in boards[p]]  # the best crop may be a cell off
         return boards[p]
     pb = bar([n for n in pages if has_moves(texts[n], a.lang) and (not replays[n] or not all(m["ok"] for m in replays[n]))], "Moves from diagrams")
     for n in pb:
