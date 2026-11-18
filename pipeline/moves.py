@@ -159,8 +159,15 @@ def _skipped_move(board, san, toks, idx, number, table, look=12, need=5):
 
 def tokens(text, lang="fr"):
     """[(kind, value, start, end)] in order; prose between tokens is recorded as ('prose', '')."""
-    out, pos = [], 0
+    out, pos, parens = [], 0, 0
     for m in _lang(lang)[0].finditer(text):
+        if m.group() == "(":
+            parens += 1
+        elif m.group() == ")":
+            if parens:
+                parens -= 1
+            elif re.search(r"(?:^|[^\w.])[A-Za-z]$", text[max(0, m.start() - 2):m.start()]):
+                continue  # 'A)' / 'B)': the label of an alternative (no parenthesis open), not a closing parenthesis
         if text[pos:m.start()].strip(" \n\t,;:.()"):
             out.append(("prose", "", pos, m.start()))
         kind = m.lastgroup
@@ -215,6 +222,7 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
         i = j
     dead = False
     implicit = set()  # indices of the `stack` entries that are variations never opened by a bracket ('Si 3.Rh6 ...'): they do not hide a new game
+    bare_alt = None  # index of the last move taken as an implicit alternative to the move before it
     closed = None  # (board of the variation just closed, index of its ']'): the OCR sometimes closes a variation too early
     def future(b, idx):
         """Evidence that the game goes on from board b at token idx: the legal moves of the next tokens up to the first illegal one of the main
@@ -229,8 +237,11 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                 score -= 1  # an illegal move inside a variation weighs against this start but does not end the count
         return score
 
+    comment = False  # the '(' after an implicit alternative opened a comment: the book's main line goes on after it
     for idx, (kind, val, start, end) in enumerate(toks):
         implicit = {i for i in implicit if i < len(stack)}  # entries only leave the stack from the top
+        if kind == "open" and bare_alt == idx - 1 and idx + 1 < len(toks) and toks[idx + 1][0] != "num":
+            comment = True
         if kind == "num" and stack and len(stack) - 1 in implicit and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             # inside an unbracketed alternative: a numbered move that the MAIN line expects and allows brings the book back to it
             ob, obl, od = stack[-1]
@@ -273,7 +284,7 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                 dead = False
         if kind == "num" and val == "1." and all(i in implicit for i in range(len(stack))) and board.ply() > 0 and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             board, before_last, dead, stack, implicit = chess.Board(), None, False, [], set()  # "1." after moves have been played: a new game starts here
-        elif kind == "open":
+        elif kind == "open" and not (bare_alt == idx - 1 and idx + 1 < len(toks) and toks[idx + 1][0] != "num"):  # (see the implicit alternative)
             stack.append((board, before_last, dead)); board = (before_last or board).copy(); dead = False; branch = board.copy()
         elif kind == "semi" and stack:  # sibling variation: restart from the same branch point
             board = stack[-1][1].copy() if stack[-1][1] else board; dead = False
@@ -283,6 +294,10 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                 stack.pop()
             board, before_last, dead = stack.pop()
         elif kind == "move":
+            if comment and toks[idx - 1][0] == "prose" and stack and len(stack) - 1 in implicit and _legal(stack[-1][0], val, table):
+                board, before_last, dead = stack.pop()  # the first move after the comment, legal in the main line too: back to the main line
+            if toks[idx - 1][0] != "open":
+                comment = False
             # a move number glued to the move ('23...Fxd5') is part of what the book prints in bold: include it in the span
             if idx > 0 and toks[idx - 1][0] == "num" and toks[idx - 1][3] == start:
                 start = toks[idx - 1][2]
@@ -326,11 +341,13 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                         mv, board, before_last, dead = ob.parse_san(to_san(val, table)), ob.copy(), obl, od
                         del stack[lvl:]
                         break
-            if mv is None and not dead and idx > 1 and toks[idx - 1][0] == "num" and toks[idx - 2][0] == "open":
+            if mv is None and not dead and idx > 1 and toks[idx - 1][0] == "num" and (toks[idx - 2][0] == "open" or "semi" in (toks[idx - 2][0], toks[max(idx - 3, 0)][0])):
                 # the first move of a bracket that does not fit the position before the last move: the book varies an EARLIER move of the line
                 # (a White move written after Black's reply: '13.Rg4! h3 [13.Rg2?? ...]'), or the line an unbracketed alternative left
                 n_, blk_ = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
-                earlier = [chess.Board(m["before"]) for m in reversed(moves[-8:]) if m["ok"] and m["depth"] == len(stack) - 1 and m.get("before")]
+                # (after a ';' the book gives a sibling of a line already played ('A) 3...Cc4 ... ; B) 3...a4'): the position before that number, in this line)
+                sib = toks[idx - 2][0] != "open"  # (the ';' may be followed by a label: 'B)')
+                earlier = [chess.Board(m["before"]) for m in reversed(moves[-(60 if sib else 8):]) if m["ok"] and m["depth"] == len(stack) - (not sib) and m.get("before")]
                 earlier += [stack[k][1] for k in sorted(implicit, reverse=True) if k < len(stack) - 1 and stack[k][1] is not None]
                 for cand in earlier:
                     if (cand.fullmove_number, cand.turn == chess.BLACK) == (n_, blk_) and _legal(cand, val, table):
@@ -346,6 +363,15 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                         implicit.add(len(stack) - 1)
                     board = before_last.copy()
                     mv = board.parse_san(to_san(val, table))
+            if (mv is None and not dead and before_last is not None and idx > 0 and toks[idx - 1][0] == "move" and run_ok.get(idx)
+                    and plausible_lone(val, pieces) and _legal(before_last, val, table) and moves and moves[-1]["raw"].rstrip("!?") != val.rstrip("!?")):
+                # a bare piece move right after a move, illegal for the side to move but legal where the last move was played: the book gives an
+                # alternative to that move without brackets or number ('4.Rd6 Re6 (plus visuel ... d3 5.Re5': 4.Re6 is meant)
+                stack.append((board, before_last, dead))
+                implicit.add(len(stack) - 1)
+                board = before_last.copy()
+                mv = board.parse_san(to_san(val, table))
+                bare_alt = idx
             inferred = None
             if mv is None and not dead and idx > 0 and toks[idx - 1][0] == "num":
                 if skipped := _skipped_move(board, to_san(val, table), toks, idx, toks[idx - 1][1], table):
@@ -396,6 +422,13 @@ def selfcheck():
     assert ok(t)[-2:] == ["h3", "c5"]
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 6.Fd3 Cb4 7.Fe2] 6.c3"  # ']' present: control
     assert ok(t)[-1] == "c3"
+    t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 A) 6.Fd3 Cb4 7.Fe2] 6.c3"  # 'A)' / 'B)' label alternatives: they do not close the bracket
+    assert ok(t)[-1] == "c3" and [m["depth"] for m in replay(t)][-1] == 0 and [m["depth"] for m in replay(t)][-2] == 1
+    t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 A) 6.Fd3 Cb4 7.Fe2 ; B) 6...Cxe5 7.Cxe5] 6.c3"  # 'B)' after a ';': a sibling of A), from the position before ITS first number
+    assert all(m["ok"] for m in replay(t)) and [m["san"] for m in replay(t) if m["depth"] == 1][-2:] == ["Nxe5", "Nxe5"]
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Fc4 (plus actif. Cf6 5.O-O"  # 'Fc4' (White) is an alternative to 4.Fa4, written without brackets: not an illegal Black reply
+    r = replay(t)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 1] == ["Bc4"] and [m["san"] for m in r][-2:] == ["Nf6", "O-O"]  # the main line goes on after the comment
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 6.Fd3 Cb4 7.Fe2 6.c3"  # dropped ']': 6.c3 goes back to the main line
     assert ok(t)[-1] == "c3" and [m["depth"] for m in replay(t)][-1] == 0
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.c3 Un coup comme e5! pousse. 5...c5 6.Fd3"  # 'e5!' in prose is not Black's move
