@@ -18,7 +18,9 @@ def _lang(lang):
     """(token regex, translate table to English SAN, piece letters) for a book language."""
     p = PIECES[lang]
     san = rf"(?:0-0-0|0-0|O-O-O|O-O|[{p}]?[a-h]?[1-8]?x?[a-h][1-8](?:=[{p[:4]}])?)[+#]?[!?]*"
-    tok = re.compile(rf"(?P<num>\d+\.(?:\.\.)?|\d+\.\.\.)|(?P<move>{san})(?![A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
+    # a move number is not glued to a square ('e5.h3' is prose); the OCR sometimes drops the spaces ('e62.d4', 'cxd4f69.exf6', 'Ff40-012.0-0'),
+    # so a move may be followed directly by a number, another pawn move or a castling
+    tok = re.compile(rf"(?P<num>(?<![a-h])\d+\.(?:\.\.)?|(?<![a-h])\d+\.\.\.)|(?P<move>{san})(?!(?!\d+\.|[a-h][1-8]|0-0|O-O)[A-Za-z0-9.])(?!=[A-Za-z0-9])|(?P<semi>;)|(?P<open>[\[(])|(?P<close>[\])])|(?P<res>1-0|0-1|1/2-1/2)")
     return tok, str.maketrans(p, "NBRQK"), p
 
 
@@ -197,6 +199,15 @@ def replay(text, start=None, lang="fr", anchors=(), own=0):
                     board, dead = closed[0], False
                 except ValueError:
                     pass
+            if mv is None and stack and idx > 0 and toks[idx - 1][0] == "num":
+                # a numbered move that is illegal in the variation but is exactly what an enclosing line expects: the OCR dropped a ']'
+                n, black = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
+                for lvl in range(len(stack) - 1, -1, -1):
+                    ob, obl, od = stack[lvl]
+                    if (ob.fullmove_number, ob.turn == chess.BLACK) == (n, black) and _legal(ob, val, table):
+                        mv, board, before_last, dead = ob.parse_san(to_san(val, table)), ob.copy(), obl, od
+                        del stack[lvl:]
+                        break
             if mv is None:
                 # an illegal move that carries its own number, or a piece move / capture inside a numbered sequence, is an error (red,
                 # the line stops). A bare pawn square in prose ('c6 se trouve sous tension') or a lone move-looking word ('...par Th1')
@@ -205,6 +216,19 @@ def replay(text, start=None, lang="fr", anchors=(), own=0):
                     moves.append({"raw": val, "san": None, "fen": None, "ok": False, "depth": len(stack), "span": [start, end]})
                     dead = True
                 continue
+            if not run_ok.get(idx):
+                # a bare Black reply must be followed by the number of a White move ('Cg4' in a sentence, then '13...b6', is prose)
+                # (the next number of this line: what lies inside brackets is skipped)
+                depth, nxt = 0, None
+                for t in toks[idx + 1:]:
+                    depth += (t[0] == "open") - (t[0] == "close")
+                    if depth < 0:
+                        break
+                    if t[0] == "num" and depth == 0:
+                        nxt = t
+                        break
+                if nxt and nxt[1].endswith("...") != (board.turn == chess.WHITE):
+                    continue
             prev = board.copy()
             san = board.san(mv); board.push(mv)
             before_last = prev
@@ -213,7 +237,25 @@ def replay(text, start=None, lang="fr", anchors=(), own=0):
     return moves
 
 
+def selfcheck():
+    """python moves.py --check : OCR glitches seen in real books."""
+    ok = lambda t: [m["san"] for m in replay(t) if m["ok"]]
+    assert ok("1.e4 e62.d4 d53.Cd2 Cf64.e5 Cfd75.c3 c56.Fd3 Cc67.Ce2 cxd48.cxd4f69.exf6") == \
+        "e4 e6 d4 d5 Nd2 Nf6 e5 Nfd7 c3 c5 Bd3 Nc6 Ne2 cxd4 cxd4 f6 exf6".split()  # spaces dropped
+    t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.h3 empeche e5.h3 puis un Cg4 possible. 4...c5"  # 'e5.h3' and a bare 'Cg4' in prose
+    assert ok(t)[-2:] == ["h3", "c5"]
+    t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 6.Fd3 Cb4 7.Fe2] 6.c3"  # ']' present: control
+    assert ok(t)[-1] == "c3"
+    t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 6.Fd3 Cb4 7.Fe2 6.c3"  # dropped ']': 6.c3 goes back to the main line
+    assert ok(t)[-1] == "c3" and [m["depth"] for m in replay(t)][-1] == 0
+    t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.c3 Un coup comme e5! pousse. 5...c5 6.Fd3"  # 'e5!' in prose is not Black's move
+    assert ok(t)[-3:] == ["c3", "c5", "Bd3"] and ok(t).count("e5") == 1
+    print("moves.py self-check ok")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--check"]:
+        selfcheck(); sys.exit()
     args = sys.argv[1:]
     lang = "fr"
     if args[:1] == ["--lang"]:
