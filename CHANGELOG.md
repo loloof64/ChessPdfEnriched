@@ -7,6 +7,9 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+### Pipeline
+- Moves: a bare pawn move after commentary (`…Blanches. g6 16.axb5`) is read as Black's reply when the next White move is legal after it; in the middle of a page the game only restarts from another position when at least 3 moves are legal there.
+
 ## [0.2.0] - 2026-11-18
 
 ### Interface

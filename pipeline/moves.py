@@ -237,7 +237,8 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                     best = next(c for sc, c in found if sc == top)
                     # a single legal move proves little (many diagrams allow it): believe it only when exactly one diagram does
                     tops = [i for i, (sc, _) in enumerate(found) if sc == top]
-                    if top >= 2 or len(tops) == 1 or sum(found_idx[i] < own for i in tops) == 1:
+                    played = any(m["ok"] and m["depth"] == 0 for m in moves)  # in the middle of a page the game is not abandoned for a position that
+                    if top >= (3 if played else 2) or (not played and (len(tops) == 1 or sum(found_idx[i] < own for i in tops) == 1)):  # allows 1-2 moves
                         if top < 2 and len(tops) > 1:
                             best = next(found[i][1] for i in tops if found_idx[i] < own)
                         board, before_last, dead, stack = best, None, False, []
@@ -265,6 +266,15 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
             # a bare pawn move is believed when a variation of that very Black move follows it: 'b4 ( 19...bxa4 ... )'
             alt = (board.turn == chess.BLACK and idx + 2 < len(toks) and toks[idx + 1][0] == "open" and toks[idx + 2][0] == "num"
                    and toks[idx + 2][1].endswith("...") and int(toks[idx + 2][1].rstrip(".")) == board.fullmove_number)
+            # ... or when it is a legal Black reply directly followed by the number of the next White move, and the line goes on legally after it:
+            # 'Avec une initiative blanche. g6 16.axb5'
+            if not alt and board.turn == chess.BLACK and idx + 2 < len(toks) and toks[idx + 1][0] == "num" and toks[idx + 2][0] == "move":
+                n_, blk_ = int(toks[idx + 1][1].rstrip(".")), toks[idx + 1][1].endswith("...")
+                if not blk_ and n_ == board.fullmove_number + 1:
+                    try:
+                        alt = _run_length(board, board.parse_san(to_san(val, table)), toks, idx, table, 2) >= 1  # the White move after it must be legal
+                    except ValueError:
+                        pass
             if dead or not (run_ok.get(idx) or (plausible_lone(val, pieces) and board.turn == chess.BLACK) or alt):
                 continue
             mv = None
@@ -365,6 +375,12 @@ def selfcheck():
     assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 0] == "e4 e5 Nf3 Nc6 Bb5 a6 Ba4".split()
     t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 Le coup a6 est possible. 3...Cf6"  # a pawn square in prose is still prose
     assert [m["san"] for m in replay(t) if m["ok"]][-1] == "Nf6"
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Cf6 [4...b5 5.Fb3 Avec une initiative blanche. d6 6.c3] 5.0-0"  # a bare pawn move after commentary, then the White number
+    assert all(m["ok"] for m in replay(t)) and [m["san"] for m in replay(t) if m["depth"] == 1][-2:] == ["d6", "c3"]
+    rook = "3k4/8/8/8/8/8/8/3RK3"  # a diagram where 3.Td3 is legal
+    assert [m["san"] for m in replay("3.Td3 Re8", None, "fr", [rook]) if m["ok"]] == ["Rd3+", "Ke8"]  # start of a page: one legal move is enough
+    t = "1.e4 e5 2.Cf3 Cc6 3.Td3 Rd7"  # in the middle of a page a single legal move in some diagram does not move the game there
+    assert [m["san"] for m in replay(t, None, "fr", [rook]) if m["ok"]] == ["e4", "e5", "Nf3", "Nc6"]
     print("moves.py self-check ok")
 
 
