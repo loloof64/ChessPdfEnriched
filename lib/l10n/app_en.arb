@@ -1,0 +1,77 @@
+{
+  "@@locale": "en",
+  "openBook": "Open a book",
+  "openBookButton": "Open a book (.chessbook)",
+  "openFailed": "Could not open: {error}",
+  "@openFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "saveFailed": "Could not save: {error}",
+  "@saveFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "pageAbsent": "Page {page} not found (pages {first} to {last})",
+  "@pageAbsent": {
+    "placeholders": {
+      "page": {
+        "type": "int"
+      },
+      "first": {
+        "type": "int"
+      },
+      "last": {
+        "type": "int"
+      }
+    }
+  },
+  "previousPage": "Previous page",
+  "nextPage": "Next page",
+  "showReconstructedText": "Show the reconstructed text",
+  "showOriginalPage": "Show the original page (facsimile)",
+  "zoomOut": "Zoom out",
+  "zoomIn": "Zoom in",
+  "zoomLevel": "Zoom level",
+  "zoomFitPage": "Whole page",
+  "zoomFitWidth": "Page width",
+  "sideWhite": "White to move",
+  "sideBlack": "Black to move",
+  "clickMove": "Click a move",
+  "diagramTitle": "Diagram {id}",
+  "@diagramTitle": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "diagramFlipped": " (flipped: white at the bottom)",
+  "diagramCorrected": " — corrected",
+  "diagramNeedsReview": " — correction to review",
+  "flipBoard": "Flip the board",
+  "correctDiagram": "Correct this diagram (or right click)",
+  "correctDiagramTitle": "Correct the diagram",
+  "dragHint": "Drag a piece onto a square; off the board to remove it.",
+  "cancel": "Cancel",
+  "save": "Save",
+  "movesSummary": "{moves, plural, one{{moves} move} other{{moves} moves}}, {illegal} illegal (in red)",
+  "@movesSummary": {
+    "placeholders": {
+      "moves": {
+        "type": "int"
+      },
+      "illegal": {
+        "type": "int"
+      }
+    }
+  },
+  "language": "Language",
+  "languageAuto": "Automatic"
+}

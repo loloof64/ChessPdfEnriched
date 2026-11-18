@@ -11,6 +11,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'l10n/app_localizations.dart';
+
 /// Minimal .chessbook reader: text on the left with clickable moves, board on the right.
 /// Book to open at start: first program argument, else CHESSBOOK; otherwise the "Ouvrir" screen.
 void main(List<String> args) {
@@ -115,14 +117,14 @@ class _ReaderAppState extends State<ReaderApp> {
   Future<void> _open() async {
     try {
       final picked = await FilePicker.pickFiles(
-        dialogTitle: 'Ouvrir un livre',
+        dialogTitle: AppLocalizations.of(_messenger.currentContext!)!.openBook,
         type: FileType.custom,
         allowedExtensions: ['chessbook'],
       );
       final path = picked.firstOrNull?.path;
       if (path != null) setState(() => book = Book.load(path));
     } catch (e) {
-      _messenger.currentState?.showSnackBar(SnackBar(content: Text('Ouverture impossible : $e')));
+      _messenger.currentState?.showSnackBar(SnackBar(content: Text(AppLocalizations.of(_messenger.currentContext!)!.openFailed('$e'))));
     }
   }
 
@@ -130,6 +132,9 @@ class _ReaderAppState extends State<ReaderApp> {
   Widget build(BuildContext context) => MaterialApp(
         title: 'Chess PDF Enriched',
         scaffoldMessengerKey: _messenger,
+        // material_ui brings its own standard texts (flutter_localizations' delegates target the old Material and would not be found)
+        localizationsDelegates: [AppLocalizations.delegate, ...GlobalMaterialLocalizations.delegates],
+        supportedLocales: AppLocalizations.supportedLocales,
         theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown)),
         home: book == null
             ? Scaffold(
@@ -137,7 +142,7 @@ class _ReaderAppState extends State<ReaderApp> {
                   child: FilledButton.icon(
                     onPressed: _open,
                     icon: const Icon(Icons.folder_open),
-                    label: const Text('Ouvrir un livre (.chessbook)'),
+                    label: Builder(builder: (context) => Text(AppLocalizations.of(context)!.openBookButton)),
                   ),
                 ),
               )
@@ -165,7 +170,8 @@ class _ReaderPageState extends State<ReaderPage> {
   double percent = 100;
   double _lastK = 1, _k100 = 1; // scale actually drawn / scale of 100 %, kept to step the zoom from where it is
   static const _presets = [25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 300.0];
-  String? selected, label, lastUci, trait; // trait: whose turn it is in the position shown (null when unknown)
+  String? selected, moveLabel, lastUci; // moveLabel: the move as printed with its number ('3. Cf3')
+  bool? whiteToMove; // whose turn it is in the position shown (null when unknown)
   late final _pageCtl = TextEditingController(text: '$page');
   Map<String, dynamic>? selectedDiagram;
   final _taps = <TapGestureRecognizer>[];
@@ -187,8 +193,8 @@ class _ReaderPageState extends State<ReaderPage> {
         // FEN after a white move: black to move, fullmove = n ('3. Cf3'); after a black move: fullmove = n + 1 ('2... d5')
         final f = fen.split(' ');
         final n = int.parse(f[5]);
-        label = f[1] == 'b' ? '$n. ${m['raw']}' : '${n - 1}... ${m['raw']}';
-        trait = f[1] == 'w' ? 'Trait aux Blancs' : 'Trait aux Noirs';
+        moveLabel = f[1] == 'b' ? '$n. ${m['raw']}' : '${n - 1}... ${m['raw']}';
+        whiteToMove = f[1] == 'w';
       });
 
   void _pickDiagram(Map<String, dynamic> d) => setState(() {
@@ -197,9 +203,8 @@ class _ReaderPageState extends State<ReaderPage> {
         lastUci = null;
         fen = widget.book.fenOf(d)!;
         // the side to move is only known when the diagram was matched with a game position (the book prints it as a dot beside the board)
-        trait = d['side_known'] == true ? (fen.split(' ')[1] == 'w' ? 'Trait aux Blancs' : 'Trait aux Noirs') : null;
-        label = 'Diagramme ${d['id']}${d['flipped'] == true ? ' (retourné : blancs en bas)' : ''}'
-            '${widget.book.isCorrected(d) ? ' — corrigé' : ''}${widget.book.needsReview(d) ? ' — correction à revoir' : ''}';
+        whiteToMove = d['side_known'] == true ? fen.split(' ')[1] == 'w' : null;
+        moveLabel = null;
       });
 
   Move? get lastMove => lastUci == null ? null : Move.parse(lastUci!);
@@ -213,20 +218,31 @@ class _ReaderPageState extends State<ReaderPage> {
     });
   }
 
-  String get _zoomLabel => fit == 'page' ? 'Page entière' : fit == 'width' ? 'Largeur de page' : '${percent.round()} %';
+  String _zoomLabel(AppLocalizations l) => fit == 'page' ? l.zoomFitPage : fit == 'width' ? l.zoomFitWidth : '${percent.round()} %';
+
+  /// Text above the board: the diagram (with its state) or the move chosen, built here so a language change redraws it.
+  String _selectionLabel(AppLocalizations l) {
+    final d = selectedDiagram;
+    if (d == null) return moveLabel ?? l.clickMove;
+    return l.diagramTitle('${d['id']}') +
+        (d['flipped'] == true ? l.diagramFlipped : '') +
+        (widget.book.isCorrected(d) ? l.diagramCorrected : '') +
+        (widget.book.needsReview(d) ? l.diagramNeedsReview : '');
+  }
 
   List<int> get _numbers => widget.book.pages.keys.toList()..sort();
 
   void _goto(int p) {
     if (!widget.book.pages.containsKey(p)) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Page $p absente (pages ${_numbers.first} à ${_numbers.last})')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.pageAbsent(p, _numbers.first, _numbers.last))));
       _pageCtl.text = '$page';
       return;
     }
     setState(() {
       page = p;
       fen = kInitialFEN;
-      selected = label = lastUci = trait = null;
+      selected = moveLabel = lastUci = null;
+      whiteToMove = null;
       selectedDiagram = null;
     });
     _pageCtl.text = '$p';
@@ -250,7 +266,7 @@ class _ReaderPageState extends State<ReaderPage> {
       widget.book.saveDiagramFen(d['id'] as String, d['fen'] as String, '$edited ${(d['fen'] as String).split(' ').skip(1).join(' ')}');
       setState(() => _pickDiagram(d));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Enregistrement impossible : $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppLocalizations.of(context)!.saveFailed('$e'))));
     }
   }
 
@@ -403,6 +419,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     for (final t in _taps) {
       t.dispose();
     }
@@ -414,8 +431,8 @@ class _ReaderPageState extends State<ReaderPage> {
       appBar: AppBar(
         title: Text(widget.book.title),
         actions: [
-          IconButton(icon: const Icon(Icons.folder_open), tooltip: 'Ouvrir un livre', onPressed: widget.onOpen),
-          IconButton(icon: const Icon(Icons.chevron_left), tooltip: 'Page précédente', onPressed: page > _numbers.first ? () => _step(-1) : null),
+          IconButton(icon: const Icon(Icons.folder_open), tooltip: l.openBook, onPressed: widget.onOpen),
+          IconButton(icon: const Icon(Icons.chevron_left), tooltip: l.previousPage, onPressed: page > _numbers.first ? () => _step(-1) : null),
           SizedBox(
             width: 56,
             child: TextField(
@@ -427,29 +444,29 @@ class _ReaderPageState extends State<ReaderPage> {
             ),
           ),
           Text(' / ${_numbers.last}'),
-          IconButton(icon: const Icon(Icons.chevron_right), tooltip: 'Page suivante', onPressed: page < _numbers.last ? () => _step(1) : null),
+          IconButton(icon: const Icon(Icons.chevron_right), tooltip: l.nextPage, onPressed: page < _numbers.last ? () => _step(1) : null),
           const SizedBox(width: 8),
           IconButton(
             icon: Icon(facsimile ? Icons.article : Icons.image),
-            tooltip: facsimile ? 'Afficher le texte reconstitué' : 'Afficher la page d\'origine (fac-similé)',
+            tooltip: facsimile ? l.showReconstructedText : l.showOriginalPage,
             onPressed: () => setState(() => facsimile = !facsimile),
           ),
-          IconButton(icon: const Icon(Icons.zoom_out), tooltip: 'Réduire la page', onPressed: () => _zoomBy(-1)),
+          IconButton(icon: const Icon(Icons.zoom_out), tooltip: l.zoomOut, onPressed: () => _zoomBy(-1)),
           PopupMenuButton<String>(
-            tooltip: 'Niveau de zoom',
+            tooltip: l.zoomLevel,
             onSelected: (v) => setState(() {
               fit = (v == 'page' || v == 'width') ? v : '';
               if (fit.isEmpty) percent = double.parse(v);
             }),
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'page', child: Text('Page entière')),
-              const PopupMenuItem(value: 'width', child: Text('Largeur de page')),
+              PopupMenuItem(value: 'page', child: Text(l.zoomFitPage)),
+              PopupMenuItem(value: 'width', child: Text(l.zoomFitWidth)),
               const PopupMenuDivider(),
               for (final p in _presets) PopupMenuItem(value: '$p', child: Text('${p.round()} %')),
             ],
-            child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Center(child: Text(_zoomLabel))),
+            child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Center(child: Text(_zoomLabel(l)))),
           ),
-          IconButton(icon: const Icon(Icons.zoom_in), tooltip: 'Agrandir la page', onPressed: () => _zoomBy(1)),
+          IconButton(icon: const Icon(Icons.zoom_in), tooltip: l.zoomIn, onPressed: () => _zoomBy(1)),
           const SizedBox(width: 16),
         ],
       ),
@@ -469,7 +486,7 @@ class _ReaderPageState extends State<ReaderPage> {
             final pageView = SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${moves.length} coups, ${moves.length - nOk} illégaux (en rouge)', style: Theme.of(context).textTheme.labelMedium),
+                Text(l.movesSummary(moves.length, moves.length - nOk), style: Theme.of(context).textTheme.labelMedium),
                 const SizedBox(height: 8),
                 Container(
                   width: w,
@@ -512,18 +529,18 @@ class _ReaderPageState extends State<ReaderPage> {
                 },
               ),
               const SizedBox(height: 8),
-              Text(label ?? 'Cliquer sur un coup', style: Theme.of(context).textTheme.titleMedium),
-              if (trait != null) Text(trait!, style: Theme.of(context).textTheme.bodyMedium),
+              Text(_selectionLabel(l), style: Theme.of(context).textTheme.titleMedium),
+              if (whiteToMove != null) Text(whiteToMove! ? l.sideWhite : l.sideBlack, style: Theme.of(context).textTheme.bodyMedium),
               TextButton.icon(
                 onPressed: () => setState(() => orientation = orientation.opposite),
                 icon: const Icon(Icons.swap_vert),
-                label: const Text("Retourner l'échiquier"),
+                label: Text(l.flipBoard),
               ),
               if (selectedDiagram != null)
                 TextButton.icon(
                   onPressed: () => _editDiagram(selectedDiagram!),
                   icon: const Icon(Icons.edit),
-                  label: const Text('Corriger ce diagramme (ou clic droit)'),
+                  label: Text(l.correctDiagram),
                 ),
             ]),
           );
@@ -563,9 +580,10 @@ class _DiagramEditorState extends State<DiagramEditor> {
   @override
   Widget build(BuildContext context) {
     // board + palette + buttons must fit the window height (title, palette, flip button, hint and actions take ~420 px)
+    final l = AppLocalizations.of(context)!;
     final side = (MediaQuery.sizeOf(context).height - 420).clamp(220.0, 384.0);
     return AlertDialog(
-        title: const Text('Corriger le diagramme'),
+        title: Text(l.correctDiagramTitle),
         content: SingleChildScrollView(child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (widget.image != null) Image.memory(widget.image!, width: 260),
           const SizedBox(width: 16),
@@ -587,14 +605,14 @@ class _DiagramEditorState extends State<DiagramEditor> {
             TextButton.icon(
               onPressed: () => setState(() => orientation = orientation.opposite),
               icon: const Icon(Icons.swap_vert),
-              label: const Text("Retourner l'échiquier"),
+              label: Text(l.flipBoard),
             ),
-            const Text('Glisser une pièce sur une case ; hors du plateau pour la supprimer.'),
+            Text(l.dragHint),
           ]),
         ])),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annuler')),
-          FilledButton(onPressed: () => Navigator.pop(context, writeFen(pieces)), child: const Text('Enregistrer')),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(l.cancel)),
+          FilledButton(onPressed: () => Navigator.pop(context, writeFen(pieces)), child: Text(l.save)),
         ],
       );
   }
