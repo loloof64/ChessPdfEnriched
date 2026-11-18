@@ -18,7 +18,7 @@ def dot_turn(page: Image.Image, bbox, flipped=True):
     move: White's side is the bottom of the diagram, or the top when it is printed with Black at the bottom. The ring is thin and pale, so the position,
     not the fill, is what is read."""
     x, y, w, h = bbox
-    px0, px1 = max(0, int(x + .85 * w)), min(page.width, int(x + w + .4 * w))
+    px0, px1 = max(0, int(x + .85 * w)), min(page.width, int(x + 1.15 * w))  # not further: the next column's pieces are dot-sized too
     py0, py1 = max(0, int(y - .1 * h)), min(page.height, int(y + 1.1 * h))
     g = np.asarray(page.convert("L"))[py0:py1, px0:px1]
     found = []
@@ -29,7 +29,7 @@ def dot_turn(page: Image.Image, bbox, flipped=True):
             bx, by, bw, bh = cv2.boundingRect(k)
             cx, cy = px0 + bx + bw / 2, py0 + by + bh / 2
             if (.04 * w <= bw <= .1 * w and .8 <= bw / max(bh, 1) <= 1.25 and cv2.contourArea(k) >= .6 * np.pi / 4 * bw * bh
-                    and cx > x + .93 * w and y - .08 * h <= cy <= y + 1.08 * h):
+                    and x + .93 * w < cx < x + 1.15 * w and y - .08 * h <= cy <= y + 1.08 * h):
                 found.append(cy)
         if found:
             break
