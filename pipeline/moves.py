@@ -32,7 +32,8 @@ def to_san(m: str, table) -> str:
 
 def plausible_lone(tok: str, pieces: str) -> bool:
     """A bare move with no move number next to it: only believe it if it looks like a move, not a pawn square in prose."""
-    return "x" in tok or tok[0] in pieces or tok.startswith(("0-0", "O-O")) or tok[-1] in "!?"  # 'a6!?': an annotation marks a move
+    return ("x" in tok or tok[0] in pieces or tok.startswith(("0-0", "O-O")) or tok[-1] in "!?"  # 'a6!?': an annotation marks a move
+            or "=" in tok or re.search(rf"[18][{pieces[:4]}]", tok) is not None)  # a promotion ('a1D', 'b8=D') is a move too
 
 
 def _legal(board, tok, table):
@@ -325,6 +326,17 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
                         mv, board, before_last, dead = ob.parse_san(to_san(val, table)), ob.copy(), obl, od
                         del stack[lvl:]
                         break
+            if mv is None and not dead and idx > 1 and toks[idx - 1][0] == "num" and toks[idx - 2][0] == "open":
+                # the first move of a bracket that does not fit the position before the last move: the book varies an EARLIER move of the line
+                # (a White move written after Black's reply: '13.Rg4! h3 [13.Rg2?? ...]'), or the line an unbracketed alternative left
+                n_, blk_ = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
+                earlier = [chess.Board(m["before"]) for m in reversed(moves[-8:]) if m["ok"] and m["depth"] == len(stack) - 1 and m.get("before")]
+                earlier += [stack[k][1] for k in sorted(implicit, reverse=True) if k < len(stack) - 1 and stack[k][1] is not None]
+                for cand in earlier:
+                    if (cand.fullmove_number, cand.turn == chess.BLACK) == (n_, blk_) and _legal(cand, val, table):
+                        board = cand.copy()
+                        mv = board.parse_san(to_san(val, table))
+                        break
             if mv is None and not dead and before_last is not None and idx > 0 and toks[idx - 1][0] == "num":
                 n_, blk_ = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
                 if ((before_last.fullmove_number, before_last.turn == chess.BLACK) == (n_, blk_) and _legal(before_last, val, table)
@@ -371,7 +383,7 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None):
             san = board.san(mv); board.push(mv)
             before_last = prev
             closed = None
-            moves.append({"raw": val, "san": san, "fen": board.fen(), "ok": True, "depth": len(stack), "ply": board.ply(), "span": [start, end], "uci": mv.uci(), **({"fixed": True} if fixed else {}), **({"after_skipped": inferred} if inferred else {})})
+            moves.append({"raw": val, "san": san, "fen": board.fen(), "ok": True, "depth": len(stack), "ply": board.ply(), "span": [start, end], "uci": mv.uci(), "before": prev.fen(), **({"fixed": True} if fixed else {}), **({"after_skipped": inferred} if inferred else {})})
     return moves
 
 
@@ -438,6 +450,14 @@ def selfcheck():
     t = "1.e4 e5 2.Cf3 Cc6 Si 2...d6 3.d4 Fg4 4.Fb5 3.Fb5 a6"  # after 'Si 2...d6' the book plays on in THAT line (3.d4 Fg4 is only legal there): both lines accept
     r = replay(t)  # a number 3, the text that follows decides
     assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 1] == ["d6", "d4", "Bg4", "Bb5+"] and [m["san"] for m in r][-2:] == ["Bb5", "a6"]
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 Si 3.Fc4 Cf6 [3.Cc3 Cf6] 3...a6 4.Fa4"  # a bracket right after an unbracketed alternative varies the MAIN move (3.Fb5), not the alternative
+    r = replay(t)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r][-2:] == ["a6", "Ba4"]
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 [3.Fc4 Cf6] 4.Fa4"  # a variation of White's 3rd move written AFTER Black's reply: it starts before 3.Fb5, not before 3...a6
+    r = replay(t)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r if m["depth"] == 1] == ["Bc4", "Nf6"] and [m["san"] for m in r][-1] == "Ba4"
+    t = "1.Re2 Les Noirs promeuvent. a1D Les Blancs. 2.Rf2"  # a Black promotion written 'a1D' (a1=D) with no number: a move, not a square in prose
+    assert [m["san"] for m in replay(t, "4k3/8/8/8/8/8/p7/4K3 w - - 0 1", "fr") if m["ok"]] == ["Ke2", "a1=Q", "Kf2"]
     print("moves.py self-check ok")
 
 
