@@ -274,9 +274,13 @@ def read_boxes(model, im, boxes, batch=32):
     dev = next(iter(model.parameters())).device if list(model.parameters()) else "cpu"
     out = []
     for i in range(0, len(boxes), batch):
-        x = torch.stack([prep(im.crop(b)) for b in boxes[i:i + batch]]).to(dev)
+        x = torch.stack([prep(im.crop(b)) for b in boxes[i:i + batch]])
         with torch.no_grad():
-            p = model(x).cpu()  # (B, 64, 13) probabilities
+            try:
+                p = model(x.to(dev)).cpu()  # (B, 64, 13) probabilities
+            except torch.OutOfMemoryError:  # the OCR model grew and took the GPU: this small net moves to the CPU for good
+                dev = "cpu"
+                p = model.cpu()(x)
         for q, box in zip(p, boxes[i:i + batch]):
             board = chess.Board(None)
             for sq, c in enumerate(q.argmax(dim=1).tolist()):
