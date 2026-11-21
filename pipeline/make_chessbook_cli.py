@@ -213,6 +213,9 @@ def dedupe(blocks):
     the start of any later block's text it contains (otherwise those moves are read twice). The comparison ignores ALL whitespace
     ('42.Txc3' and '42. Txc3' are the same text), and tolerates a few OCR typos in the first words of the repeated text. Idempotent."""
     squash = lambda t: re.sub(r"\s+", "", t)
+    for b in blocks:  # the OCR sometimes takes the last line of a column for a footer: a footer holding a numbered move ('27...Cd7') is text
+        if b["block_label"] == "footer" and re.search(r"\b\d{1,3}\s*\.{1,3}\s*(?:[RDTFC][a-h1-8x]|[a-h][1-8]|0-0|O-O)", b["block_content"]):
+            b["block_label"] = "text"
     for b in blocks:  # the OCR sometimes returns a text block as an HTML table: plain text, or its repeated text is not recognised
         if b["block_label"] in KEEP and "<t" in b["block_content"]:
             b["block_content"] = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", b["block_content"]))).strip()
@@ -398,8 +401,16 @@ def read_diagram(model, im, known=frozenset(), base=None, flip=None):
         r2 = _read_diagram(base, im, known, flip)
         # same pieces on the same squares but other colours: the base model mixes up who owns outlined pieces on hatched squares, keep the first
         if r2 and r2[1] > r[1] and not issues(r2[4]) and not colors_only_differ(r[0], r2[0]):
-            return r2
-    return r
+            # the base model invents queens on empty hatched squares (conf 1.0) where the fine-tuned one, reading the SAME square, sees nothing: drop those
+            ft = read_boxes(model, im, [r2[5]])[0][0]
+            raw = r2[4].copy()
+            for sq in [sq for sq, p in raw.piece_map().items() if p.piece_type == chess.QUEEN and ft.piece_at(sq) is None]:
+                raw.remove_piece_at(sq)
+            if raw.board_fen() != r2[4].board_fen():
+                oriented, flipped, sure = orient_as(raw, flip)
+                return oriented, r2[1], flipped, sure, raw
+            return r2[:5]
+    return r[:5] if r else r
 
 
 def is_split(im, box):
@@ -411,7 +422,7 @@ def is_split(im, box):
 
 
 def _read_diagram(model, im, known=frozenset(), flip=None):
-    """(oriented board, confidence, flipped, orientation sure, raw board) or None when the image is not a board.
+    """(oriented board, confidence, flipped, orientation sure, raw board, box read) or None when the image is not a board.
     `known` = piece placements that occur in the book's games. Tries the best square and its one-cell shifts; if none reads as a
     known position, searches more finely around it (batched). The first reading that IS a known position wins, otherwise the
     best square's own reading is kept (the diagram may show a position that is in no game)."""
@@ -444,7 +455,7 @@ def _read_diagram(model, im, known=frozenset(), flip=None):
     raw, decided = fix_colors(raw, im, box)  # the image first; the heuristic on the kings only when the image cannot tell
     raw = raw if decided else repair_king_colors(raw)  # (both before the orientation, which compares the armies)
     oriented, flipped, sure = orient_as(raw, flip)
-    return oriented, conf, flipped, sure, raw
+    return oriented, conf, flipped, sure, raw, box
 
 
 def move_pairs(text, lang):
