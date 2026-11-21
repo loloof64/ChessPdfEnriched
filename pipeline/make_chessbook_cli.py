@@ -281,7 +281,9 @@ def read_boxes(model, im, boxes, batch=32):
         with torch.no_grad():
             try:
                 p = model(x.to(dev)).cpu()  # (B, 64, 13) probabilities
-            except torch.OutOfMemoryError:  # the OCR model grew and took the GPU: this small net moves to the CPU for good
+            except RuntimeError as e:  # the OCR model grew and took the GPU: this small net moves to the CPU for good
+                if "out of memory" not in str(e):  # (TorchScript raises a plain RuntimeError, not torch.OutOfMemoryError)
+                    raise
                 dev = "cpu"
                 p = model.cpu()(x)
         for q, box in zip(p, boxes[i:i + batch]):
@@ -379,7 +381,9 @@ def load_models(weights, base_weights):
     def load(p):
         try:
             return torch.jit.load(str(p), map_location=dev).eval()
-        except torch.OutOfMemoryError:  # the OCR model keeps most of a 12 GB GPU: these small nets then run on the CPU
+        except RuntimeError as e:  # the OCR model keeps most of a 12 GB GPU: these small nets then run on the CPU
+            if "out of memory" not in str(e):
+                raise
             return torch.jit.load(str(p), map_location="cpu").eval()
     return load(weights), (load(base_weights) if base_weights and Path(base_weights).exists() else None)
 
