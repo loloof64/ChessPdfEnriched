@@ -364,8 +364,8 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
                 mv = _disambiguate(board, to_san(val, table), toks, idx, table)
             except ValueError:
                 pass
-            if mv is None and closed is not None and all(toks[k][0] in ("move", "num") for k in range(closed[1] + 1, idx)):
-                # a move right after a ']' that is illegal here but legal in the variation just closed: the OCR put the ']' too early
+            if mv is None and closed is not None and toks[closed[1]][1] == "]" and all(toks[k][0] in ("move", "num") for k in range(closed[1] + 1, idx)):
+                # a move right after a ']' (not a ')': that one closes a comment) that is illegal here but legal in the variation just closed: the OCR put the ']' too early
                 try:
                     mv = closed[0].parse_san(to_san(val, table))
                     stack.append((board, before_last, dead))

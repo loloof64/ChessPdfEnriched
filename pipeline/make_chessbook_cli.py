@@ -396,25 +396,66 @@ def vivid_share(im):
     return float((((mx - mn) / np.maximum(mx, 1) > .75) & (mx > 200)).mean())
 
 
+def flatten(im, lo=100, hi=230, val=200):
+    """The image with every mid-grey pixel set to one grey: the hatching of dark squares (a moire of thin lines, which makes the readers invent or
+    recolour pieces) becomes a flat background; outlines (black) and white fills stay."""
+    a = np.asarray(im.convert("L"))
+    return Image.fromarray(np.where((a > lo) & (a < hi), val, a).astype("uint8")).convert("RGB")
+
+
+def squares(fen):
+    """The 64 squares of a piece placement, one character each ('.' = empty)."""
+    return "".join("." * int(c) if c.isdigit() else c for c in fen.split()[0].replace("/", ""))
+
+
+def snap_to_known(cands, known, limit=4):
+    """(candidate, position) for a flawed reading that is a few squares away from ONE position of the book's games, else None. On hatched diagrams the readers
+    misread a few white pieces (a rook for a bishop, a queen for a king...) but get the rest right: the position the game gives is then the printed one.
+    Within `limit` squares of the position and 2 squares nearer to it than to any other."""
+    names = {k: squares(k) for k in known}
+    best = None
+    for c in cands:
+        e = squares(c[0].board_fen())
+        d = sorted((sum(x != y for x, y in zip(e, v)), k) for k, v in names.items())
+        if d and d[0][0] <= limit and (len(d) == 1 or d[1][0] >= d[0][0] + 2) and (best is None or d[0][0] < best[0]):
+            best = (d[0][0], c, d[0][1])
+    return best and best[1:]
+
+
 def read_diagram(model, im, known=frozenset(), base=None, flip=None):
     """Double reading: the fine-tuned `model` first; when it is not sure of itself (confidence < TRUSTED and no arrows or highlights, e.g. a print style it was
-    not fine-tuned on: hatched squares make it invent queens) the original `base` model also reads, and its reading wins if it is
-    more confident and plausible (never over a reading that a game of the book confirms)."""
+    not fine-tuned on: hatched squares make it invent queens) the original `base` model also reads (the image as is, then with its hatching
+    flattened), and a reading wins if it is more confident and plausible (never over a reading that a game of the book confirms).
+    A reading that stays implausible or unsure is finally snapped to the nearest position of the book's games (snap_to_known)."""
     r = _read_diagram(model, im, known, flip)
-    if r and base is not None and r[1] < TRUSTED and r[0].board_fen() not in known and vivid_share(im) < MAX_VIVID:  # a reading confirmed by the game stays
-        r2 = _read_diagram(base, im, known, flip)
-        # same pieces on the same squares but other colours: the base model mixes up who owns outlined pieces on hatched squares, keep the first
-        if r2 and r2[1] > r[1] and not issues(r2[4]) and not colors_only_differ(r[0], r2[0]):
-            # the base model invents queens on empty hatched squares (conf 1.0) where the fine-tuned one, reading the SAME square, sees nothing: drop those
-            ft = read_boxes(model, im, [r2[5]])[0][0]
-            raw = r2[4].copy()
-            for sq in [sq for sq, p in raw.piece_map().items() if p.piece_type == chess.QUEEN and ft.piece_at(sq) is None]:
-                raw.remove_piece_at(sq)
-            if raw.board_fen() != r2[4].board_fen():
-                oriented, flipped, sure = orient_as(raw, flip)
-                return oriented, r2[1], flipped, sure, raw
-            return r2[:5]
-    return r[:5] if r else r
+    if not r:
+        return r
+    best, cands = r, [r]
+    if base is not None and r[1] < TRUSTED and r[0].board_fen() not in known and vivid_share(im) < MAX_VIVID:  # a reading confirmed by the game stays
+        for img in (im, flatten(im)):
+            r2 = _read_diagram(base, img, known, flip)
+            if not r2:
+                continue
+            cands.append(r2)
+            # same pieces on the same squares but other colours: the base model mixes up who owns outlined pieces on hatched squares, keep the first
+            if r2[1] > best[1] and not issues(r2[4]) and not colors_only_differ(r[0], r2[0]):
+                # the base model invents queens on empty hatched squares (conf 1.0) where the fine-tuned one, reading the SAME square, sees nothing: drop those
+                ft = read_boxes(model, im, [r2[5]])[0][0]
+                raw = r2[4].copy()
+                for sq in [sq for sq, p in raw.piece_map().items() if p.piece_type == chess.QUEEN and ft.piece_at(sq) is None]:
+                    raw.remove_piece_at(sq)
+                if raw.board_fen() != r2[4].board_fen():
+                    oriented, flipped, sure = orient_as(raw, flip)
+                    r2 = (oriented, r2[1], flipped, sure, raw, r2[5])
+                best = r2
+    # (a reading that is not plausible or not confident: up to 4 squares away; one the readers merely disagree on: 2, a printed variation can be 2-3 squares from a game position)
+    flawed = issues(best[4]) or best[1] < CONFIDENT
+    if known and best[0].board_fen() not in known and (flawed or len({c[0].board_fen() for c in cands}) > 1) and (hit := snap_to_known(cands, known, 4 if flawed else 2)):
+        c, fen = hit
+        oriented = chess.Board(fen + " w - - 0 1")
+        raw = oriented.transform(lambda bb: chess.flip_vertical(chess.flip_horizontal(bb))) if c[2] else oriented  # (c[2] = the reading was upside down)
+        return oriented, c[1], c[2], True, raw
+    return best[:5]
 
 
 def is_split(im, box):
