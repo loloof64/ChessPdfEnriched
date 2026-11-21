@@ -11,6 +11,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 - Diagram readers: when the OCR model leaves no GPU memory, the small nets move to the CPU instead of failing.
 - Side to move: the dot search no longer reaches the next column (its pieces were counted as a second dot).
+- Moves: a `;` sibling is no longer taken for a forgotten `]` (`; B) 1...f1C+` stays in its variation); an OCR comma before a `B)` label counts as the `;`; a move the diagram already shows ('Les Noirs viennent de jouer 44...Fe8') is a mention, so a misread of that diagram no longer wins over the exact one.
 - Moves: `A)` / `B)` labels of alternatives are not closing parentheses; a sibling after `;` restarts from its own move number;
   a bare move that is an alternative to the previous one (`4.Kd6 Ke6 (...) d3`) is a variation, and the main line resumes after the comment.
 - Moves: a new exercise whose first move was also legal before the last move of the previous one (`1.Da3#` then `1.Bd5+`) restarts from its own diagram

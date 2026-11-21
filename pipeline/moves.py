@@ -36,6 +36,16 @@ def plausible_lone(tok: str, pieces: str) -> bool:
             or "=" in tok or re.search(rf"[18][{pieces[:4]}]", tok) is not None)  # a promotion ('a1D', 'b8=D') is a move too
 
 
+def _shows(board, tok, black, table):
+    """True when `board` already shows the move `tok` played (by Black if `black`): the right piece stands on the destination square."""
+    san = to_san(tok, table)
+    sq = re.findall(r"[a-h][1-8]", san.split("=")[0])
+    if "O" in san or not sq:
+        return False
+    p = board.piece_at(chess.parse_square(sq[-1]))
+    return p is not None and p.color == (not black) and p.symbol().upper() == (san[0] if san[0] in "KQRBN" else "P")
+
+
 def _legal(board, tok, table):
     try:
         board.parse_san(to_san(tok, table))
@@ -167,6 +177,8 @@ def tokens(text, lang="fr"):
             if parens:
                 parens -= 1
             elif re.search(r"(?:^|[^\w.])[A-Za-z]$", text[max(0, m.start() - 2):m.start()]):
+                if text[:m.start() - 1].rstrip().endswith(","):
+                    out.append(("semi", ";", m.start(), m.end()))  # '57.Ff1=, B) 56.Ff2': the OCR read the ';' between two alternatives as a comma
                 continue  # 'A)' / 'B)': the label of an alternative (no parenthesis open), not a closing parenthesis
         if text[pos:m.start()].strip(" \n\t,;:.()"):
             out.append(("prose", "", pos, m.start()))
@@ -239,8 +251,11 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
                 score -= 1  # an illegal move inside a variation weighs against this start but does not end the count
         return score
 
+    skip_move = None  # index of a mentioned move the diagram already shows: not played
     comment = False  # the '(' after an implicit alternative opened a comment: the book's main line goes on after it
     for idx, (kind, val, start, end) in enumerate(toks):
+        if idx == skip_move:
+            continue
         implicit = {i for i in implicit if i < len(stack)}  # entries only leave the stack from the top
         if kind == "open" and bare_alt == idx - 1 and idx + 1 < len(toks) and toks[idx + 1][0] != "num":
             comment = True
@@ -263,25 +278,30 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
             # move that was also legal before the last one ('1.Da3#' then, in the next exercise, '1.Fd5+'); a diagram that replays far more wins)
             if mismatch and (alt_of_last or dead or not _skipped_move(board, to_san(toks[idx + 1][1], table), toks, idx + 1, val, table)):
                 cur = future(before_last, idx) if alt_of_last else 0 if dead else future(board, idx)
-                found, found_idx = [], []  # (score, board) of every candidate start that beats the current board, and its anchor index
+                found, found_idx = [], []  # (score, board, mention) of every candidate start that beats the current board, and its anchor index
                 starts = ([chess.STARTING_BOARD_FEN] if n == 1 and not black else [])
                 for ai, fen in enumerate(starts + list(anchors)):
                     cand = chess.Board(fen + (" b" if black else " w") + f" KQkq - 0 {n}")
                     cand.clean_castling_rights()
                     if (score := future(cand, idx)) > cur:
-                        found.append((score, cand)); found_idx.append(ai - len(starts))
+                        found.append((score, cand, None)); found_idx.append(ai - len(starts))
+                    # the diagram may already show the move ('Les Noirs viennent de jouer 44...Fe8'): the text then goes on after it
+                    after = chess.Board(fen + (" w" if black else " b") + f" KQkq - 0 {n + black}")
+                    after.clean_castling_rights()
+                    if idx + 2 < len(toks) and _shows(after, toks[idx + 1][1], black, table) and (score := future(after, idx + 2) + 1) > cur:
+                        found.append((score, after, idx + 1)); found_idx.append(ai - len(starts))
                 if found:
-                    top = max(sc for sc, _ in found)
-                    best = next(c for sc, c in found if sc == top)
+                    top = max(f[0] for f in found)
+                    best, mention = next((f[1], f[2]) for f in found if f[0] == top)
                     # a single legal move proves little (many diagrams allow it): believe it only when exactly one diagram does
-                    tops = [i for i, (sc, _) in enumerate(found) if sc == top]
+                    tops = [i for i, f in enumerate(found) if f[0] == top]
                     played = any(m["ok"] and m["depth"] == 0 for m in moves)  # in the middle of a page the game is not abandoned for a position that
                     if alt_of_last and (cur > 2 or top < cur + 3):
                         pass  # the alternative to the last move stays when it goes on legally ('Si 3.Rh6 ...'): it is dropped only when it dies at once
                     elif top >= (3 if played else 2) or (not played and (len(tops) == 1 or sum(found_idx[i] < own for i in tops) == 1)):  # allows 1-2 moves
                         if top < 2 and len(tops) > 1:
-                            best = next(found[i][1] for i in tops if found_idx[i] < own)
-                        board, before_last, dead, stack, implicit = best, None, False, [], set()
+                            best, mention = next(found[i][1:] for i in tops if found_idx[i] < own)
+                        board, before_last, dead, stack, implicit, skip_move = best, None, False, [], set(), mention
         if kind == "num" and dead and idx + 1 < len(toks) and toks[idx + 1][0] == "move":
             # after an illegal move (often an alternative given in prose without brackets: 'Si 24.Fxd5 ...') resume at the next move
             # number that is exactly the one the board expects and whose move is legal
@@ -338,7 +358,7 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
                     board, dead = closed[0], False
                 except ValueError:
                     pass
-            if mv is None and stack and idx > 0 and toks[idx - 1][0] == "num":
+            if mv is None and stack and idx > 0 and toks[idx - 1][0] == "num" and "semi" not in (toks[idx - 2][0], toks[max(idx - 3, 0)][0]):
                 # a numbered move that is illegal in the variation but is exactly what an enclosing line expects: the OCR dropped a ']'
                 n, black = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
                 for lvl in range(len(stack) - 1, -1, -1):
@@ -464,6 +484,11 @@ def selfcheck():
     t = "1.Ta8# Le seul coup. Exercice suivant : 1.Rf1 Rf7 2.a4 Re7 3.a5 Rd7 4.a6"
     r = replay(t, "6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "fr", ["4k3/8/8/8/8/8/PPP5/4K3"], own=1)
     assert all(m["ok"] for m in r) and [m["san"] for m in r][-1] == "a6" and len(r) == 8
+    # 'Les Noirs viennent de jouer 44...Fe8': the diagram already shows that move (a mention). A misread of the diagram (king one square off) where the move is
+    # still to be played must not win over the exact reading, which does replay the whole line
+    t = "Les Noirs viennent de jouer 44...Fe8 Choix : A) : Rf2 B) : Rd2 C) : Autre coup 45. Rf2! Suite. [45. Rd2? Fh5 46. Fa4 Fg4 47. Fc2 Rh6-+]"
+    r = replay(t, None, "fr", ["6k1/3b4/4p3/3pP1b1/2pP4/2P1N3/2B1K3/8", "4b3/6k1/4p3/3pP1b1/2pP4/2P1N3/2B1K3/8"], own=2)
+    assert all(m["ok"] for m in r) and [m["san"] for m in r][-1] == "Kh6" and "Be8" not in [m["san"] for m in r], [(m["san"], m["ok"]) for m in r]
     tk = tokens("[1.e4 e5] 2.Cf3 (2.d4 d5) 2...Cc6 3.Fb5]")  # the stray ']' goes with the earlier ']' of the same kind, not with the ')' in between
     assert tk[_stray_close(tk)][1] == "]"
     t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Cf6 [4...Fc5 car 4..Cxe4 ne marche pas 5.O-O] 5.O-O"  # '4..Cxe4': a mention, not the White move 4 followed by Cxe4
