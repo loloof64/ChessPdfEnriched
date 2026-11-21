@@ -115,7 +115,7 @@ def _repair(board, san, toks, idx, table, look=12):
     head, found = san.rstrip("+#!?"), []
     for mv in board.legal_moves:
         kind = _edit(head, board.san(mv).rstrip("+#"))
-        if kind and (score := _run_length(board, mv, toks, idx, table, look, True)) >= 2:
+        if kind and (score := _run_length(board, mv, toks, idx, table, look, True)) >= (1 if kind == 1 else 2):  # (a dropped letter is a stronger sign: the end of a variation leaves one move)
             found.append(((score, kind == 1), mv))
     if not found:
         return None
@@ -186,6 +186,20 @@ def tokens(text, lang="fr"):
         out.append((kind, m.group(kind), m.start(), m.end()))
         pos = m.end()
     return out
+
+
+def _close_ahead(toks, idx):
+    """True when a ']' later on closes the bracket that is open at idx: the variation goes on (a move that does not fit it is its own alternative, not the
+    main line coming back after a dropped ']')."""
+    depth = 0
+    for t in toks[idx + 1:]:
+        if t[0] == "open":
+            depth += 1
+        elif t[0] == "close":
+            if depth == 0:
+                return True
+            depth -= 1
+    return False
 
 
 def _stray_close(toks, reach=60):
@@ -358,7 +372,7 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
                     board, dead = closed[0], False
                 except ValueError:
                     pass
-            if mv is None and stack and idx > 0 and toks[idx - 1][0] == "num" and "semi" not in (toks[idx - 2][0], toks[max(idx - 3, 0)][0]):
+            if mv is None and stack and idx > 0 and toks[idx - 1][0] == "num" and "semi" not in (toks[idx - 2][0], toks[max(idx - 3, 0)][0]) and not _close_ahead(toks, idx):
                 # a numbered move that is illegal in the variation but is exactly what an enclosing line expects: the OCR dropped a ']'
                 n, black = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
                 for lvl in range(len(stack) - 1, -1, -1):
@@ -412,6 +426,26 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
             if mv is None and not dead:
                 mv = _repair(board, to_san(val, table), toks, idx, table)
                 fixed = mv is not None
+            if (mv is None and not dead and moves and moves[-1]["ok"] and moves[-1]["depth"] == len(stack) and before_last is not None
+                    and idx > 0 and toks[idx - 1][0] == "num"):
+                # the previous move was probably misread by the OCR ('Ce4' for 'Cc4': legal, but nothing goes on after it): a legal move of that
+                # position one edit away from it, after which THIS numbered move and the next ones are legal, replaces it (only when it is the single best)
+                head, found = to_san(moves[-1]["raw"], table).rstrip("+#!?"), []  # (as printed: 'Ce4', whose SAN here is 'Nxe4')
+                for alt in before_last.legal_moves:
+                    if _edit(head, before_last.san(alt).rstrip("+#")) and alt.uci() != moves[-1]["uci"]:
+                        b = before_last.copy()
+                        b.push(alt)
+                        try:
+                            nxt = b.parse_san(to_san(val, table))
+                        except ValueError:
+                            continue
+                        if (score := _run_length(b, nxt, toks, idx, table, 12, True)) >= 2:
+                            found.append((score, alt, b))
+                if found and sum(f[0] == max(g[0] for g in found) for f in found) == 1:
+                    _, alt, b = max(found, key=lambda f: f[0])
+                    moves[-1].update(san=before_last.san(alt), fen=b.fen(), uci=alt.uci(), fixed=True)
+                    board = b
+                    mv = board.parse_san(to_san(val, table))
             if mv is None and any(m["ok"] and m["depth"] == len(stack) and m["raw"].rstrip("!?") == val.rstrip("!?") for m in moves[-6:]):
                 continue  # the book mentions again a move it has just given ('3.Rf4 serait une erreur ... 3.Rf4??'): not an illegal move
             if mv is None:
