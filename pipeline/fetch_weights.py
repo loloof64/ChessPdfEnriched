@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Download the diagram reader weights into work/ (stdlib only, checks the SHA-256).
 
-    .venv/bin/python fetch_weights.py          # work/fenify-ft.pt (fine-tuned, project's GitHub release "weights-1") AND work/fenify-base.pt
+    .venv/bin/python fetch_weights.py          # work/fenify-ft.pt (fine-tuned, project's GitHub release "weights-2") AND work/fenify-base.pt
     .venv/bin/python fetch_weights.py --base   # only work/fenify-base.pt (original fenify model, MIT, notnil/fenify)
 The program reads with the fine-tuned model and double-checks the readings it is unsure of with the base model.
 Options: -o PATH (only with --base), --force (replace existing files)."""
@@ -13,8 +13,8 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
-FINE_TUNED = ("https://github.com/loloof64/ChessPdfEnriched/releases/download/weights-1/fenify-ft.pt",
-              "f4689d45e8bd04402e70f8d211f4a8c8fbdc47a41b5c4816facdd7063e2f989e")
+FINE_TUNED = ("https://github.com/loloof64/ChessPdfEnriched/releases/download/weights-2/fenify-ft.pt",
+              "bb8b8b4e76a5c050a3e29b6ccd0458b8c09f6854ceb122f4c51c9be98f5bdce5")
 BASE = ("https://github.com/notnil/fenify/releases/download/v2023-07-10/models_2023-07-10-chessboard-2D-balanced-fen-gpu.pt",
         "eb91668eb6162506d40de7beab16ccb3bfd6a695e8e447b6c8e63f67e437f31b")
 
