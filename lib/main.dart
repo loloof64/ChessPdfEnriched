@@ -92,8 +92,9 @@ class Book {
   String? fenOf(Map<String, dynamic> d) {
     final generated = d['fen'] as String?;
     final c = corrections[d['id']];
-    if (generated == null || c == null || c['type'] != 'diagram_fen')
+    if (generated == null || c == null || c['type'] != 'diagram_fen') {
       return generated;
+    }
     return c['source_hash'] == hash(generated)
         ? c['value'] as String
         : generated;
@@ -122,8 +123,9 @@ class Book {
     final out = Archive();
     for (final f
         in ZipDecoder().decodeBytes(io.File(path).readAsBytesSync()).files) {
-      if (f.name != 'corrections.json')
+      if (f.name != 'corrections.json') {
         out.addFile(ArchiveFile.bytes(f.name, f.readBytes()!));
+      }
     }
     out.addFile(
       ArchiveFile.string(
@@ -375,12 +377,13 @@ class _ReaderPageState extends State<ReaderPage> {
       );
       setState(() => _pickDiagram(d));
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(AppLocalizations.of(context)!.saveFailed('$e')),
           ),
         );
+      }
     }
   }
 
@@ -417,8 +420,9 @@ class _ReaderPageState extends State<ReaderPage> {
       final c = (o['bbox'] as List).cast<num>();
       final sideBySide = c[0] < b[0] + b[2] && c[0] + c[2] > b[0];
       final below = c[1] > b[1] + b[3] * 0.6 && c[1] < b[1] + b[3];
-      if (o['id'] != block['id'] && sideBySide && below)
+      if (o['id'] != block['id'] && sideBySide && below) {
         maxH = min(maxH, c[1] - b[1] - 2.0);
+      }
     }
     // the OCR box itself tolerates 2 %; a limit set by a neighbour does not (it is where the overlap would start), with 2 % margin
     final limit = maxH < b[3] ? maxH * 0.98 : b[3] * 1.02;
@@ -462,8 +466,9 @@ class _ReaderPageState extends State<ReaderPage> {
     for (final o
         in (widget.book.pages[page]!['blocks'] as List)
             .cast<Map<String, dynamic>>()) {
-      if ((o['text'] as String).length >= 150)
+      if ((o['text'] as String).length >= 150) {
         body = min(body, _fitOne(ctx, o, moves));
+      }
     }
     return body;
   }
