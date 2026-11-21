@@ -402,6 +402,14 @@ def read_diagram(model, im, known=frozenset(), base=None, flip=None):
     return r
 
 
+def is_split(im, box):
+    """A figure cut in 4 by dashed lines through the middle (several small positions on one board, e.g. 'Réseaux de mats'): not one position.
+    The dashes darken the central column AND row (>= 0.4 of their pixels; measured: 0.4-0.76 there, <= 0.28 on ordinary boards)."""
+    g = np.asarray(im.convert("L").crop(tuple(box)), float) < 110
+    win = int(g.shape[1] / 8 * .3)
+    return all(p[len(p) // 2 - win:len(p) // 2 + win].max() >= .4 for p in (g.mean(0), g.mean(1)))
+
+
 def _read_diagram(model, im, known=frozenset(), flip=None):
     """(oriented board, confidence, flipped, orientation sure, raw board) or None when the image is not a board.
     `known` = piece placements that occur in the book's games. Tries the best square and its one-cell shifts; if none reads as a
@@ -409,7 +417,8 @@ def _read_diagram(model, im, known=frozenset(), flip=None):
     best square's own reading is kept (the diagram may show a position that is in no game)."""
     if not .8 <= im.width / im.height <= 1.25:  # banners, labels
         return None
-    if find_board(im)[4] < MIN_BOARD_SCORE:
+    box = find_board(im)
+    if box[4] < MIN_BOARD_SCORE or is_split(im, box[:4]):
         return None
     first = candidate_boxes(im)
     reads = read_boxes(model, im, first)
