@@ -45,6 +45,14 @@ def download(url, sha, output):
     print(f"Saved {output}")
 
 
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Download the diagram reader weights.")
     ap.add_argument("--base", action="store_true", help="only the original fenify model (work/fenify-base.pt)")
@@ -58,7 +66,10 @@ def main():
         jobs.insert(0, (FINE_TUNED, HERE / "work" / "fenify-ft.pt"))
     for (url, sha), out in jobs:
         if out.exists() and not a.force:
-            print(f"{out} already exists (use --force to replace it).")
+            if sha256_of(out) == sha:
+                print(f"{out} is up to date.")
+            else:
+                print(f"{out} exists but is NOT the published version (outdated or modified): run with --force to replace it.")
         else:
             download(url, sha, out)
 
