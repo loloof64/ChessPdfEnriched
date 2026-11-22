@@ -631,6 +631,9 @@ def main():
     blocks, pngs, classic, page_lines = {}, {}, Classic(), {}
     for n in bar(pages, "Reading pages (OCR)"):
         blocks[n], how = page_blocks(a.pdf, doc, n, a.dpi, work, ocr, a.min_text_words)
+        for b in blocks[n]:
+            if b["block_label"] == "algorithm":  # the OCR calls a block of moves an 'algorithm' (a code listing) now and then: book text
+                b["block_label"] = "text"
         pngs[n] = render(a.pdf, n, a.dpi, work)
         if how != "text layer":  # the main OCR drops text now and then: a column cut short, a line of moves with no block at all. The classic OCR
             lines = page_lines[n] = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json")  # (cached, also used later to locate the moves) has them
