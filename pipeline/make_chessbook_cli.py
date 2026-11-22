@@ -29,7 +29,7 @@ from PIL import Image
 
 import autocrop
 from autocrop import candidate_boxes, find_board
-from export_chessbook import FIGURE, KEEP, joined_text, page_data, text_blocks
+from export_chessbook import FIGURE, KEEP, column_order, joined_text, page_data, text_blocks
 from moves import replay, tokens
 from trait import dot_turn
 from wordboxes import Classic, add_orphans, coordinate_flip, fill_moves, fill_sparse, move_rects_ocr, move_rects_textlayer
@@ -566,6 +566,8 @@ def selfcheck():
         else:
             for dx, dy in ((9, 6), (10, 6), (9, 13), (10, 13), (6, 10), (13, 10)):
                 dr.point((x + dx, y + dy), fill="black")  # a few outline pixels
+    bl = lambda t, x, y: {"block_label": "text", "block_content": t, "block_bbox": [x, y, x + 300, y + 50]}  # the OCR put the top of the right column before the end of the left one
+    assert [b["block_content"] for b in column_order([bl("a", 50, 10), bl("c", 900, 10), bl("b", 50, 500), bl("d", 900, 500)], 1654)] == ["a", "b", "c", "d"]
     wrong = chess.Board("4k3/8/8/3p1p2/4P3/4K3/4P3/8 w - - 0 1")  # the kings' colours swapped (the real misreading of 'Dame contre pions' diagram 8.1)
     fixed, decided = fix_colors(wrong, im, (0, 0, 160, 160))
     assert fixed.board_fen() == "4K3/8/8/3p1p2/4P3/4k3/4P3/8" and decided
@@ -619,7 +621,7 @@ def main():
             fill_sparse(blocks[n], lines)
             fill_moves(blocks[n], lines, lambda t: move_pairs(t, a.lang))
             add_orphans(blocks[n], lines, lambda t: has_moves(t, a.lang))
-        blocks[n] = dedupe(blocks[n])
+        blocks[n] = dedupe(column_order(blocks[n], Image.open(pngs[n]).width))
 
     # moves: pages whose text starts at move 1 first, the others from a position of another page's game
     texts = {n: joined_text(blocks[n]) for n in pages}

@@ -9,6 +9,18 @@ def text_blocks(blocks):
     return [b for b in blocks if b["block_label"] in KEEP and b["block_content"].strip()]
 
 
+def column_order(blocks, width):
+    """Blocks in two-column reading order (left column top to bottom, then right) when the page has two columns, else unchanged.
+    The OCR sometimes puts the top of the right column before the end of the left one, which cuts a line of moves in two."""
+    mid = width / 2
+    left = [b for b in blocks if b["block_bbox"][2] <= mid + 20]
+    right = [b for b in blocks if b["block_bbox"][0] >= mid - 20]
+    if sum(b["block_label"] == "text" for b in left) < 2 or sum(b["block_label"] == "text" for b in right) < 2:
+        return blocks
+    col = lambda b: b["block_bbox"][0] >= mid - 20  # a block spanning both columns (title, header) counts as left: it comes first
+    return sorted(blocks, key=lambda b: (col(b), b["block_bbox"][1]))
+
+
 def joined_text(blocks):
     """The page text moves are read from: block texts in reading order, one space apart."""
     return " ".join(b["block_content"] for b in text_blocks(blocks))
