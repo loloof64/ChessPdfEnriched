@@ -29,7 +29,9 @@ HAND = {("si4", "p1_d2"): "rnbq1rk1/ppp2pbp/5np1/4p3/2P1P3/2N2N2/PP2BPPP/R1BQK2R
         ("si4", "p2_d2"): "r1bq1rk1/1pp1npbp/p2p1np1/3Pp3/2P1P3/2N2P2/PP1QN1PP/R3KB1R",
         ("si4", "p2_d3"): "rnbqk2r/ppp1ppbp/3p1np1/8/2PP4/5NP1/PP2PPBP/RNBQK2R",
         # hatched board, white knight (outline) on d5 read black by the weights-2 model
-        ("structure_najdorf_1", "p1_d2"): "6k1/5ppp/p2p4/1p1Np3/4P3/8/PPP2PPP/6K1"}
+        ("structure_najdorf_1", "p1_d2"): "6k1/5ppp/p2p4/1p1Np3/4P3/8/PPP2PPP/6K1",
+        # hatched board with Black's pieces only (the Hedgehog set-up): the weights-3 model invents white pieces
+        ("structure_herisson_1", "p1_d1"): "2r1r1k1/1bqnbppp/pp1ppn2/8/8/8/8/8"}
 ROT = lambda b: b.transform(lambda bb: chess.flip_vertical(chess.flip_horizontal(bb)))
 
 

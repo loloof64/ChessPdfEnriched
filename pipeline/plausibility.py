@@ -15,6 +15,19 @@ def issues(board: chess.Board) -> list[str]:
     # ponytail: does not catch a lone ghost bishop (e.g. 3 bishops with few pawns is legal); needs the classifier route
 
 
+def add_missing_king(board: chess.Board) -> chess.Board:
+    """A diagram that shows ONE army only (a set-up of the Hedgehog, say) has no king for the other side, which would make it implausible:
+    that side gets a king on its back rank, on a free square the shown army does not attack (nearest the e-file). `board` is changed in place."""
+    for color in (chess.WHITE, chess.BLACK):
+        if board.occupied_co[color] or board.king(not color) is None:
+            continue
+        back = 0 if color == chess.WHITE else 7
+        free = [sq for sq in chess.SQUARES if board.piece_at(sq) is None and not board.is_attacked_by(not color, sq)]
+        if free:  # (no free square: left as it is, the reading stays implausible)
+            board.set_piece_at(min(free, key=lambda sq: (abs(chess.square_rank(sq) - back), abs(chess.square_file(sq) - 4), sq)), chess.Piece(chess.KING, color))
+    return board
+
+
 def repair_king_colors(board: chess.Board) -> chess.Board:
     """The readers sometimes mix up the colours of the two kings (outlined white vs filled black pieces in small prints). When BOTH kings are
     clearly nearer (by rank) to the pawns of the other colour than to their own, swap them, if that leaves a plausible position.
@@ -48,6 +61,11 @@ def colors_only_differ(a: chess.Board, b: chess.Board) -> bool:
 if __name__ == "__main__":
     ok = lambda fen: issues(chess.Board(fen + " w - - 0 1"))
     assert ok("6k1/pp6/2p5/3p4/1P1P4/8/P7/6K1") == []
+    b = add_missing_king(chess.Board("2r1r1k1/1bqnbppp/pp1ppn2/8/8/8/8/8 w - - 0 1"))  # Black only: a white king on e1, not attacked
+    assert b.king(chess.WHITE) == chess.E1 and ok(b.board_fen()) == []
+    b = add_missing_king(chess.Board("8/8/8/8/8/8/4r3/6k1 w - - 0 1"))  # e1 is attacked by the rook
+    assert b.king(chess.WHITE) == chess.D1  # (f1 is next to the black king)
+    assert add_missing_king(chess.Board(None)).board_fen() == "8/8/8/8/8/8/8/8"  # an empty board stays empty
     assert "too_many_kings" in ok("6k1/pp6/2p4K/3p4/1P1P4/8/P7/6K1")
     assert "pawns_on_backrank" in ok("P5k1/8/8/8/8/8/8/6K1")
     assert "no_black_king" in ok("8/8/8/8/8/8/8/6K1")

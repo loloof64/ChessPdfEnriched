@@ -34,7 +34,7 @@ from moves import replay, tokens
 from trait import dot_turn
 from wordboxes import Classic, add_orphans, coordinate_flip, fill_moves, fill_sparse, move_rects_ocr, move_rects_textlayer
 from orientation import orient
-from plausibility import colors_only_differ, issues, repair_king_colors
+from plausibility import add_missing_king, colors_only_differ, issues, repair_king_colors
 
 MAX_EMBEDDED_PX = 40_000_000  # an embedded image bigger than this (width x height) is not extracted: PDFs can be hostile
 MAX_EMBEDDED_PER_PAGE = 60
@@ -291,7 +291,7 @@ def read_boxes(model, im, boxes, batch=32):
             for sq, c in enumerate(q.argmax(dim=1).tolist()):
                 if c:
                     board.set_piece_at(sq, chess.Piece((c - 1) % 6 + 1, chess.BLACK if c > 6 else chess.WHITE))
-            out.append((board, q.max(dim=1).values.mean().item(), box))
+            out.append((add_missing_king(board), q.max(dim=1).values.mean().item(), box))
     return out
 
 
