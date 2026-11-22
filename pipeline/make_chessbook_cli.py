@@ -232,7 +232,8 @@ def dedupe(blocks):
             for off in (0, 30, 60, 90):  # the repeated text may have OCR typos in its first words: look for a later window of it too
                 n = 25 if off == 0 else 60  # (a longer window then: short runs of moves recur between games)
                 at = flat.find(sb[off:off + n]) if len(sb) >= off + n else -1
-                if at - off > 0:
+                extra = flat[at - off + len(sb):] if at >= 0 else ""  # what follows the repeated text in the block; a SHORT later block ('- Proposition d'échange des Dames') is a phrase that recurs, not an overrun, unless it ends the block
+                if at - off > 0 and (len(sb) >= 60 or len(extra) <= 2):
                     a["block_content"] = a["block_content"][:idx[at - off]].rstrip()
                     break
                 if at == 0 or at - off == 0:

@@ -31,7 +31,9 @@ HAND = {("si4", "p1_d2"): "rnbq1rk1/ppp2pbp/5np1/4p3/2P1P3/2N2N2/PP2BPPP/R1BQK2R
         # hatched board, white knight (outline) on d5 read black by the weights-2 model
         ("structure_najdorf_1", "p1_d2"): "6k1/5ppp/p2p4/1p1Np3/4P3/8/PPP2PPP/6K1",
         # hatched board with Black's pieces only (the Hedgehog set-up): the weights-3 model invents white pieces
-        ("structure_herisson_1", "p1_d1"): "2r1r1k1/1bqnbppp/pp1ppn2/8/8/8/8/8"}
+        ("structure_herisson_1", "p1_d1"): "2r1r1k1/1bqnbppp/pp1ppn2/8/8/8/8/8",
+        # hatched board: the weights-4 model drops Black's queen on b6 (confidence 1.0), so the page replays from a wrong board
+        ("position_critique_5", "p5_d1"): "r3k2r/pp1np1bp/1qp1b1p1/4Pp2/3PpP2/P3B2P/1PPN2P1/1RQ1KB1R"}
 ROT = lambda b: b.transform(lambda bb: chess.flip_vertical(chess.flip_horizontal(bb)))
 
 
@@ -74,6 +76,9 @@ def best_box(model, im, truth, dev):
     """The candidate square whose reading is nearest the label (the autocrop is sometimes a cell off)."""
     boxes = candidate_boxes(im)
     errs = [read_err(model, prep(im.crop(b)), truth, dev) for b in boxes]
+    if min(errs) > 12:  # none is close (the autocrop can be half a cell off on a small picture): the pipeline's finer search around the best square
+        boxes += m.dense_boxes(im, boxes[0])
+        errs += [read_err(model, prep(im.crop(b)), truth, dev) for b in boxes[len(errs):]]
     return boxes[int(np.argmin(errs))], min(errs)
 
 
