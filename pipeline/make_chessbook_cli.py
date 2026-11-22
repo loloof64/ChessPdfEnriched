@@ -422,11 +422,21 @@ def snap_to_known(cands, known, limit=4):
     return best and best[1:]
 
 
+def unstretch(im):
+    """A diagram image drawn wider (or taller) than its board is square: the autocrop looks for a square, so the image is squeezed to square
+    when that makes the checkerboard clearly better (7.8 against 4.8 on a 1.24 wide board: the reading was a shifted board)."""
+    if .87 <= im.width / im.height <= 1.15 or not .8 <= im.width / im.height <= 1.25:
+        return im
+    sq = im.resize((min(im.size),) * 2)
+    return sq if find_board(sq)[4] > 1.3 * find_board(im)[4] else im
+
+
 def read_diagram(model, im, known=frozenset(), base=None, flip=None):
     """Double reading: the fine-tuned `model` first; when it is not sure of itself (confidence < TRUSTED and no arrows or highlights, e.g. a print style it was
     not fine-tuned on: hatched squares make it invent queens) the original `base` model also reads (the image as is, then with its hatching
     flattened), and a reading wins if it is more confident and plausible (never over a reading that a game of the book confirms).
     A reading that stays implausible or unsure is finally snapped to the nearest position of the book's games (snap_to_known)."""
+    im = unstretch(im)
     r = _read_diagram(model, im, known, flip)
     if not r:
         return r
