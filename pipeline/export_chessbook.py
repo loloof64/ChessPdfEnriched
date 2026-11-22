@@ -9,16 +9,18 @@ def text_blocks(blocks):
     return [b for b in blocks if b["block_label"] in KEEP and b["block_content"].strip()]
 
 
-def column_order(blocks, width):
+def column_order(blocks):
     """Blocks in two-column reading order (left column top to bottom, then right) when the page has two columns, else unchanged.
-    The OCR sometimes puts the top of the right column before the end of the left one, which cuts a line of moves in two."""
-    mid = width / 2
-    left = [b for b in blocks if b["block_bbox"][2] <= mid + 20]
-    right = [b for b in blocks if b["block_bbox"][0] >= mid - 20]
-    if sum(b["block_label"] == "text" for b in left) < 2 or sum(b["block_label"] == "text" for b in right) < 2:
+    The OCR sometimes puts the top of the right column before the end of the left one, which cuts a line of moves in two.
+    The columns are split at the middle of the text's own extent (the text is not always centred on the page)."""
+    texts = [b for b in blocks if b["block_label"] == "text"]
+    if len(texts) < 4:
         return blocks
-    col = lambda b: b["block_bbox"][0] >= mid - 20  # a block spanning both columns (title, header) counts as left: it comes first
-    return sorted(blocks, key=lambda b: (col(b), b["block_bbox"][1]))
+    mid = (min(b["block_bbox"][0] for b in texts) + max(b["block_bbox"][2] for b in texts)) / 2
+    right = lambda b: b["block_bbox"][0] >= mid - 20  # a block spanning both columns (title, header) counts as left: it comes first
+    if sum(right(b) for b in texts) < 2 or sum(not right(b) and b["block_bbox"][2] < mid + 60 for b in texts) < 2:
+        return blocks
+    return sorted(blocks, key=lambda b: (right(b), b["block_bbox"][1]))
 
 
 def joined_text(blocks):
