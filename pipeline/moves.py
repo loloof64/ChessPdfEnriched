@@ -381,6 +381,15 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
                         mv, board, before_last, dead = ob.parse_san(to_san(val, table)), ob.copy(), obl, od
                         del stack[lvl:]
                         break
+            if mv is None and stack and idx > 0 and toks[idx - 1][0] == "num" and "semi" not in (toks[idx - 2][0], toks[max(idx - 3, 0)][0]):
+                # a numbered move that is what an enclosing line could have played INSTEAD of its last move ('[6...d6 ... 7.g3 6...Fb4]'): a sibling
+                n, black = int(toks[idx - 1][1].rstrip(".")), toks[idx - 1][1].endswith("...")
+                for lvl in range(len(stack) - 1, -1, -1):
+                    obl = stack[lvl][1]
+                    if obl is not None and (obl.fullmove_number, obl.turn == chess.BLACK) == (n, black) and _legal(obl, val, table):
+                        mv, board, before_last, dead = obl.parse_san(to_san(val, table)), obl.copy(), obl, False
+                        del stack[lvl + 1:]
+                        break
             if mv is None and not dead and idx > 1 and toks[idx - 1][0] == "num" and (toks[idx - 2][0] == "open" or "semi" in (toks[idx - 2][0], toks[max(idx - 3, 0)][0])):
                 # the first move of a bracket that does not fit the position before the last move: the book varies an EARLIER move of the line
                 # (a White move written after Black's reply: '13.Rg4! h3 [13.Rg2?? ...]'), or the line an unbracketed alternative left
@@ -504,6 +513,8 @@ def selfcheck():
         "e4 e6 d4 d5 Nd2 Nf6 e5 Nfd7 c3 c5 Bd3 Nc6 Ne2 cxd4 cxd4 f6 exf6".split()  # spaces dropped
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.h3 empeche e5.h3 puis un Cg4 possible. 4...c5"  # 'e5.h3' and a bare 'Cg4' in prose
     assert ok(t)[-2:] == ["h3", "c5"]
+    t = "1.e4 c5 2.Cf3 e6 3.d4 cxd4 4.Cxd4 a6 5.c4 Cf6 6.Cc3 Dc7 [6...d6 7.g3 6...Fb4 Note.] 7.a3"  # '6...Fb4' in a variation on 6...d6: a sibling of the line
+    assert [m["ok"] for m in replay(t)].count(False) == 0 and ok(t)[-1] == "a3"
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 6.Fd3 Cb4 7.Fe2] 6.c3"  # ']' present: control
     assert ok(t)[-1] == "c3"
     t = "1.e4 e6 2.d4 d5 3.Cd2 Cf6 4.e5 Cfd7 5.Cgf3 c5 [5...Cc6 A) 6.Fd3 Cb4 7.Fe2] 6.c3"  # 'A)' / 'B)' label alternatives: they do not close the bracket
