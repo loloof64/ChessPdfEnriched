@@ -618,6 +618,9 @@ def main():
         pngs[n] = render(a.pdf, n, a.dpi, work)
         if how != "text layer":  # the main OCR drops text now and then: a column cut short, a line of moves with no block at all. The classic OCR
             lines = page_lines[n] = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json")  # (cached, also used later to locate the moves) has them
+            # a page the OCR took for ONE table (games in columns) has no text block: drop a table that fills most of the page, the lines of the classic OCR below give the moves
+            blocks[n] = [b for b in blocks[n] if not (b["block_label"] == "table" and b["block_bbox"][3] - b["block_bbox"][1] > .5 * Image.open(pngs[n]).height
+                                                      and has_moves(b["block_content"], a.lang))]
             fill_sparse(blocks[n], lines)
             fill_moves(blocks[n], lines, lambda t: move_pairs(t, a.lang))
             add_orphans(blocks[n], lines, lambda t: has_moves(t, a.lang))
