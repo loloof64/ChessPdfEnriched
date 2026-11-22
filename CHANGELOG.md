@@ -9,7 +9,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ### Conversion
 
-- Diagram reader: new fine-tuned weights (release `weights-2`, `finetune_real.py`: real diagrams labelled by the games). Hatched boards with white pieces on the first rank are read far better (T4 of Est-Indienne). `fetch_weights.py` downloads them.
+- Diagram reader: new fine-tuned weights (release `weights-3`, `finetune_real.py`: real diagrams labelled by the games). Hatched boards with white pieces on the first rank are read far better (T4 of Est-Indienne). `fetch_weights.py` downloads them.
 - Diagrams: a hatched diagram is also read by the base model with the hatching flattened; an implausible or unsure reading is snapped to the nearest position of the book's games (within 4 squares, and 2 nearer than any other).
 - Moves: a move that does not fit a bracket stays in it while a `]` follows; a misread previous move is corrected one edit away when the next numbered move needs it; a dropped disambiguation letter is repaired at the end of a variation; a `)` does not reopen the variation it closes.
 - Moves: a footer block holding a numbered move (`27...Cd7`) is text; a figure cut in 4 by dashed lines is not a board.

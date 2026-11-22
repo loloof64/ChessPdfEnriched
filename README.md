@@ -74,7 +74,7 @@ cd pipeline
 .venv/bin/python fetch_weights.py --base   # only fenify-base.pt (see below)
 ```
 
-- **Fine-tuned weights** (`fenify-ft.pt`, release `weights-2` of this repository): the original model fine-tuned on synthetic boards, then on
+- **Fine-tuned weights** (`fenify-ft.pt`, release `weights-3` of this repository): the original model fine-tuned on synthetic boards, then on
   real diagrams of generated books whose position was confirmed by the game (`finetune_real.py`, which also lists hand-checked ones). Best on
   highlighted squares, arrows and hatched boards. Rebuilding them needs the generated `.chessbook` files, which are not in the repository.
 - **Original fenify model** (`fenify-base.pt`, [notnil/fenify](https://github.com/notnil/fenify), MIT license, downloaded from its own
