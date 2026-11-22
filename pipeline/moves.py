@@ -465,6 +465,10 @@ def replay(text, start=None, lang="fr", anchors=(), own=0, toks=None, prev=None)
                     moves.append({"raw": val, "san": None, "fen": None, "ok": False, "depth": len(stack), "span": [start, end]})
                     dead = True
                 continue
+            if (board.turn == chess.BLACK and re.fullmatch(r"[a-h][1-8]", val.rstrip("!?")) and idx > 0 and toks[idx - 1][0] == "move" and idx + 3 < len(toks) and toks[idx + 1][0] == "prose"
+                    and toks[idx + 1][3] - toks[idx + 1][2] >= 12 and toks[idx + 2][0] == "num" and toks[idx + 2][1].endswith("...") and int(toks[idx + 2][1].rstrip(".")) == board.fullmove_number
+                    and toks[idx + 3][0] == "move" and _legal(board, toks[idx + 3][1], table)):
+                continue  # '14.Df3 f5 est difficile à réaliser. 14...c5': Black's move comes with its own number right after, so this bare one is a mention
             if not run_ok.get(idx):
                 # a bare Black reply must be followed by the number of a White move ('Cg4' in a sentence, then '13...b6', is prose)
                 # (the next number of this line: what lies inside brackets is skipped)
@@ -544,6 +548,8 @@ def selfcheck():
     assert ok(t)[-3:] == ["c3", "c5", "Bd3"] and ok(t).count("e5") == 1
     t = "1.e4 e6 2.d4 d5 3.Cc3 Cf6 4.e5 Cfd7 5.f4 c5 6.Cf3 Cc6 7.Fe3 a6 8.Dd2 b5 9.a3 Fb7 10.Fd3 Fe7 11.0-0 Dc7 12.dxc5 Cxc5 13.b4 Cd7 14.Ce2Opération domination 14...Cb6 15.Ced4"
     assert ok(t)[-3:] == ["Ne2", "Nb6", "Ned4"]  # a prose word glued to a move by the OCR ('Ce2Opération') does not hide the move
+    t = "1.e4 e5 2.Cf3 Cc6 3.Fb5 a6 4.Fa4 Cf6 5.0-0 Fe7 6.Te1 b5 7.Fb3 d6 8.c3 0-0 9.h3 Cb8 10.d4 Cbd7 11.Cbd2 Fb7 12.Fc2 Te8 13.a4 Ff8 14.Cf1 g6 est un coup lent. 14...h6"  # a bare move the book mentions, before Black's real move with its own number
+    assert all(m["ok"] for m in replay(t)) and [m["san"] for m in replay(t)][-1] == "h6" and "g6" not in [m["raw"] for m in replay(t)]
     t = "1.e4 e6 2.d4 d5 3.Cc3 Cf6 4.e5 Cf7 5.f4 c5 6.Cf3 Cc6 7.Fe3 a6"  # the OCR dropped a letter: 'Cf7' is 'Cfd7' (Cf7 is illegal, the next moves prove it)
     assert ok(t)[:12] == "e4 e6 d4 d5 Nc3 Nf6 e5 Nfd7 f4 c5 Nf3 Nc6".split() and len(ok(t)) == 14
     t = "1.e4 e5 2...Cc6 3.Fb5 a6 4.Fa4 Cf6 5.Cxe5 Fe7 6.0-0"  # the book omits White's 2nd move: only 2.Cf3 lets 5.Cxe5 be legal
