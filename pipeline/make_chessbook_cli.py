@@ -422,6 +422,76 @@ def snap_to_known(cands, known, limit=4):
     return best and best[1:]
 
 
+def iou(a, b):
+    """Intersection over union of two [x0, y0, x1, y1] boxes."""
+    w, h = min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1])
+    inter = max(w, 0) * max(h, 0)
+    return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter or 1)
+
+
+def is_blank(im):
+    """A picture with next to nothing drawn inside its border (a page frame, a white rectangle)."""
+    g = np.asarray(onwhite(im).convert("L"))  # (transparent pixels are white)
+    m = max(2, min(g.shape) // 30)
+    return (g[m:-m, m:-m] < 200).mean() < .002
+
+
+def could_be_board(im):
+    """The picture may be ONE board: square-ish with a clear checkerboard, not cut in 4 by dashes."""
+    if not .8 <= im.width / im.height <= 1.25:
+        return False
+    box = find_board(im)
+    return box[4] >= MIN_BOARD_SCORE and not is_split(im, box[:4])
+
+
+def frame_fit(g, box):
+    """(box with each side moved to the darkest line within 10 pixels, score): the score is the sum over the sides of the share of that line's pixels
+    darker than 120. The thin frame drawn round a board scores about 4 on its own box; a box shifted by cells scores far less."""
+    x0, y0, x1, y1 = box
+    H, W = g.shape
+    if x0 < 12 or y0 < 12 or x1 > W - 12 or y1 > H - 12:
+        return box, 0.
+    dark = g < 120
+    top = max(range(-10, 11), key=lambda d: dark[y0 + d, x0:x1].mean())
+    bot = max(range(-10, 11), key=lambda d: dark[y1 + d, x0:x1].mean())
+    left = max(range(-10, 11), key=lambda d: dark[y0:y1, x0 + d].mean())
+    right = max(range(-10, 11), key=lambda d: dark[y0:y1, x1 + d].mean())
+    return [x0 + left, y0 + top, x1 + right, y1 + bot], dark[y0 + top, x0:x1].mean() + dark[y1 + bot, x0:x1].mean() + dark[y0:y1, x0 + left].mean() + dark[y0:y1, x1 + right].mean()
+
+
+def snap_to_frame(im, box):
+    """The board box moved by whole cells (up to 2 each way) to where its frame is, when that is clearly better than where the checkerboard search put it
+    (the search is periodic: it can pick a board one or two cells off)."""
+    g = np.asarray(onwhite(im).convert("L"))
+    c = (box[2] - box[0]) / 8
+    fits = [frame_fit(g, [round(box[0] + dx * c), round(box[1] + dy * c), round(box[2] + dx * c), round(box[3] + dy * c)]) for dx in range(-2, 3) for dy in range(-2, 3)]
+    best = max(fits, key=lambda f: f[1])
+    return best[0] if best[1] > frame_fit(g, box)[1] + .5 else box
+
+
+def split_boards(im):
+    """[(picture, box in im)] for the boards of a picture that holds several (four tests on one page, two columns of boards): the board
+    searched in the four overlapping quarters, kept when it is a clear checkerboard and not a duplicate. Each picture is the board with a
+    margin for its coordinates and the dot beside it. Quarters come in column order (top-left, bottom-left, top-right, bottom-right)."""
+    W, H = im.size
+    if min(W, H) < 500:
+        return []
+    found = []
+    for cx in (0, 1):
+        for cy in (0, 1):
+            x0, y0 = int(cx * W * .45), int(cy * H * .45)
+            b = find_board(im.crop((x0, y0, int(x0 + W * .55), int(y0 + H * .55))), .45)
+            box = snap_to_frame(im, [b[0] + x0, b[1] + y0, b[2] + x0, b[3] + y0]) if b[4] >= MIN_BOARD_SCORE else [0, 0, 0, 0]
+            if b[4] >= MIN_BOARD_SCORE and not any(iou(box, f) > .5 for f in found):
+                found.append(box)
+    out = []
+    for x0, y0, x1, y1 in found:
+        m = round((x1 - x0) * .18)
+        r = (max(0, x0 - m), max(0, y0 - m), min(W, x1 + m), min(H, y1 + m))
+        out.append((im.crop(r), r))
+    return out
+
+
 def unstretch(im):
     """A diagram image drawn wider (or taller) than its board is square: the autocrop looks for a square, so the image is squeezed to square
     when that makes the checkerboard clearly better (7.8 against 4.8 on a 1.24 wide board: the reading was a shifted board)."""
@@ -717,47 +787,56 @@ def main():
     for n in pb:
         page_img = None
         nb = ni = 0
-        figs = [b for b in blocks[n] if b["block_label"] in FIGURE]
+        figs = []
+        for b in blocks[n]:  # (two image blocks on the same box are one picture)
+            if b["block_label"] in FIGURE and not any(iou(b["block_bbox"], o["block_bbox"]) > .9 for o in figs):
+                figs.append(b)
         for k, b in enumerate(figs, 1):
             pb.note(f"page {n}: diagram {k}/{len(figs)}")
             page_img = page_img or Image.open(pngs[n]).convert("RGB")
             x0, y0, x1, y1 = b["block_bbox"]
             im = Image.open(work / b["image_file"]) if b.get("image_file") else page_img.crop((x0, y0, x1, y1))
+            if is_blank(im):  # the embedded picture is only a frame: the boards are drawn on the page itself
+                im = page_img.crop((x0, y0, x1, y1))
             if model is None:
                 model, base = load_models(a.weights, a.base_weights)
-            flip = coordinate_flip(page_lines[n], [x0, y0, x1, y1]) if n in page_lines else None
-            r = read_diagram(model, onwhite(im), known, base, flip)
-            # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
-            if r:
-                nb += 1
-                fid = f"p{n}_d{nb}"
-            else:
-                ni += 1
-                fid = f"p{n}_i{ni}"
-            im.save(work / "diagrams" / f"{fid}.png")
-            d = {"id": fid, "bbox": [x0, y0, x1 - x0, y1 - y0], "image": f"diagrams/{fid}.png", "fen": None, "confidence": 0, "reviewed": False}
-            if r:
-                board, conf, flipped, sure, raw = r
-                d.update(fen=board.board_fen() + " w - - 0 1", confidence=round(conf, 3), flipped=flipped, orientation_sure=sure, issues=issues(raw))
-                # the printed position should occur in a game of the book: the page's own moves first, then any other page's
-                # (a page often shows positions of the full game printed elsewhere)
-                fen_board = board.board_fen()
-                hit = next((m["id"] for p in [n] + [q for q in pages if q != n] for m in data[p]["moves"] if m["ok"] and m["fen"].split()[0] == fen_board), None)
-                if not hit and starts[n] and chess.Board(start_fens[n]).board_fen() == fen_board:
-                    hit = "start"  # the diagram shows the position the page's text starts from
-                if hit:
-                    d["matches_move"] = hit  # the printed position occurs in the page's game: a strong check of the reading
-                    # and the game tells whose turn it is (the book prints it as a dot beside the board): use the game's full FEN
-                    full = start_fens[n] if hit == "start" else fen_of[hit]
-                    d["fen"] = " ".join(full.split()[:4]) + " 0 1"
-                    d["side_known"], d["side_source"] = True, "game"
-                # whose turn the printed dot says (level with the rank of the side to move)
-                # (the dot is read against the army at the bottom; it is evidence about THIS diagram, a game match can be a coincidence)
-                turn = dot_turn(page_img, [x0, y0, x1 - x0, y1 - y0], flipped)
-                if turn and (not d.get("side_known") or d["fen"].split()[1] != turn):
-                    d["fen"] = " ".join(d["fen"].split()[:1] + [turn] + (d["fen"].split()[2:4] if d.get("side_known") else ["-", "-"])) + " 0 1"
-                    d["side_known"], d["side_source"] = True, "dot"
-            data[n]["diagrams"].append(d)
+            items = [(im, [x0, y0, x1, y1])]
+            if not could_be_board(im):
+                items = [(sub, [x0 + sx0, y0 + sy0, x0 + sx1, y0 + sy1]) for sub, (sx0, sy0, sx1, sy1) in split_boards(im)] or items  # several boards in one picture
+            for im, (x0, y0, x1, y1) in items:
+                flip = coordinate_flip(page_lines[n], [x0, y0, x1, y1]) if n in page_lines else None
+                r = read_diagram(model, onwhite(im), known, base, flip)
+                # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
+                if r:
+                    nb += 1
+                    fid = f"p{n}_d{nb}"
+                else:
+                    ni += 1
+                    fid = f"p{n}_i{ni}"
+                im.save(work / "diagrams" / f"{fid}.png")
+                d = {"id": fid, "bbox": [x0, y0, x1 - x0, y1 - y0], "image": f"diagrams/{fid}.png", "fen": None, "confidence": 0, "reviewed": False}
+                if r:
+                    board, conf, flipped, sure, raw = r
+                    d.update(fen=board.board_fen() + " w - - 0 1", confidence=round(conf, 3), flipped=flipped, orientation_sure=sure, issues=issues(raw))
+                    # the printed position should occur in a game of the book: the page's own moves first, then any other page's
+                    # (a page often shows positions of the full game printed elsewhere)
+                    fen_board = board.board_fen()
+                    hit = next((m["id"] for p in [n] + [q for q in pages if q != n] for m in data[p]["moves"] if m["ok"] and m["fen"].split()[0] == fen_board), None)
+                    if not hit and starts[n] and chess.Board(start_fens[n]).board_fen() == fen_board:
+                        hit = "start"  # the diagram shows the position the page's text starts from
+                    if hit:
+                        d["matches_move"] = hit  # the printed position occurs in the page's game: a strong check of the reading
+                        # and the game tells whose turn it is (the book prints it as a dot beside the board): use the game's full FEN
+                        full = start_fens[n] if hit == "start" else fen_of[hit]
+                        d["fen"] = " ".join(full.split()[:4]) + " 0 1"
+                        d["side_known"], d["side_source"] = True, "game"
+                    # whose turn the printed dot says (level with the rank of the side to move)
+                    # (the dot is read against the army at the bottom; it is evidence about THIS diagram, a game match can be a coincidence)
+                    turn = dot_turn(page_img, [x0, y0, x1 - x0, y1 - y0], flipped)
+                    if turn and (not d.get("side_known") or d["fen"].split()[1] != turn):
+                        d["fen"] = " ".join(d["fen"].split()[:1] + [turn] + (d["fen"].split()[2:4] if d.get("side_known") else ["-", "-"])) + " 0 1"
+                        d["side_known"], d["side_source"] = True, "dot"
+                data[n]["diagrams"].append(d)
 
     # write the book; the reader's corrections.json survives a rebuild
     corrections = json.dumps({"schema_version": 1, "corrections": []})
