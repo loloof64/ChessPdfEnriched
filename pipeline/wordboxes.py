@@ -135,17 +135,23 @@ def add_orphans(blocks, lines, has_moves):
     """Add as a text block each classic-OCR line that lies inside no block of the main OCR and holds moves ('31.g4' printed above a
     diagram that the main OCR skipped). It goes before the text block under it in its column (reading order), else at the end."""
     boxes = [b["block_bbox"] for b in blocks]
+    last = None  # box of the previous orphan line
     for ln in lines:
         text, chars = char_boxes([(t, b) for t, b in ln["pieces"]])
         chars = [c for c in chars if c]
-        if not chars or not has_moves(text):
+        if not chars:
             continue
         x0, y0 = min(c[0] for c in chars), min(c[1] for c in chars)
         x1, y1 = max(c[2] for c in chars), max(c[3] for c in chars)
+        # the last move of a game alone on its line ('Txf2' under '... 14.Rh1') has no number: it goes with the orphan line right above it
+        follows = last and 0 <= y0 - last[3] < (last[3] - last[1]) and x0 < last[2] and x1 > last[0] and has_moves("1." + text.strip())
+        if not (has_moves(text) or follows):
+            continue
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         if any(b[0] - 4 <= cx <= b[2] + 4 and b[1] - 4 <= cy <= b[3] + 4 for b in boxes):
             continue
         new = {"block_label": "text", "block_bbox": [round(x0), round(y0), round(x1), round(y1)], "block_content": text.strip(), "orphan": True}
+        last = [x0, y0, x1, y1]
         below = [(b["block_bbox"][1], i) for i, b in enumerate(blocks)
                  if b["block_label"] == "text" and b["block_content"].strip() and b["block_bbox"][1] > cy and b["block_bbox"][0] < x1 and b["block_bbox"][2] > x0]
         at = min(below)[1] if below else len(blocks)

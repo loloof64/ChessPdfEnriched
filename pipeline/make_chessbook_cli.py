@@ -519,6 +519,12 @@ def move_pairs(text, lang):
     return sum(t[0] == "num" and nxt[0] == "move" for t, nxt in zip(toks, toks[1:]))
 
 
+def move_dense(html_text, lang):
+    """True when at least half of the text of an HTML table is moves and move numbers (a game, not prose with a few moves)."""
+    t = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", html_text))).strip()
+    return sum(k[3] - k[2] for k in tokens(t, lang) if k[0] != "prose") >= .5 * len(t)
+
+
 def has_moves(text, lang):
     """True when the text has a move number directly followed by a move ('12.Cf3'), not only a numbered list ('1. Les Noirs')."""
     toks = tokens(text, lang)
@@ -628,9 +634,9 @@ def main():
         pngs[n] = render(a.pdf, n, a.dpi, work)
         if how != "text layer":  # the main OCR drops text now and then: a column cut short, a line of moves with no block at all. The classic OCR
             lines = page_lines[n] = classic.lines(pngs[n], work / "ppocr" / f"p{n}.json")  # (cached, also used later to locate the moves) has them
-            # a page the OCR took for ONE table (games in columns) has no text block: drop a table that fills most of the page, the lines of the classic OCR below give the moves
-            blocks[n] = [b for b in blocks[n] if not (b["block_label"] == "table" and b["block_bbox"][3] - b["block_bbox"][1] > .5 * Image.open(pngs[n]).height
-                                                      and has_moves(b["block_content"], a.lang))]
+            # a table of moves (a page taken for ONE table, or a game written one move per cell) is no text block: drop it, the lines of the classic OCR below give the moves
+            blocks[n] = [b for b in blocks[n] if not (b["block_label"] == "table" and has_moves(b["block_content"], a.lang)
+                                                      and (move_dense(b["block_content"], a.lang) or b["block_bbox"][3] - b["block_bbox"][1] > .5 * Image.open(pngs[n]).height))]
             fill_sparse(blocks[n], lines)
             fill_moves(blocks[n], lines, lambda t: move_pairs(t, a.lang))
             add_orphans(blocks[n], lines, lambda t: has_moves(t, a.lang))
