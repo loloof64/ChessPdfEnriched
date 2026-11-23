@@ -7,6 +7,11 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 ## [Unreleased]
 
+### Conversion
+
+- Diagram reader: new fine-tuned weights (release `weights-5`): a hatched diagram whose Black queen on b6 was dropped (Position critique 5 p5) is read right, so its page replays to the end.
+- Moves: a short later block (a phrase that recurs) no longer cuts a block unless it ends it (`... des Dames. Rc7` lost its move).
+
 ## [0.2.2] - 2026-11-22
 
 Books made with an earlier version keep their old readings: make them again to get the fixes.
