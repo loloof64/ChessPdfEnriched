@@ -432,6 +432,12 @@ def iou(a, b):
     return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter or 1)
 
 
+def overlap(a, b):
+    """Share of box a [x0, y0, x1, y1] that lies inside box b."""
+    w, h = min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1])
+    return max(w, 0) * max(h, 0) / ((a[2] - a[0]) * (a[3] - a[1]) or 1)
+
+
 def is_blank(im):
     """A picture with next to nothing drawn inside its border (a page frame, a white rectangle)."""
     g = np.asarray(onwhite(im).convert("L"))  # (transparent pixels are white)
@@ -515,14 +521,13 @@ def missed_boards(page_img, lines, blocks):
         if len("".join(p[0] for p in l["pieces"]).strip()) >= 2 and boxes:
             x0, y0, x1, y1 = min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)
             ink[max(0, int(y0) - 4):int(y1) + 4, max(0, int(x0) - 4):int(x1) + 4] = 0
-    for b in blocks:
-        if b["block_label"] in FIGURE:
-            x0, y0, x1, y1 = (int(v) for v in b["block_bbox"])
-            ink[max(0, y0):y1, max(0, x0):x1] = 0
+    figs = [[int(v) for v in b["block_bbox"]] for b in blocks if b["block_label"] in FIGURE]
+    for x0, y0, x1, y1 in figs:
+        ink[max(0, y0):y1, max(0, x0):x1] = 0
     n, _, stats, _ = cv2.connectedComponentsWithStats(cv2.dilate(ink, np.ones((25, 25), np.uint8)))  # (the page frame and column rules are far bigger than a board)
     out = []
     for x, y, w, h, _ in stats[1:]:
-        if 150 <= w <= 900 and 150 <= h <= 900 and .75 <= w / h <= 1.33:
+        if 150 <= w <= 900 and 150 <= h <= 900 and .75 <= w / h <= 1.33 and not any(overlap([x, y, x + w, y + h], f) > .3 for f in figs):  # (the frame of a found board can stick out of its box)
             im = page_img.crop((x, y, x + w, y + h))
             if .8 <= im.width / im.height <= 1.25 and find_board(im)[4] >= MISSED_BOARD_SCORE:  # (a faint hatched board scores 2.5, a logo under 1)
                 out.append({"block_label": "image", "block_content": "", "block_bbox": [int(x), int(y), int(x + w), int(y + h)], "min_score": MISSED_BOARD_SCORE})
@@ -605,16 +610,21 @@ def _read_diagram(model, im, known=frozenset(), flip=None, min_score=MIN_BOARD_S
             hit = next((r for r in read_boxes(model, im, dense[i:i + 64]) if orient_as(r[0], flip)[0].board_fen() in known), None)
             if hit:
                 break
-    if hit is None and (issues(best[0]) or best[1] < CONFIDENT):
-        # no game confirms a reading and the best square's one is not a legal-looking position (no king, pawns on the back rank...) or
-        # is not a confident one: the autocrop is probably off by a few pixels. Take the most confident plausible reading around it.
+    weak = issues(best[0]) or best[1] < CONFIDENT
+    if (hit is None or hit is not best) and weak:
+        # the best square's reading is not a legal-looking position (no king, pawns on the back rank...) or not a confident one: the autocrop is probably
+        # off by a few pixels. Take the most confident plausible reading around it.
         # (also around a board found with a larger minimum size: the checker pattern can lock onto a 6x6 sub-board)
         pool, bases = [], [first[0], find_board(im, .8)[:4]]
         for base in dict.fromkeys(bases):
             for i in range(0, len(dense := dense_boxes(im, base)), 64):
                 pool += [r for r in read_boxes(model, im, dense[i:i + 64]) if not issues(r[0])]
-        if pool and (issues(best[0]) or max(r[1] for r in pool) > best[1]):
-            hit = max(pool, key=lambda r: r[1])
+        if pool and (best_pool := max(pool, key=lambda r: r[1])):
+            if hit is None:
+                if issues(best[0]) or best_pool[1] > best[1]:
+                    hit = best_pool
+            elif best_pool[1] >= TRUSTED and sum(best_pool[0].piece_at(q) != hit[0].piece_at(q) for q in chess.SQUARES) > 4:
+                hit = best_pool  # a game position that a crop merely happens to read (far from what a sure reading sees) is no confirmation
     raw, conf, box = hit or best
     raw, decided = fix_colors(raw, im, box)  # the image first; the heuristic on the kings only when the image cannot tell
     raw = raw if decided else repair_king_colors(raw)  # (both before the orientation, which compares the armies)
@@ -717,6 +727,7 @@ def selfcheck():
     found = missed_boards(pg, [], [])
     assert len(found) == 1 and abs(found[0]["block_bbox"][0] - 400) < 40 and abs(found[0]["block_bbox"][1] - 500) < 40, found
     assert missed_boards(pg, [], [{"block_label": "image", "block_bbox": [380, 480, 740, 840]}]) == []  # a board the OCR found is left alone
+    assert missed_boards(pg, [], [{"block_label": "image", "block_bbox": [420, 520, 700, 800]}]) == []  # also when its frame sticks out of the OCR's box
     print("make_chessbook_cli self-check ok")
 
 

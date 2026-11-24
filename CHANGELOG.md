@@ -13,6 +13,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 - Moves: a short later block (a phrase that recurs) no longer cuts a block unless it ends it (`... des Dames. Rc7` lost its move).
 - Diagrams: a board the OCR did not see (inside a page-sized table) is found from the page's ink and read (Position critique 6 p6: 3 illegal moves, now 0; Réseau de mat 2 p3: 6 boards). A diagram a passage starts from is no longer snapped to the position after its first move.
 - Moves: a line right under a line the main OCR missed goes on the same paragraph, so a reply without number inside the prose (`hxg6` in Réseau de mat 2 p3) is no longer lost.
+- Diagrams: a sure, plausible reading is no longer replaced by a game position that a crop merely happens to read far from it (Calcul de variantes 3 p5), and a board the OCR found is never found twice (its frame sticking out of the OCR's box made a duplicate).
 
 ## [0.2.2] - 2026-11-22
 
