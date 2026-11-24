@@ -1,32 +1,61 @@
-# Prochaine session : lecture des diagrammes (étape 4)
+# Prochaine session : nouveaux livres de Fabrice
 
-# État au 17 nov. 2026 (fin de session) : à lire en premier
+# État au 24 nov. 2026 (fin de session) : à lire en premier
 
-## Fait cette session
-- Livre 3 (`attaque_minorite_3`) : validé à la main par Laurent. Corrections génériques dans `moves.py` / `make_chessbook_cli.py` :
-  rejeu depuis le diagramme voisin (livres d'exercices), `(...)` = variante, coup sans numéro accepté seulement comme réponse des Noirs,
-  blocs OCR en tableau HTML remis en texte, recadrage des diagrammes plus fin (confiance < 0,95 ou lecture invraisemblable, y compris à plus grande échelle).
-- Cache de `find_board` (mémoire + `work/<livre>/autocrop/`) : résultats identiques, le calcul dominait le temps (11,7 s sur 13,5 s par diagramme).
-- Points d'entrée : `make_chessbook_gui.py` (tkinter, retient dossiers et langue dans `work/gui_settings.json`) et `make_chessbook_cli.py`.
-- Profils d'installation `cuda` / `cpu` (`pyproject.toml`, `setup_venv.sh`), `fetch_weights.py` (poids depuis la release GitHub `weights-1`, `--base` = modèle fenify d'origine).
-- Release : workflow `.github/workflows/release.yml` (tag `X.Y.Z` = version du `pubspec.yaml`) : zip Windows x64, AppImage Linux x64, zip du pipeline. Icône et titre de fenêtre faits.
+Tout est committé (dernier commit `b5b3f56`), aucun tag posé par Claude (Laurent tague lui-même). Les sections plus bas sont l'historique des
+étapes (nov. 2026) : utiles pour comprendre un module, pas pour savoir où on en est.
 
-## En attente
-- **Pousser le tag `0.1.0`** (créé en local sur `6fa04b8`, pas poussé : `git push origin 0.1.0`), puis surveiller le 1er run du workflow (jamais exécuté).
-- Livres 1 et 2 **non régénérés** avec le nouveau code. Relecture hors ligne de leurs diagrammes : 44 sur 44 identiques à l'ancienne lecture
-  (mais la nouvelle recherche de recadrage ne s'y déclenche pas : tout y est lu à >= 0,99). À faire par Laurent : régénérer et vérifier.
-- Profil `cpu` **non testé** (installation, vitesse de l'OCR PaddleOCR-VL sans GPU). Tailles du README : cuda ~5 Go (8,5 Go sur disque, mesuré), cpu ~0,6 Go (estimation).
-- Le cache `~/.cache/uv` fait 42 Go chez Laurent (disque `/home` à 96 %) : `uv cache prune` en libère jusqu'à ~28 Go (non lancé, à sa demande).
+## Poids des diagrammes
+- Release **`weights-5`** publiée par Laurent ; `fetch_weights.py` la télécharge (SHA vérifié, pas de remplacement automatique, `--force` sinon).
+- Recette de réentraînement : ajouter le diagramme à `HAND` dans `finetune_real.py` (stem du livre, id), puis
+  `finetune_real.py --weights work/fenify-ft.v1.pt --out work/fenify-ftN.pt` (toujours depuis v1 = weights-1, pas depuis les poids courants ; ~35-40 min,
+  autocrop sur CPU, pas de ligne de progression avant « N train »). Copier vers `work/fenify-ft.pt`, Laurent publie `weights-N`, puis mettre à jour
+  URL + SHA dans `fetch_weights.py`, README et CHANGELOG.
+- Pourquoi réentraîner plutôt qu'une règle : sur un plateau hachuré, le modèle ft lit un cavalier blanc contouré comme noir à 0,992 (> TRUSTED 0,99,
+  donc le modèle de base n'est pas consulté). Les tests d'encre / de creux ne séparent pas les couleurs sur plateau hachuré (essayés, abandonnés).
+
+## Livres validés par Laurent
+Najdorf t1/t2, Hérisson t1/t2, Benoni t1/t2, Centre classique, Lutte pour les majorités, Petit centre, Position critique 1-4 (PC5 : p5 confirmée
+corrigée, livre pas validé en entier), Calcul de variantes 1-4, Française t1-t3, Tour contre pion, Comment réfléchir t1/t5, Dame contre pion,
+Attaque de la minorité 1-3.
+
+## Correctifs génériques récents (tous committés)
+- `plausibility.add_missing_king` : un diagramme où un seul camp est présent reçoit l'autre roi sur une case d'arrière-rangée libre, non attaquée,
+  la plus proche de la colonne e.
+- `moves.py` : un coup numéroté qu'une ligne englobante aurait pu jouer à la place de son dernier coup (`[6...d6 ... 7.g3 6...Fb4]`) est un frère,
+  même suivi d'un `]` ; un bloc court qui revient plus tard (« ... des Dames. Rc7 ») ne coupe plus un bloc sauf s'il le termine.
+- Pages : `column_order` coupe les colonnes au milieu de l'étendue du texte (pas de la page) ; un bloc OCR « algorithm » est du texte.
+- Diagrammes : une image vide est remplacée par la page, une image contenant plusieurs plateaux est découpée en quarts (calés sur le cadre).
+
+## Suite (ordre de Laurent)
+1. Convertir d'autres livres de Fabrice (notation française). Objectif : sortie sans erreur dès la première passe ; si c'est le cas, passer à l'étape 2.
+2. Plus tard : livres en notation textuelle ANGLAISE (`--lang en`, jamais testé sur un vrai livre).
+
+## Méthode qui marche
+- Laurent signale « livre X, page N : diag erroné / coup rouge / manquant / trait faux ». Reproduire HORS LIGNE depuis les caches
+  (`work/<livre>/blocks`, `ppocr`, `diagrams`, `pages`), trouver la cause racine, écrire d'abord l'auto-test `--check` qui échoue
+  (moves.py / wordboxes.py / plausibility.py / trait.py / make_chessbook_cli.py), corriger, puis comparer ancien/nouveau sur TOUS les livres en cache
+  avant de proposer un commit (a attrapé plusieurs régressions).
+- Régression : `make_chessbook_cli.py` sur les livres en cache avec `--no-scans -o <scratch>`, comparer les coups illégaux par page aux
+  chessbooks livrés (`~/Documents/Echecs/chessbooks/...`, quelques minutes en tout).
+- Une seule page : `make_chessbook_cli.py --pages N -o <scratch> --weights work/fenify-ft.pt` (~20 s).
+- Annoncer la durée avant tout long calcul ; ne pas régénérer un livre ni lancer tous les livres sans demande.
 
 ## Limites connues, pas traitées
-- Départ des passages : seulement depuis les diagrammes à +-2 pages ; un passage d'un seul coup exige qu'un seul diagramme de la page le rende légal.
-- Erreurs du modèle de lecture lui-même (pièce fantôme, ex. pion g4 de `img-008` lu dame) ; notation en figurines non gérée.
-- Les coups cliquables au bon endroit n'ont été vérifiés que par Laurent dans le lecteur (le test hors ligne ne contrôle que la légalité).
+- Départ des passages : seulement depuis les diagrammes à ±2 pages ; un passage d'un seul coup exige qu'un seul diagramme de la page le rende légal.
+- Erreurs du modèle de lecture (pièce fantôme) ; notation en figurines non gérée par le pipeline principal.
+- Refusé par Laurent : resserrer le redémarrage d'ancre en milieu de page ; correction manuelle de SAN dans le lecteur.
+- Profil `cpu` non testé (installation, vitesse de PaddleOCR-VL sans GPU).
+- Cache `~/.cache/uv` de 42 Go (disque `/home` presque plein) : `uv cache prune` à sa demande seulement.
+- Espagnol : textes d'interface à relire par un natif.
 
 ## Consignes de travail de Laurent
-- Corriger à la racine pour tous les livres (il ne fait pas de rapport livre par livre) ; ne pas régénérer un livre ni lancer de gros calculs sans demande ; ne jamais lancer tous les livres.
-- Commiter quand il le demande, sans tag (le tag `0.1.0` se pousse à sa demande) ; code et commentaires en anglais, discussion en français.
+- Corriger à la racine pour tous les livres (pas de rapport livre par livre) ; commiter quand il le demande, sans tag, petits commits avec une
+  ligne CHANGELOG sous Unreleased ; code et commentaires en anglais, discussion en français.
+- Préférer les preuves directes de l'image (coordonnées imprimées, pièces pleines/contourées, le point de trait) aux heuristiques :
+  plusieurs bugs venaient de mes propres heuristiques. Les vrais livres sont incohérents : une récupération doit être unique et confirmée par la suite.
 
+# Historique (nov. 2026)
 
 ## État
 - OCR : `ocr_page.py` (PaddleOCR-VL-1.6, GPU OK) donne type de bloc + bbox. Diagramme = bloc `image`.
