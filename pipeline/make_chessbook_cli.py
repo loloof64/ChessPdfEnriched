@@ -22,6 +22,7 @@ from collections import Counter
 from pathlib import Path
 
 import chess
+import cv2
 import numpy as np
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
@@ -42,6 +43,7 @@ Image.MAX_IMAGE_PIXELS = 100_000_000  # explicit PIL limit (it raises above twic
 CONFIDENT = 0.95  # mean per-square probability above which a diagram reading is not second-guessed by a finer crop search
 TRUSTED = 0.99  # fine-tuned reading below this mean confidence is double-checked with the base model...
 MAX_VIVID = 0.002  # ...unless the diagram has arrows/highlights (share of bright saturated pixels): the fine-tuned model is trained for them, the base invents pieces there
+MISSED_BOARD_SCORE = 2.0  # same score, for a picture that is only a candidate (missed_boards)
 MIN_BOARD_SCORE = 2.5  # autocrop checkerboard score: logos < 1, small screenshot boards 3-5, real diagrams 6+
 HERE = Path(__file__).parent
 T0 = time.time()  # program start, for the total time
@@ -493,6 +495,40 @@ def split_boards(im):
     return out
 
 
+def board_before(mv):
+    """Piece placement before a replayed move, when it can be undone exactly (no capture, promotion or castling), else None."""
+    if "x" in mv["san"] or len(mv["uci"]) > 4 or mv["san"].startswith("O"):
+        return None
+    b, m = chess.Board(mv["fen"]), chess.Move.from_uci(mv["uci"])
+    b.set_piece_at(m.from_square, b.remove_piece_at(m.to_square))
+    return b.board_fen()
+
+
+def missed_boards(page_img, lines, blocks):
+    """Image blocks for the boards the OCR did not see (a board inside a page-sized table, or no block at all): what is left of the page's ink once the
+    figure blocks and the text lines (two characters or more: not the a-h / 1-8 coordinates) are erased, grouped by dilation, is kept when it is square-ish,
+    board-sized and a clear checkerboard."""
+    g = np.asarray(onwhite(page_img).convert("L"))
+    ink = (g < 200).astype(np.uint8)
+    for l in lines:
+        boxes = [p[1] for p in l["pieces"]]
+        if len("".join(p[0] for p in l["pieces"]).strip()) >= 2 and boxes:
+            x0, y0, x1, y1 = min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)
+            ink[max(0, int(y0) - 4):int(y1) + 4, max(0, int(x0) - 4):int(x1) + 4] = 0
+    for b in blocks:
+        if b["block_label"] in FIGURE:
+            x0, y0, x1, y1 = (int(v) for v in b["block_bbox"])
+            ink[max(0, y0):y1, max(0, x0):x1] = 0
+    n, _, stats, _ = cv2.connectedComponentsWithStats(cv2.dilate(ink, np.ones((25, 25), np.uint8)))  # (the page frame and column rules are far bigger than a board)
+    out = []
+    for x, y, w, h, _ in stats[1:]:
+        if 150 <= w <= 900 and 150 <= h <= 900 and .75 <= w / h <= 1.33:
+            im = page_img.crop((x, y, x + w, y + h))
+            if .8 <= im.width / im.height <= 1.25 and find_board(im)[4] >= MISSED_BOARD_SCORE:  # (a faint hatched board scores 2.5, a logo under 1)
+                out.append({"block_label": "image", "block_content": "", "block_bbox": [int(x), int(y), int(x + w), int(y + h)], "min_score": MISSED_BOARD_SCORE})
+    return out
+
+
 def unstretch(im):
     """A diagram image drawn wider (or taller) than its board is square: the autocrop looks for a square, so the image is squeezed to square
     when that makes the checkerboard clearly better (7.8 against 4.8 on a 1.24 wide board: the reading was a shifted board)."""
@@ -502,15 +538,17 @@ def unstretch(im):
     return sq if find_board(sq)[4] > 1.3 * find_board(im)[4] else im
 
 
-def read_diagram(model, im, known=frozenset(), base=None, flip=None):
+def read_diagram(model, im, known=frozenset(), base=None, flip=None, min_score=MIN_BOARD_SCORE):
     """Double reading: the fine-tuned `model` first; when it is not sure of itself (confidence < TRUSTED and no arrows or highlights, e.g. a print style it was
     not fine-tuned on: hatched squares make it invent queens) the original `base` model also reads (the image as is, then with its hatching
     flattened), and a reading wins if it is more confident and plausible (never over a reading that a game of the book confirms).
     A reading that stays implausible or unsure is finally snapped to the nearest position of the book's games (snap_to_known)."""
     im = unstretch(im)
-    r = _read_diagram(model, im, known, flip)
+    r = _read_diagram(model, im, known, flip, min_score)
     if not r:
         return r
+    if min_score < MIN_BOARD_SCORE and (issues(r[4]) or len(r[4].piece_map()) < 4):  # a candidate the OCR did not call a figure: a logo or a flowchart box reads as a few pieces
+        return None
     best, cands = r, [r]
     if base is not None and r[1] < TRUSTED and r[0].board_fen() not in known and vivid_share(im) < MAX_VIVID:  # a reading confirmed by the game stays
         for img in (im, flatten(im)):
@@ -547,7 +585,7 @@ def is_split(im, box):
     return all(p[len(p) // 2 - win:len(p) // 2 + win].max() >= .4 for p in (g.mean(0), g.mean(1)))
 
 
-def _read_diagram(model, im, known=frozenset(), flip=None):
+def _read_diagram(model, im, known=frozenset(), flip=None, min_score=MIN_BOARD_SCORE):
     """(oriented board, confidence, flipped, orientation sure, raw board, box read) or None when the image is not a board.
     `known` = piece placements that occur in the book's games. Tries the best square and its one-cell shifts; if none reads as a
     known position, searches more finely around it (batched). The first reading that IS a known position wins, otherwise the
@@ -555,7 +593,7 @@ def _read_diagram(model, im, known=frozenset(), flip=None):
     if not .8 <= im.width / im.height <= 1.25:  # banners, labels
         return None
     box = find_board(im)
-    if box[4] < MIN_BOARD_SCORE or is_split(im, box[:4]):
+    if box[4] < min_score or is_split(im, box[:4]):
         return None
     first = candidate_boxes(im)
     reads = read_boxes(model, im, first)
@@ -664,6 +702,21 @@ def selfcheck():
     assert fix_colors(rook, im, (0, 0, 160, 160))[1] is False
     blank = fix_colors(chess.Board("8/8/8/8/8/8/8/K6k w - - 0 1"), Image.new("RGB", (160, 160), "white"), (0, 0, 160, 160))
     assert blank[0].board_fen() == "8/8/8/8/8/8/8/K6k" and blank[1] is False  # no dark pieces: no information
+    # the board before a quiet move (the diagram a passage starts from); None when a capture hides what stood on the square
+    assert board_before({"san": "Qb6", "uci": "d6b6", "fen": "6rk/4b1r1/1Q6/Pp1p1p2/1P3R1P/4qBP1/6RK/8 b - - 1 1"}) == "6rk/4b1r1/3Q4/Pp1p1p2/1P3R1P/4qBP1/6RK/8"
+    assert board_before({"san": "Qxb6", "uci": "d6b6", "fen": "6rk/4b1r1/1Q6/8/8/8/6RK/8 b - - 0 1"}) is None
+    # a board the OCR missed (inside a page-sized table): found from the ink left once the text lines are erased
+    from PIL import ImageDraw
+    pg = Image.new("RGB", (1200, 1400), "white")
+    d = ImageDraw.Draw(pg)
+    d.rectangle([30, 30, 1170, 1370], outline="black", width=4)  # the page frame is no board
+    for i in range(8):
+        for j in range(8):
+            d.rectangle([400 + i * 40, 500 + j * 40, 439 + i * 40, 539 + j * 40], fill=(110, 80, 60) if (i + j) % 2 else (240, 225, 200))
+    d.rectangle([400, 500, 720, 820], outline="black", width=2)
+    found = missed_boards(pg, [], [])
+    assert len(found) == 1 and abs(found[0]["block_bbox"][0] - 400) < 40 and abs(found[0]["block_bbox"][1] - 500) < 40, found
+    assert missed_boards(pg, [], [{"block_label": "image", "block_bbox": [380, 480, 740, 840]}]) == []  # a board the OCR found is left alone
     print("make_chessbook_cli self-check ok")
 
 
@@ -711,6 +764,7 @@ def main():
             # a table of moves (a page taken for ONE table, or a game written one move per cell) is no text block: drop it, the lines of the classic OCR below give the moves
             blocks[n] = [b for b in blocks[n] if not (b["block_label"] == "table" and has_moves(b["block_content"], a.lang)
                                                       and (move_dense(b["block_content"], a.lang) or b["block_bbox"][3] - b["block_bbox"][1] > .5 * Image.open(pngs[n]).height))]
+            blocks[n] += missed_boards(Image.open(pngs[n]).convert("RGB"), lines, blocks[n])
             fill_sparse(blocks[n], lines)
             fill_moves(blocks[n], lines, lambda t: move_pairs(t, a.lang))
             add_orphans(blocks[n], lines, lambda t: has_moves(t, a.lang))
@@ -742,7 +796,7 @@ def main():
                 if model is None:
                     model, base = load_models(a.weights, a.base_weights)
                 flip = coordinate_flip(page_lines[p], [x0, y0, x1, y1]) if p in page_lines else None  # printed a-h / 1-8, when the OCR read them
-                r = read_diagram(model, onwhite(im), base=base, flip=flip)
+                r = read_diagram(model, onwhite(im), base=base, flip=flip, min_score=b.get("min_score", MIN_BOARD_SCORE))
                 if r:
                     boards[p].append(r[0].board_fen())
                     boards[p] += [f for f in alt_readings((model, base), onwhite(im), flip=flip) if f not in boards[p]]  # the best crop may be a cell off
@@ -783,6 +837,7 @@ def main():
 
     # diagrams: read each figure, then look for its position in the games of the book
     known = {mv["fen"].split()[0] for p in pages for mv in data[p]["moves"] if mv["ok"]} | {chess.Board(f).board_fen() for f in start_fens.values() if f}
+    known |= {f for p in pages for mv in data[p]["moves"] if mv["ok"] and (f := board_before(mv))}  # (the diagram a passage starts from is none of the above)
     fen_of = {mv["id"]: mv["fen"] for p in pages for mv in data[p]["moves"] if mv["ok"]}
     pb = bar(pages, "Reading diagrams")
     for n in pb:
@@ -806,7 +861,9 @@ def main():
                 items = [(sub, [x0 + sx0, y0 + sy0, x0 + sx1, y0 + sy1]) for sub, (sx0, sy0, sx1, sy1) in split_boards(im)] or items  # several boards in one picture
             for im, (x0, y0, x1, y1) in items:
                 flip = coordinate_flip(page_lines[n], [x0, y0, x1, y1]) if n in page_lines else None
-                r = read_diagram(model, onwhite(im), known, base, flip)
+                r = read_diagram(model, onwhite(im), known, base, flip, b.get("min_score", MIN_BOARD_SCORE))
+                if not r and b.get("min_score"):
+                    continue  # a candidate of missed_boards that is no board (logo, flowchart box) is not an image of the book
                 # boards are p{n}_d{k}, other images (logos, labels) p{n}_i{k}: board numbering does not depend on them
                 if r:
                     nb += 1

@@ -11,6 +11,7 @@ commit, then push the tag `X.Y.Z`. The release workflow publishes that section a
 
 - Diagram reader: new fine-tuned weights (release `weights-5`): a hatched diagram whose Black queen on b6 was dropped (Position critique 5 p5) is read right, so its page replays to the end.
 - Moves: a short later block (a phrase that recurs) no longer cuts a block unless it ends it (`... des Dames. Rc7` lost its move).
+- Diagrams: a board the OCR did not see (inside a page-sized table) is found from the page's ink and read (Position critique 6 p6: 3 illegal moves, now 0; Réseau de mat 2 p3: 6 boards). A diagram a passage starts from is no longer snapped to the position after its first move.
 
 ## [0.2.2] - 2026-11-22
 
