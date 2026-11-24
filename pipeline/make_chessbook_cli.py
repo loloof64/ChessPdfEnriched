@@ -43,6 +43,7 @@ Image.MAX_IMAGE_PIXELS = 100_000_000  # explicit PIL limit (it raises above twic
 CONFIDENT = 0.95  # mean per-square probability above which a diagram reading is not second-guessed by a finer crop search
 TRUSTED = 0.99  # fine-tuned reading below this mean confidence is double-checked with the base model...
 MAX_VIVID = 0.002  # ...unless the diagram has arrows/highlights (share of bright saturated pixels): the fine-tuned model is trained for them, the base invents pieces there
+WEAK_BOARD_SCORE = 3.0  # below it, a board found in a slightly off-square picture may be a 6x6 sub-board (unstretch)
 MISSED_BOARD_SCORE = 2.0  # same score, for a picture that is only a candidate (missed_boards)
 MIN_BOARD_SCORE = 2.5  # autocrop checkerboard score: logos < 1, small screenshot boards 3-5, real diagrams 6+
 HERE = Path(__file__).parent
@@ -536,11 +537,15 @@ def missed_boards(page_img, lines, blocks):
 
 def unstretch(im):
     """A diagram image drawn wider (or taller) than its board is square: the autocrop looks for a square, so the image is squeezed to square
-    when that makes the checkerboard clearly better (7.8 against 4.8 on a 1.24 wide board: the reading was a shifted board)."""
-    if .87 <= im.width / im.height <= 1.15 or not .8 <= im.width / im.height <= 1.25:
+    when that makes the checkerboard clearly better (7.8 against 4.8 on a 1.24 wide board: the reading was a shifted board; 4.4 against 2.7 on a 1.11 wide one: a 6x6 sub-board was read, so near-square pictures are only tried when their board is weak)."""
+    ratio = im.width / im.height
+    if not .8 <= ratio <= 1.25:
+        return im
+    before = find_board(im)[4]
+    if .87 <= ratio <= 1.15 and before >= WEAK_BOARD_SCORE:  # a slightly off-square picture is squeezed only when its board is found weakly
         return im
     sq = im.resize((min(im.size),) * 2)
-    return sq if find_board(sq)[4] > 1.3 * find_board(im)[4] else im
+    return sq if find_board(sq)[4] > 1.3 * before else im
 
 
 def read_diagram(model, im, known=frozenset(), base=None, flip=None, min_score=MIN_BOARD_SCORE):
