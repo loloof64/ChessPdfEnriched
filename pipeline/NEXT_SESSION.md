@@ -27,6 +27,11 @@ Attaque de la minorité 1-3.
 - Pages : `column_order` coupe les colonnes au milieu de l'étendue du texte (pas de la page) ; un bloc OCR « algorithm » est du texte.
 - Diagrammes : une image vide est remplacée par la page, une image contenant plusieurs plateaux est découpée en quarts (calés sur le cadre).
 
+## À faire en premier (demandé par Laurent le 24 nov. 2026)
+Passe de régression complète sur les 35 livres en cache avec le code final (dernier commit de code : `606dba5`) : ~30 min (mesuré : 31 min), annoncer la durée avant.
+Comparer, par page, coups et coups illégaux, ET les FEN des diagrammes (pas seulement les logs : les lignes « start: » / « NO START POSITION » doivent être prises en compte),
+contre l'ancien code ou les logs de référence. Pièges rencontrés : `pkill -f` tue sa propre commande ; un script détaché doit utiliser `setsid nohup`.
+
 ## Suite (ordre de Laurent)
 1. Convertir d'autres livres de Fabrice (notation française). Objectif : sortie sans erreur dès la première passe ; si c'est le cas, passer à l'étape 2.
 2. Plus tard : livres en notation textuelle ANGLAISE (`--lang en`, jamais testé sur un vrai livre).
