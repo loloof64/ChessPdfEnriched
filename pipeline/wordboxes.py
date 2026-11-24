@@ -143,8 +143,9 @@ def add_orphans(blocks, lines, has_moves):
             continue
         x0, y0 = min(c[0] for c in chars), min(c[1] for c in chars)
         x1, y1 = max(c[2] for c in chars), max(c[3] for c in chars)
-        # the last move of a game alone on its line ('Txf2' under '... 14.Rh1') has no number: it goes with the orphan line right above it
-        follows = last and 0 <= y0 - last[3] < (last[3] - last[1]) and x0 < last[2] and x1 > last[0] and has_moves("1." + text.strip())
+        # a line right under an orphan line, in its column, goes on the same paragraph: a reply without number ('Txf2' alone under '... 14.Rh1',
+        # 'hxg6' inside the prose of '1.Cg6+! Le Cavalier / devient ouvre boite. hxg6 Maintenant que') would be lost otherwise
+        follows = last and 0 <= y0 - last[3] < (last[3] - last[1]) and x0 < last[2] and x1 > last[0]
         if not (has_moves(text) or follows):
             continue
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -235,6 +236,11 @@ def selfcheck():
     assert [b["block_content"] for b in page] == ["30.Tf2 a6", "", "31.g4", "Après avoir repoussé. 31...Cc8"], [b["block_content"] for b in page]
     add_orphans(page, lines, mv)  # idempotent: the new block now covers its line
     assert len(page) == 4
+    # the lines under an orphan line go on its paragraph, a reply without number inside the prose included ('hxg6' of Réseau de mat 2 p3)
+    page = [{"block_label": "table", "block_bbox": [0, 0, 0, 0], "block_content": ""}]
+    col = lambda y, t: {"pieces": [(t, [10.0, y, 400.0, y + 20.0])]}
+    add_orphans(page, [col(100, "1.Cg6+! Le Cavalier"), col(125, "devient ouvre boite. hxg6 Maintenant"), col(150, "la colonne est ouverte"), col(400, "Texte loin")], mv)
+    assert [b["block_content"] for b in page[1:]] == ["1.Cg6+! Le Cavalier", "devient ouvre boite. hxg6 Maintenant", "la colonne est ouverte"], page
     # a block with fewer moves than the classic OCR reads in its box takes that text and counts as text (a 'figure_title' caption holding moves)
     pairs = lambda t: len(re.findall(r"\d+\.+\s*[A-Za-z]", t))
     cap = {"block_label": "figure_title", "block_bbox": [800, 700, 1400, 840], "block_content": "Pas question de bouger le pion e3."}
