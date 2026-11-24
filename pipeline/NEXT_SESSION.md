@@ -44,6 +44,12 @@ Attaque de la minorité 1-3.
 ## Limites connues, pas traitées
 - Départ des passages : seulement depuis les diagrammes à ±2 pages ; un passage d'un seul coup exige qu'un seul diagramme de la page le rende légal.
 - Erreurs du modèle de lecture (pièce fantôme) ; notation en figurines non gérée par le pipeline principal.
+- RISQUE à surveiller (noté le 24 nov. 2026) : `missed_boards` (make_chessbook_cli.py) accepte un candidat dès que son damier score >= `MISSED_BOARD_SCORE` = 2,0
+  (abaissé de 2,5 pour le plateau hachuré de PC6 p6, qui score 2,49). Garde-fous : lecture plausible d'au moins 4 pièces, pas de chevauchement (> 30 %) avec une figure
+  déjà trouvée, candidat non plateau retiré du livre. Faux positifs rencontrés et écartés : cadre de flowchart (PC1 p1), logo rond (Réseau de mat 1 p1).
+  Risque restant : un logo ou un schéma lu comme >= 4 pièces plausibles apparaîtrait comme un faux diagramme. Si un livre en montre un : relever le seuil, ou exiger
+  les coordonnées imprimées (a-h / 1-8 lues par l'OCR classique) autour du candidat. Les autres seuils posés : `WEAK_BOARD_SCORE` = 3,0 (squeeze des images presque carrées),
+  `unstretch` ne s'applique plus de .95 à 1.05.
 - Refusé par Laurent : resserrer le redémarrage d'ancre en milieu de page ; correction manuelle de SAN dans le lecteur.
 - Profil `cpu` non testé (installation, vitesse de PaddleOCR-VL sans GPU).
 - Cache `~/.cache/uv` de 42 Go (disque `/home` presque plein) : `uv cache prune` à sa demande seulement.
